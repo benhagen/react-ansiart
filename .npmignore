@@ -1,0 +1,8 @@
+src/
+public/
+tsconfig.json
+tsup.config.ts
+.gitignore
+*.log
+node_modules/
+dist/
