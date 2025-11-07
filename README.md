@@ -7,10 +7,7 @@ React components for rendering ANSI art files (.ANS, .ASC) and creating animated
 - **ANSI Art Rendering**: Displays .ANS and .ASC files with proper cursor control code support
 - **Virtual Display**: Create animated procedural displays using frame generation functions
 - **CP437 Encoding**: Full support for Code Page 437 characters including box-drawing and block elements
-- **Dual Rendering Modes**:
-  - DOM mode: Uses HTML/CSS with fallback fonts
-  - Canvas mode: Pixel-perfect rendering with optional bitmap font support
-- **Bitmap Font Support**: Load and use Windows .FON bitmap fonts for authentic VGA display
+- **Bitmap Font Rendering**: Pixel-perfect canvas rendering using Windows .FON bitmap fonts for authentic VGA display
 - **Progressive Animation**: Animate ANSI sequences progressively to simulate BBS-era terminal playback
 - **Perlin Noise**: Built-in Perlin noise implementation for procedural effects
 - **Plasma Effect**: Default animated plasma generator using multi-octave Perlin noise
@@ -31,23 +28,8 @@ npm install react-ansiart
 import { AnsiArt } from 'react-ansiart'
 
 function App() {
-	return <AnsiArt src='/ansi/example.ans' columns={80} renderMode='canvas' />
-}
-```
-
-### With Bitmap Font
-
-```tsx
-import { AnsiArt } from 'react-ansiart'
-
-function App() {
 	return (
-		<AnsiArt
-			src='/ansi/example.ans'
-			columns={80}
-			renderMode='canvas'
-			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
-		/>
+		<AnsiArt src='/ansi/example.ans' columns={80} bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON' />
 	)
 }
 ```
@@ -62,7 +44,7 @@ function App() {
 		<AnsiArt
 			src='/ansi/animated.ans'
 			columns={80}
-			renderMode='canvas'
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
 			animated={true}
 			frameDelay={200}
 			animationSpeed={1.0}
@@ -82,7 +64,6 @@ function App() {
 		<AnsiArt
 			src='/ansi/charset-test.ans'
 			columns={16}
-			renderMode='canvas'
 			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
 			debugFont={true}
 		/>
@@ -100,7 +81,14 @@ The `AnsiVirtualDisplay` component creates an animated virtual display that gene
 import { AnsiVirtualDisplay } from 'react-ansiart'
 
 function App() {
-	return <AnsiVirtualDisplay columns={80} rows={25} fps={30} />
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
+			fps={30}
+		/>
+	)
 }
 ```
 
@@ -116,25 +104,9 @@ function App() {
 			rows={40}
 			cellWidthPx={8}
 			cellHeightPx={16}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
 			fps={60}
 			showControls={true}
-		/>
-	)
-}
-```
-
-### With Bitmap Font
-
-```tsx
-import { AnsiVirtualDisplay } from 'react-ansiart'
-
-function App() {
-	return (
-		<AnsiVirtualDisplay
-			columns={80}
-			rows={25}
-			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
-			fps={30}
 		/>
 	)
 }
@@ -150,6 +122,7 @@ function App() {
 		<AnsiVirtualDisplay
 			columns={80}
 			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
 			palette={64} // Use 64 evenly-spaced colors for better color accuracy
 			fps={30}
 		/>
@@ -167,6 +140,7 @@ function App() {
 		<AnsiVirtualDisplay
 			columns={80}
 			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
 			palette='unconstrained' // Use 256 colors for maximum color fidelity
 			fps={30}
 		/>
@@ -204,7 +178,13 @@ const checkerboardGenerator: FrameGenerator = (frame, width, height) => {
 
 function App() {
 	return (
-		<AnsiVirtualDisplay columns={80} rows={25} frameGenerator={checkerboardGenerator} fps={30} />
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
+			frameGenerator={checkerboardGenerator}
+			fps={30}
+		/>
 	)
 }
 ```
@@ -213,24 +193,18 @@ function App() {
 
 ### AnsiArt Props
 
-| Prop             | Type                | Default      | Description                                             |
-| ---------------- | ------------------- | ------------ | ------------------------------------------------------- |
-| `src`            | `string`            | **required** | URL or path to ANSI art file                            |
-| `columns`        | `number`            | `80`         | Number of columns (standard BBS width)                  |
-| `fontSizePx`     | `number`            | `16`         | Font size in pixels (DOM mode)                          |
-| `fontFamily`     | `string`            | -            | Override default font stack                             |
-| `background`     | `string`            | `'#000'`     | Background color                                        |
-| `allowDrop`      | `boolean`           | `true`       | Enable drag-and-drop file loading                       |
-| `yScale`         | `number`            | `1.2`        | Vertical scaling factor (DOM mode, emulates VGA aspect) |
-| `renderMode`     | `'dom' \| 'canvas'` | `'dom'`      | Rendering mode                                          |
-| `cellWidthPx`    | `number`            | `8`          | Character cell width (canvas mode)                      |
-| `cellHeightPx`   | `number`            | `16`         | Character cell height (canvas mode)                     |
-| `bitmapFontUrl`  | `string`            | -            | URL or path to .FON bitmap font file                    |
-| `debugFont`      | `boolean`           | `false`      | Render font glyphs to debug canvas                      |
-| `animated`       | `boolean`           | `false`      | Enable progressive animation playback                   |
-| `frameDelay`     | `number`            | `50`         | Delay between frames in milliseconds                    |
-| `animationSpeed` | `number`            | `1.0`        | Speed multiplier (applied to frameDelay)                |
-| `showControls`   | `boolean`           | `false`      | Show play/pause/restart controls                        |
+| Prop             | Type      | Default      | Description                              |
+| ---------------- | --------- | ------------ | ---------------------------------------- |
+| `src`            | `string`  | **required** | URL or path to ANSI art file             |
+| `columns`        | `number`  | `80`         | Number of columns (standard BBS width)   |
+| `background`     | `string`  | `'#000'`     | Background color                         |
+| `allowDrop`      | `boolean` | `true`       | Enable drag-and-drop file loading        |
+| `bitmapFontUrl`  | `string`  | **required** | URL or path to .FON bitmap font file     |
+| `debugFont`      | `boolean` | `false`      | Render font glyphs to debug canvas       |
+| `animated`       | `boolean` | `false`      | Enable progressive animation playback    |
+| `frameDelay`     | `number`  | `50`         | Delay between frames in milliseconds     |
+| `animationSpeed` | `number`  | `1.0`        | Speed multiplier (applied to frameDelay) |
+| `showControls`   | `boolean` | `false`      | Show play/pause/restart controls         |
 
 ### AnsiVirtualDisplay Props
 
@@ -242,9 +216,8 @@ function App() {
 | `cellHeightPx`   | `number`         | `16`                  | Character cell height in pixels                                                                                    |
 | `frameGenerator` | `FrameGenerator` | `generatePlasmaFrame` | Function that generates frame data                                                                                 |
 | `fps`            | `number`         | `30`                  | Frames per second                                                                                                  |
-| `fontFamily`     | `string`         | -                     | Override default font stack                                                                                        |
 | `background`     | `string`         | `'#000'`              | Background color                                                                                                   |
-| `bitmapFontUrl`  | `string`         | -                     | URL or path to .FON bitmap font file                                                                               |
+| `bitmapFontUrl`  | `string`         | **required**          | URL or path to .FON bitmap font file                                                                               |
 | `showControls`   | `boolean`        | `false`               | Show play/pause/restart controls                                                                                   |
 | `palette`        | `PaletteMode`    | `'ansi16'`            | Color palette mode: `'ansi16'` (16 ANSI colors), `'unconstrained'` (256 colors), or `number` (custom palette size) |
 
@@ -270,7 +243,15 @@ The library includes a built-in plasma generator (`generatePlasmaFrame`) that us
 import { AnsiVirtualDisplay, generatePlasmaFrame } from 'react-ansiart'
 
 function App() {
-	return <AnsiVirtualDisplay columns={80} rows={25} frameGenerator={generatePlasmaFrame} fps={30} />
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
+			frameGenerator={generatePlasmaFrame}
+			fps={30}
+		/>
+	)
 }
 ```
 
@@ -307,7 +288,14 @@ const gradientGenerator: FrameGenerator = (frame, width, height) => {
 }
 
 function App() {
-	return <AnsiVirtualDisplay columns={80} rows={25} frameGenerator={gradientGenerator} />
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
+			frameGenerator={gradientGenerator}
+		/>
+	)
 }
 ```
 

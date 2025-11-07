@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AnsiScreen } from './ansiParser'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
-import type { AsciiPerlinPlasmaProps } from './asciiPerlinPlasma'
+import type { AsciiPerlinPlasmaOptions } from './generators/asciiPerlinPlasmaGenerator'
 import {
 	createAsciiPerlinPlasmaSampler,
 	generateAsciiPerlinPlasmaFrame,
 } from './generators/asciiPerlinPlasmaGenerator'
 
-export interface PlasmaBackgroundLayoutProps extends Omit<AsciiPerlinPlasmaProps, 'className'> {
+export interface PlasmaBackgroundLayoutProps {
 	children: React.ReactNode
 	mode?: 'fixed' | 'scrollable'
 	contentClassName?: string
@@ -16,13 +16,18 @@ export interface PlasmaBackgroundLayoutProps extends Omit<AsciiPerlinPlasmaProps
 	// Virtual world dimensions (in pixels) - if not provided, will be calculated from content
 	virtualWidthPx?: number
 	virtualHeightPx?: number
-	// Plasma colors (overrides color from AsciiPerlinPlasmaProps for clearer API)
+	// Plasma generation options
+	chars?: string[] // Array of characters to use for ASCII rendering
+	timeScale?: number // Animation speed multiplier
+	octaves?: AsciiPerlinPlasmaOptions['octaves'] // Noise octave configurations
+	seed?: number // Random seed for noise generation
+	// Plasma colors
 	fgColor?: string // Foreground color (CSS color string)
 	bgColor?: string // Background color (CSS color string)
 	// Performance and rendering
 	showPerformanceOverlay?: boolean
 	fps?: number // Frames per second (default: 30)
-	bitmapFontUrl?: string // URL to bitmap font file (default: IBM VGA 8x16)
+	bitmapFontUrl: string // URL to bitmap font file
 }
 
 export function PlasmaBackgroundLayout({
@@ -33,12 +38,15 @@ export function PlasmaBackgroundLayout({
 	plasmaClassName,
 	virtualWidthPx,
 	virtualHeightPx,
+	chars,
+	timeScale,
+	octaves,
+	seed,
 	fgColor,
 	bgColor,
 	showPerformanceOverlay = false,
 	fps = 30,
-	bitmapFontUrl = '/ansi/fonts/Bm437_IBM_VGA_8x16.FON',
-	...plasmaProps
+	bitmapFontUrl,
 }: PlasmaBackgroundLayoutProps) {
 	const containerRef = useRef<HTMLDivElement>(null)
 	const scrollableRef = useRef<HTMLDivElement>(null)
@@ -165,38 +173,19 @@ export function PlasmaBackgroundLayout({
 		}
 	}, [mode, isMounted])
 
-	// Memoize plasmaProps to prevent recreation on every render
-	const memoizedPlasmaProps = useMemo(
-		() => plasmaProps,
-		[
-			plasmaProps.charWidth,
-			plasmaProps.charHeight,
-			plasmaProps.chars,
-			plasmaProps.timeScale,
-			plasmaProps.fpsCap,
-			plasmaProps.color,
-			plasmaProps.octaves,
-			plasmaProps.yOffset,
-			plasmaProps.virtualHeight,
-		]
-	)
-
-	// Memoize the merged options with explicit fgColor/bgColor taking precedence
+	// Memoize the plasma generation options
 	const mergedOptions = useMemo(() => {
-		// Extract color from plasmaProps as it's not used by the generator
-		const { color, ...restPlasmaProps } = memoizedPlasmaProps
+		const options: AsciiPerlinPlasmaOptions = {}
 
-		// If fgColor is not explicitly provided but color is, use color as fgColor
-		const finalFgColor = fgColor || color
-
-		const options = {
-			...restPlasmaProps,
-			...(finalFgColor && { fgColor: finalFgColor }),
-			...(bgColor && { bgColor }),
-		}
+		if (chars) options.chars = chars
+		if (timeScale !== undefined) options.timeScale = timeScale
+		if (octaves) options.octaves = octaves
+		if (seed !== undefined) options.seed = seed
+		if (fgColor) options.fgColor = fgColor
+		if (bgColor) options.bgColor = bgColor
 
 		return options
-	}, [memoizedPlasmaProps, fgColor, bgColor])
+	}, [chars, timeScale, octaves, seed, fgColor, bgColor])
 
 	// Memoize the fixed mode frame generator to avoid recreating on every render
 	const fixedFrameGenerator = useCallback(

@@ -15,9 +15,8 @@ export type AnsiVirtualDisplayProps = {
 	cellHeightPx?: number // default 16
 	frameGenerator?: DisplayFrameGenerator // default: plasma with default converter
 	fps?: number // default 30
-	fontFamily?: string
 	background?: string // default: '#000'. Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.)
-	bitmapFontUrl?: string
+	bitmapFontUrl: string // path to .FON or raw bitmap font file
 	showControls?: boolean // show play/pause controls
 	showPerformanceOverlay?: boolean // show performance stats overlay
 	fillContainer?: boolean // fill the container width instead of fit-content
@@ -45,7 +44,6 @@ export function AnsiVirtualDisplay({
 	cellHeightPx = 16,
 	frameGenerator = defaultFrameGenerator,
 	fps = 30,
-	fontFamily,
 	background = '#000',
 	bitmapFontUrl,
 	showControls = false,
@@ -83,7 +81,6 @@ export function AnsiVirtualDisplay({
 				cellHeightPx,
 				frameGenerator: effectiveFrameGenerator,
 				fps,
-				fontFamily,
 				background,
 				showPerformanceOverlay,
 				virtualColumns,
@@ -114,7 +111,6 @@ export function AnsiVirtualDisplay({
 			cellHeightPx,
 			frameGenerator: effectiveFrameGenerator,
 			fps,
-			fontFamily,
 			background,
 			showPerformanceOverlay,
 			virtualColumns,
@@ -131,7 +127,6 @@ export function AnsiVirtualDisplay({
 		cellHeightPx,
 		effectiveFrameGenerator,
 		fps,
-		fontFamily,
 		background,
 		showPerformanceOverlay,
 		virtualColumns,
@@ -198,35 +193,13 @@ export function AnsiVirtualDisplay({
 		setIsPlaying(true)
 	}
 
-	const baseRootStyle: React.CSSProperties = useMemo(() => {
-		return {
-			fontFamily:
-				fontFamily ??
-				"'Flexi_IBM_VGA_True_437', 'dos437', 'PerfectDOSVGA437Win', 'PerfectDOSVGA437', 'IBM VGA 8x16', 'Cascadia Mono', 'Menlo', monospace",
-			fontSize: '16px',
-			lineHeight: '16px',
-			letterSpacing: 0,
-			whiteSpace: 'pre' as const,
-			background: '#000',
-			color: '#aaa',
-			margin: 0,
-			padding: 0,
-			display: 'block',
-			WebkitFontSmoothing: 'none',
-			MozOsxFontSmoothing: 'grayscale',
-			width: fillContainer ? '100%' : 'fit-content',
-			fontVariantLigatures: 'none',
-			fontFeatureSettings: "'liga' 0, 'clig' 0",
-			textRendering: 'geometricPrecision',
-		} as React.CSSProperties
-	}, [fontFamily, fillContainer])
-
 	const rootStyle: React.CSSProperties = useMemo(() => {
 		return {
-			...baseRootStyle,
+			display: 'block',
+			width: fillContainer ? '100%' : 'fit-content',
 			background,
 		}
-	}, [baseRootStyle, background])
+	}, [fillContainer, background])
 
 	return (
 		<div>

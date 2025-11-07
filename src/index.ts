@@ -4,9 +4,6 @@ export type { AnsiArtProps } from './AnsiArt'
 export { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
 export type { AnsiVirtualDisplayProps } from './AnsiVirtualDisplay'
 
-export { AsciiPerlinPlasma } from './asciiPerlinPlasma'
-export type { AsciiPerlinPlasmaProps } from './asciiPerlinPlasma'
-
 export { PlasmaBackgroundLayout } from './PlasmaBackgroundLayout'
 export type { PlasmaBackgroundLayoutProps } from './PlasmaBackgroundLayout'
 

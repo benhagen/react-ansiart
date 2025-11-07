@@ -82,9 +82,8 @@ type AnsiVirtualDisplayProps = {
     cellHeightPx?: number;
     frameGenerator?: DisplayFrameGenerator;
     fps?: number;
-    fontFamily?: string;
     background?: string;
-    bitmapFontUrl?: string;
+    bitmapFontUrl: string;
     showControls?: boolean;
     showPerformanceOverlay?: boolean;
     fillContainer?: boolean;
@@ -99,75 +98,46 @@ type AnsiVirtualDisplayProps = {
         viewY: number;
     }) => void;
 };
-declare function AnsiVirtualDisplay({ columns, rows, cellWidthPx, cellHeightPx, frameGenerator, fps, fontFamily, background, bitmapFontUrl, showControls, showPerformanceOverlay, fillContainer, virtualColumns, virtualRows, viewX, viewY, pixelOffsetX, pixelOffsetY, onViewChange, }: AnsiVirtualDisplayProps): react_jsx_runtime.JSX.Element;
+declare function AnsiVirtualDisplay({ columns, rows, cellWidthPx, cellHeightPx, frameGenerator, fps, background, bitmapFontUrl, showControls, showPerformanceOverlay, fillContainer, virtualColumns, virtualRows, viewX, viewY, pixelOffsetX, pixelOffsetY, onViewChange, }: AnsiVirtualDisplayProps): react_jsx_runtime.JSX.Element;
 
-/**
- * ASCII Perlin Plasma Effect Component
- *
- * A configurable React component that generates a classic demoscene style flowing plasma effect
- * using Perlin noise and ASCII characters rendered on an HTML5 Canvas.
- *
- * @example
- * ```tsx
- * <AsciiPerlinPlasma
- *   charWidth={12}
- *   charHeight={16}
- *   color="#00FFFF"
- *   fpsCap={30}
- *   timeScale={0.5}
- * />
- * ```
- *
- * Performance Optimizations:
- * - HTML5 Canvas rendering (5-10x faster than DOM text manipulation)
- * - Pre-computed character lookup table (256 entries)
- * - Object pooling for row buffers to avoid GC pressure
- * - Optimized hash function for faster noise generation
- * - Cached octave configurations
- * - High-DPI canvas scaling for crisp rendering
- * - FPS capping to prevent excessive CPU usage
- * - Centralized color definition matching SCSS theme
- *
- * Features:
- * - 2D Perlin noise implementation
- * - Multiple octaves for detail
- * - Independent X/Y movement
- * - Dynamic resizing
- * - GPU-accelerated canvas rendering
- * - Fully configurable via props
- */
-
-interface OctaveConfig$1 {
+interface OctaveConfig {
     scale: number;
     amplitude: number;
     timeScaleX: number;
     timeScaleY: number;
 }
-interface AsciiPerlinPlasmaProps {
-    /** Width of each character in pixels */
-    charWidth?: number;
-    /** Height of each character in pixels */
-    charHeight?: number;
-    /** Array of characters to use for ASCII rendering */
+interface AsciiPerlinPlasmaOptions {
+    /** Array of characters to use for ASCII rendering (brightness-based) */
     chars?: string[];
-    /** Animation speed multiplier */
+    /** Animation speed multiplier. Default: 0.9. Lower = slower animation */
     timeScale?: number;
-    /** Maximum FPS to cap animation at */
-    fpsCap?: number;
-    /** Text color (CSS color string). Default: 'rgba(138, 230, 230, 1)'. Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.) */
-    color?: string;
+    /** Foreground color (CSS color string). Default: '#55FFFF' (bright cyan). Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.) */
+    fgColor?: string;
+    /** Background color (CSS color string). Default: '#000000' (black). Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.) */
+    bgColor?: string;
     /** Noise octave configurations */
-    octaves?: OctaveConfig$1[];
-    /** Additional CSS class name */
-    className?: string;
-    /** Vertical offset for scrolling (in pixels) */
-    yOffset?: number;
-    /** Virtual height of the full scrollable content (in pixels) - for maintaining consistency across scroll */
-    virtualHeight?: number;
+    octaves?: OctaveConfig[];
+    /** Seed for noise generation. Controls the pattern shape. Default: 12345. Use different seeds for different patterns */
+    seed?: number;
 }
-declare const AsciiPerlinPlasma: React.FC<AsciiPerlinPlasmaProps>;
+/**
+ * Generate ASCII Perlin Plasma frame
+ * Creates a character frame with Perlin noise-based brightness mapping
+ */
+declare function generateAsciiPerlinPlasmaFrame(frame: number, columns: number, rows: number, options?: AsciiPerlinPlasmaOptions): AnsiScreen;
+/**
+ * Create a reusable sampler for a specific frame and options.
+ * Returns a function that maps world coordinates (x,y) in character cells
+ * to an ANSI cell, without caring about any viewport/window.
+ */
+declare function createAsciiPerlinPlasmaSampler(frame: number, options?: AsciiPerlinPlasmaOptions): (x: number, y: number) => {
+    ch: any;
+    fg: string;
+    bg: string;
+    bold: boolean;
+};
 
-interface PlasmaBackgroundLayoutProps extends Omit<AsciiPerlinPlasmaProps, 'className'> {
+interface PlasmaBackgroundLayoutProps {
     children: React.ReactNode;
     mode?: 'fixed' | 'scrollable';
     contentClassName?: string;
@@ -175,13 +145,17 @@ interface PlasmaBackgroundLayoutProps extends Omit<AsciiPerlinPlasmaProps, 'clas
     plasmaClassName?: string;
     virtualWidthPx?: number;
     virtualHeightPx?: number;
+    chars?: string[];
+    timeScale?: number;
+    octaves?: AsciiPerlinPlasmaOptions['octaves'];
+    seed?: number;
     fgColor?: string;
     bgColor?: string;
     showPerformanceOverlay?: boolean;
     fps?: number;
-    bitmapFontUrl?: string;
+    bitmapFontUrl: string;
 }
-declare function PlasmaBackgroundLayout({ children, mode, contentClassName, contentStyle, plasmaClassName, virtualWidthPx, virtualHeightPx, fgColor, bgColor, showPerformanceOverlay, fps, bitmapFontUrl, ...plasmaProps }: PlasmaBackgroundLayoutProps): react_jsx_runtime.JSX.Element;
+declare function PlasmaBackgroundLayout({ children, mode, contentClassName, contentStyle, plasmaClassName, virtualWidthPx, virtualHeightPx, chars, timeScale, octaves, seed, fgColor, bgColor, showPerformanceOverlay, fps, bitmapFontUrl, }: PlasmaBackgroundLayoutProps): react_jsx_runtime.JSX.Element;
 
 type FontCharacterChartProps = {
     bitmapFontUrl: string;
@@ -225,41 +199,4 @@ declare function generatePlasmaFrame(frame: number, width: number, height: numbe
  */
 declare function convertFrameDataToAnsi(frame: FrameData, columns: number, rows: number, palette?: PaletteMode): AnsiScreen;
 
-interface OctaveConfig {
-    scale: number;
-    amplitude: number;
-    timeScaleX: number;
-    timeScaleY: number;
-}
-interface AsciiPerlinPlasmaOptions {
-    /** Array of characters to use for ASCII rendering (brightness-based) */
-    chars?: string[];
-    /** Animation speed multiplier. Default: 0.9. Lower = slower animation */
-    timeScale?: number;
-    /** Foreground color (CSS color string). Default: '#55FFFF' (bright cyan). Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.) */
-    fgColor?: string;
-    /** Background color (CSS color string). Default: '#000000' (black). Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.) */
-    bgColor?: string;
-    /** Noise octave configurations */
-    octaves?: OctaveConfig[];
-    /** Seed for noise generation. Controls the pattern shape. Default: 12345. Use different seeds for different patterns */
-    seed?: number;
-}
-/**
- * Generate ASCII Perlin Plasma frame
- * Creates a character frame with Perlin noise-based brightness mapping
- */
-declare function generateAsciiPerlinPlasmaFrame(frame: number, columns: number, rows: number, options?: AsciiPerlinPlasmaOptions): AnsiScreen;
-/**
- * Create a reusable sampler for a specific frame and options.
- * Returns a function that maps world coordinates (x,y) in character cells
- * to an ANSI cell, without caring about any viewport/window.
- */
-declare function createAsciiPerlinPlasmaSampler(frame: number, options?: AsciiPerlinPlasmaOptions): (x: number, y: number) => {
-    ch: any;
-    fg: string;
-    bg: string;
-    bold: boolean;
-};
-
-export { ANSI_COLORS_RGB, AnsiArt, type AnsiArtProps, AnsiVirtualDisplay, type AnsiVirtualDisplayProps, AsciiPerlinPlasma, type AsciiPerlinPlasmaOptions, type AsciiPerlinPlasmaProps, type CharacterFrameGenerator, type DisplayFrameGenerator, FontCharacterChart, type FontCharacterChartProps, type FrameConverter, type FrameData, type FrameGenerator, type OctaveConfig, type PaletteMode, type PixelFrameGenerator, PlasmaBackgroundLayout, type PlasmaBackgroundLayoutProps, type RGBAColor, type ViewportConfig, convertFrameDataToAnsi, createAsciiPerlinPlasmaSampler, generateAsciiPerlinPlasmaFrame, generateEvenlySpacedPalette, generatePlasmaFrame, getPalette, perlinNoise, perlinNoise2D, perlinNoise3D, rgbToAnsiColor, rgbToPaletteColor };
+export { ANSI_COLORS_RGB, AnsiArt, type AnsiArtProps, AnsiVirtualDisplay, type AnsiVirtualDisplayProps, type AsciiPerlinPlasmaOptions, type CharacterFrameGenerator, type DisplayFrameGenerator, FontCharacterChart, type FontCharacterChartProps, type FrameConverter, type FrameData, type FrameGenerator, type OctaveConfig, type PaletteMode, type PixelFrameGenerator, PlasmaBackgroundLayout, type PlasmaBackgroundLayoutProps, type RGBAColor, type ViewportConfig, convertFrameDataToAnsi, createAsciiPerlinPlasmaSampler, generateAsciiPerlinPlasmaFrame, generateEvenlySpacedPalette, generatePlasmaFrame, getPalette, perlinNoise, perlinNoise2D, perlinNoise3D, rgbToAnsiColor, rgbToPaletteColor };

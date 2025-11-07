@@ -22,8 +22,6 @@ const DOS_COLORS: Record<number, string> = {
 	15: '#FFFFFF',
 }
 
-type Run = { text: string; fg: number | string; bg: number | string; bold: boolean }
-
 /**
  * Convert color value (ANSI index or CSS string) to CSS color string
  */
@@ -34,27 +32,6 @@ function colorToCss(color: number | string, defaultColor: string = '#AAAAAA'): s
 	return DOS_COLORS[color] ?? defaultColor
 }
 
-function compressLine(cells: AnsiScreen['lines'][number]): Run[] {
-	if (cells.length === 0) return []
-	const runs: Run[] = []
-	let current: Run | null = null
-	for (let i = 0; i < cells.length; i++) {
-		const cell = cells[i]
-		if (!current) {
-			current = { text: cell.ch, fg: cell.fg, bg: cell.bg, bold: cell.bold }
-			continue
-		}
-		if (cell.fg === current.fg && cell.bg === current.bg && cell.bold === current.bold) {
-			current.text += cell.ch
-		} else {
-			runs.push(current)
-			current = { text: cell.ch, fg: cell.fg, bg: cell.bg, bold: cell.bold }
-		}
-	}
-	if (current) runs.push(current)
-	return runs
-}
-
 export type DisplayConfig = {
 	columns: number
 	rows: number
@@ -62,7 +39,6 @@ export type DisplayConfig = {
 	cellHeightPx: number
 	frameGenerator: DisplayFrameGenerator
 	fps: number
-	fontFamily?: string
 	background: string
 	showPerformanceOverlay?: boolean
 	// Virtual world and viewport information for performance overlay
@@ -278,10 +254,10 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	private _setupCanvas(): void {
-		if (!this.canvas) return
+		if (!this.canvas || !this.bitmapFont) return
 
-		const charWidth = this.bitmapFont ? this.bitmapFont.width : this.config.cellWidthPx
-		const charHeight = this.bitmapFont ? this.bitmapFont.height : this.config.cellHeightPx
+		const charWidth = this.bitmapFont.width
+		const charHeight = this.bitmapFont.height
 
 		const screenCols = this.config.columns
 		const screenRows = this.config.rows
@@ -298,7 +274,7 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	private _render(): void {
-		if (!this.screen) return
+		if (!this.screen || !this.bitmapFont) return
 		const drawStart = performance.now()
 		const ctx = this.canvas.getContext('2d')
 		if (!ctx) return
@@ -306,8 +282,8 @@ export class AnsiVirtualDisplayEngine {
 		const screenRows = this.screen.lines.length
 		const screenCols = this.screen.columns
 
-		const charWidth = this.bitmapFont ? this.bitmapFont.width : this.config.cellWidthPx
-		const charHeight = this.bitmapFont ? this.bitmapFont.height : this.config.cellHeightPx
+		const charWidth = this.bitmapFont.width
+		const charHeight = this.bitmapFont.height
 
 		const cssWidth = screenCols * charWidth
 		const cssHeight = screenRows * charHeight
@@ -317,93 +293,62 @@ export class AnsiVirtualDisplayEngine {
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 		ctx.imageSmoothingEnabled = false
 
-		if (this.bitmapFont) {
-			// Create or resize offscreen canvas if needed (sized for buffered content)
-			const bufferedHeight = screenRows * charHeight
-			if (
-				!this.offscreenCanvas ||
-				this.offscreenCanvas.width !== cssWidth ||
-				this.offscreenCanvas.height !== bufferedHeight
-			) {
-				this.offscreenCanvas = document.createElement('canvas')
-				this.offscreenCanvas.width = cssWidth
-				this.offscreenCanvas.height = bufferedHeight
-				this.offscreenCtx = this.offscreenCanvas.getContext('2d', {
-					willReadFrequently: false,
-					alpha: false,
-				})!
-			}
+		// Create or resize offscreen canvas if needed (sized for buffered content)
+		const bufferedHeight = screenRows * charHeight
+		if (
+			!this.offscreenCanvas ||
+			this.offscreenCanvas.width !== cssWidth ||
+			this.offscreenCanvas.height !== bufferedHeight
+		) {
+			this.offscreenCanvas = document.createElement('canvas')
+			this.offscreenCanvas.width = cssWidth
+			this.offscreenCanvas.height = bufferedHeight
+			this.offscreenCtx = this.offscreenCanvas.getContext('2d', {
+				willReadFrequently: false,
+				alpha: false,
+			})!
+		}
 
-			// Render to offscreen canvas (happens whenever screen changes from _generateAndRender)
-			const offCtx = this.offscreenCtx!
-			offCtx.fillStyle = this.config.background
-			offCtx.fillRect(0, 0, cssWidth, bufferedHeight)
+		// Render to offscreen canvas (happens whenever screen changes from _generateAndRender)
+		const offCtx = this.offscreenCtx!
+		offCtx.fillStyle = this.config.background
+		offCtx.fillRect(0, 0, cssWidth, bufferedHeight)
 
-			for (let r = 0; r < screenRows; r++) {
-				const cells = this.screen.lines[r]
-				if (!cells) continue
-				for (let c = 0; c < cells.length; c++) {
-					const cell = cells[c]
-					const x = c * charWidth
-					const y = r * charHeight
-					// Handle bold for numeric ANSI colors
-					const fg = typeof cell.fg === 'number' && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg
-					const fgColor = colorToCss(fg, '#AAAAAA')
-					const bgColor = colorToCss(cell.bg, '#000000')
-					const charCode = charToCp437Byte(cell.ch)
-					renderGlyph(offCtx, this.bitmapFont, charCode, x, y, fgColor, bgColor)
-				}
-			}
-
-			// Calculate pixel offset within the buffer for smooth scrolling
-			const pixelOffsetY = this.config.pixelOffsetY ?? 0
-			const bufferPixelOffset = this.bufferRows * charHeight + pixelOffsetY
-
-			// Copy visible portion of offscreen canvas to main canvas with pixel offset
-			const visibleHeight = this.config.rows * charHeight
-			ctx.fillStyle = this.config.background
-			ctx.fillRect(0, 0, cssWidth, visibleHeight)
-			ctx.drawImage(
-				this.offscreenCanvas,
-				0,
-				bufferPixelOffset, // source Y with pixel offset
-				cssWidth,
-				visibleHeight, // source height
-				0,
-				0, // destination
-				cssWidth,
-				visibleHeight // destination size
-			)
-		} else {
-			ctx.fillStyle = this.config.background
-			ctx.fillRect(0, 0, cssWidth, cssHeight)
-			ctx.textBaseline = 'top'
-			ctx.textAlign = 'left'
-			const fontStack =
-				this.config.fontFamily ??
-				"'Flexi_IBM_VGA_True_437', 'dos437', 'PerfectDOSVGA437Win', 'PerfectDOSVGA437', 'IBM VGA 8x16', 'Cascadia Mono', 'Menlo', monospace"
-			ctx.font = `${this.config.cellHeightPx}px ${fontStack}`
-
-			for (let r = 0; r < screenRows; r++) {
-				const runs = compressLine(this.screen.lines[r])
-				let x = 0
-				for (const run of runs) {
-					const w = run.text.length * this.config.cellWidthPx
-					const y = r * this.config.cellHeightPx
-					// Render background
-					ctx.fillStyle = colorToCss(run.bg, '#000000')
-					ctx.fillRect(x, y, w, this.config.cellHeightPx)
-					// Render text with foreground color (handle bold for numeric ANSI colors)
-					const fg = typeof run.fg === 'number' && run.bold && run.fg < 8 ? run.fg + 8 : run.fg
-					ctx.fillStyle = colorToCss(fg, '#AAAAAA')
-					// Render each character individually with exact spacing for monospace alignment
-					for (let i = 0; i < run.text.length; i++) {
-						ctx.fillText(run.text[i], x + i * this.config.cellWidthPx, y)
-					}
-					x += w
-				}
+		for (let r = 0; r < screenRows; r++) {
+			const cells = this.screen.lines[r]
+			if (!cells) continue
+			for (let c = 0; c < cells.length; c++) {
+				const cell = cells[c]
+				const x = c * charWidth
+				const y = r * charHeight
+				// Handle bold for numeric ANSI colors
+				const fg = typeof cell.fg === 'number' && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg
+				const fgColor = colorToCss(fg, '#AAAAAA')
+				const bgColor = colorToCss(cell.bg, '#000000')
+				const charCode = charToCp437Byte(cell.ch)
+				renderGlyph(offCtx, this.bitmapFont, charCode, x, y, fgColor, bgColor)
 			}
 		}
+
+		// Calculate pixel offset within the buffer for smooth scrolling
+		const pixelOffsetY = this.config.pixelOffsetY ?? 0
+		const bufferPixelOffset = this.bufferRows * charHeight + pixelOffsetY
+
+		// Copy visible portion of offscreen canvas to main canvas with pixel offset
+		const visibleHeight = this.config.rows * charHeight
+		ctx.fillStyle = this.config.background
+		ctx.fillRect(0, 0, cssWidth, visibleHeight)
+		ctx.drawImage(
+			this.offscreenCanvas,
+			0,
+			bufferPixelOffset, // source Y with pixel offset
+			cssWidth,
+			visibleHeight, // source height
+			0,
+			0, // destination
+			cssWidth,
+			visibleHeight // destination size
+		)
 
 		this.drawTime = performance.now() - drawStart
 		// Store for next frame's overlay

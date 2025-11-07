@@ -1457,26 +1457,6 @@ function colorToCss2(color, defaultColor = "#AAAAAA") {
   }
   return DOS_COLORS2[color] ?? defaultColor;
 }
-function compressLine(cells) {
-  if (cells.length === 0) return [];
-  const runs = [];
-  let current = null;
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i];
-    if (!current) {
-      current = { text: cell.ch, fg: cell.fg, bg: cell.bg, bold: cell.bold };
-      continue;
-    }
-    if (cell.fg === current.fg && cell.bg === current.bg && cell.bold === current.bold) {
-      current.text += cell.ch;
-    } else {
-      runs.push(current);
-      current = { text: cell.ch, fg: cell.fg, bg: cell.bg, bold: cell.bold };
-    }
-  }
-  if (current) runs.push(current);
-  return runs;
-}
 var AnsiVirtualDisplayEngine = class {
   // Extra rows to render above/below for smooth scrolling
   constructor(canvas, config) {
@@ -1618,9 +1598,9 @@ var AnsiVirtualDisplayEngine = class {
     this._render();
   }
   _setupCanvas() {
-    if (!this.canvas) return;
-    const charWidth = this.bitmapFont ? this.bitmapFont.width : this.config.cellWidthPx;
-    const charHeight = this.bitmapFont ? this.bitmapFont.height : this.config.cellHeightPx;
+    if (!this.canvas || !this.bitmapFont) return;
+    const charWidth = this.bitmapFont.width;
+    const charHeight = this.bitmapFont.height;
     const screenCols = this.config.columns;
     const screenRows = this.config.rows;
     const cssWidth = screenCols * charWidth;
@@ -1632,91 +1612,66 @@ var AnsiVirtualDisplayEngine = class {
     this.canvas.style.height = `${cssHeight}px`;
   }
   _render() {
-    if (!this.screen) return;
+    if (!this.screen || !this.bitmapFont) return;
     const drawStart = performance.now();
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const screenRows = this.screen.lines.length;
     const screenCols = this.screen.columns;
-    const charWidth = this.bitmapFont ? this.bitmapFont.width : this.config.cellWidthPx;
-    const charHeight = this.bitmapFont ? this.bitmapFont.height : this.config.cellHeightPx;
+    const charWidth = this.bitmapFont.width;
+    const charHeight = this.bitmapFont.height;
     const cssWidth = screenCols * charWidth;
     const cssHeight = screenRows * charHeight;
     const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    if (this.bitmapFont) {
-      const bufferedHeight = screenRows * charHeight;
-      if (!this.offscreenCanvas || this.offscreenCanvas.width !== cssWidth || this.offscreenCanvas.height !== bufferedHeight) {
-        this.offscreenCanvas = document.createElement("canvas");
-        this.offscreenCanvas.width = cssWidth;
-        this.offscreenCanvas.height = bufferedHeight;
-        this.offscreenCtx = this.offscreenCanvas.getContext("2d", {
-          willReadFrequently: false,
-          alpha: false
-        });
-      }
-      const offCtx = this.offscreenCtx;
-      offCtx.fillStyle = this.config.background;
-      offCtx.fillRect(0, 0, cssWidth, bufferedHeight);
-      for (let r = 0; r < screenRows; r++) {
-        const cells = this.screen.lines[r];
-        if (!cells) continue;
-        for (let c = 0; c < cells.length; c++) {
-          const cell = cells[c];
-          const x = c * charWidth;
-          const y = r * charHeight;
-          const fg = typeof cell.fg === "number" && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg;
-          const fgColor = colorToCss2(fg, "#AAAAAA");
-          const bgColor = colorToCss2(cell.bg, "#000000");
-          const charCode = charToCp437Byte(cell.ch);
-          renderGlyph(offCtx, this.bitmapFont, charCode, x, y, fgColor, bgColor);
-        }
-      }
-      const pixelOffsetY = this.config.pixelOffsetY ?? 0;
-      const bufferPixelOffset = this.bufferRows * charHeight + pixelOffsetY;
-      const visibleHeight = this.config.rows * charHeight;
-      ctx.fillStyle = this.config.background;
-      ctx.fillRect(0, 0, cssWidth, visibleHeight);
-      ctx.drawImage(
-        this.offscreenCanvas,
-        0,
-        bufferPixelOffset,
-        // source Y with pixel offset
-        cssWidth,
-        visibleHeight,
-        // source height
-        0,
-        0,
-        // destination
-        cssWidth,
-        visibleHeight
-        // destination size
-      );
-    } else {
-      ctx.fillStyle = this.config.background;
-      ctx.fillRect(0, 0, cssWidth, cssHeight);
-      ctx.textBaseline = "top";
-      ctx.textAlign = "left";
-      const fontStack = this.config.fontFamily ?? "'Flexi_IBM_VGA_True_437', 'dos437', 'PerfectDOSVGA437Win', 'PerfectDOSVGA437', 'IBM VGA 8x16', 'Cascadia Mono', 'Menlo', monospace";
-      ctx.font = `${this.config.cellHeightPx}px ${fontStack}`;
-      for (let r = 0; r < screenRows; r++) {
-        const runs = compressLine(this.screen.lines[r]);
-        let x = 0;
-        for (const run of runs) {
-          const w = run.text.length * this.config.cellWidthPx;
-          const y = r * this.config.cellHeightPx;
-          ctx.fillStyle = colorToCss2(run.bg, "#000000");
-          ctx.fillRect(x, y, w, this.config.cellHeightPx);
-          const fg = typeof run.fg === "number" && run.bold && run.fg < 8 ? run.fg + 8 : run.fg;
-          ctx.fillStyle = colorToCss2(fg, "#AAAAAA");
-          for (let i = 0; i < run.text.length; i++) {
-            ctx.fillText(run.text[i], x + i * this.config.cellWidthPx, y);
-          }
-          x += w;
-        }
+    const bufferedHeight = screenRows * charHeight;
+    if (!this.offscreenCanvas || this.offscreenCanvas.width !== cssWidth || this.offscreenCanvas.height !== bufferedHeight) {
+      this.offscreenCanvas = document.createElement("canvas");
+      this.offscreenCanvas.width = cssWidth;
+      this.offscreenCanvas.height = bufferedHeight;
+      this.offscreenCtx = this.offscreenCanvas.getContext("2d", {
+        willReadFrequently: false,
+        alpha: false
+      });
+    }
+    const offCtx = this.offscreenCtx;
+    offCtx.fillStyle = this.config.background;
+    offCtx.fillRect(0, 0, cssWidth, bufferedHeight);
+    for (let r = 0; r < screenRows; r++) {
+      const cells = this.screen.lines[r];
+      if (!cells) continue;
+      for (let c = 0; c < cells.length; c++) {
+        const cell = cells[c];
+        const x = c * charWidth;
+        const y = r * charHeight;
+        const fg = typeof cell.fg === "number" && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg;
+        const fgColor = colorToCss2(fg, "#AAAAAA");
+        const bgColor = colorToCss2(cell.bg, "#000000");
+        const charCode = charToCp437Byte(cell.ch);
+        renderGlyph(offCtx, this.bitmapFont, charCode, x, y, fgColor, bgColor);
       }
     }
+    const pixelOffsetY = this.config.pixelOffsetY ?? 0;
+    const bufferPixelOffset = this.bufferRows * charHeight + pixelOffsetY;
+    const visibleHeight = this.config.rows * charHeight;
+    ctx.fillStyle = this.config.background;
+    ctx.fillRect(0, 0, cssWidth, visibleHeight);
+    ctx.drawImage(
+      this.offscreenCanvas,
+      0,
+      bufferPixelOffset,
+      // source Y with pixel offset
+      cssWidth,
+      visibleHeight,
+      // source height
+      0,
+      0,
+      // destination
+      cssWidth,
+      visibleHeight
+      // destination size
+    );
     this.drawTime = performance.now() - drawStart;
     this.previousDrawTime = this.drawTime;
   }
@@ -2439,7 +2394,6 @@ function AnsiVirtualDisplay({
   cellHeightPx = 16,
   frameGenerator = defaultFrameGenerator,
   fps = 30,
-  fontFamily,
   background = "#000",
   bitmapFontUrl,
   showControls = false,
@@ -2471,7 +2425,6 @@ function AnsiVirtualDisplay({
         cellHeightPx,
         frameGenerator: effectiveFrameGenerator,
         fps,
-        fontFamily,
         background,
         showPerformanceOverlay,
         virtualColumns,
@@ -2498,7 +2451,6 @@ function AnsiVirtualDisplay({
       cellHeightPx,
       frameGenerator: effectiveFrameGenerator,
       fps,
-      fontFamily,
       background,
       showPerformanceOverlay,
       virtualColumns,
@@ -2515,7 +2467,6 @@ function AnsiVirtualDisplay({
     cellHeightPx,
     effectiveFrameGenerator,
     fps,
-    fontFamily,
     background,
     showPerformanceOverlay,
     virtualColumns,
@@ -2573,32 +2524,13 @@ function AnsiVirtualDisplay({
     engineRef.current.restart();
     setIsPlaying(true);
   };
-  const baseRootStyle = useMemo2(() => {
-    return {
-      fontFamily: fontFamily ?? "'Flexi_IBM_VGA_True_437', 'dos437', 'PerfectDOSVGA437Win', 'PerfectDOSVGA437', 'IBM VGA 8x16', 'Cascadia Mono', 'Menlo', monospace",
-      fontSize: "16px",
-      lineHeight: "16px",
-      letterSpacing: 0,
-      whiteSpace: "pre",
-      background: "#000",
-      color: "#aaa",
-      margin: 0,
-      padding: 0,
-      display: "block",
-      WebkitFontSmoothing: "none",
-      MozOsxFontSmoothing: "grayscale",
-      width: fillContainer ? "100%" : "fit-content",
-      fontVariantLigatures: "none",
-      fontFeatureSettings: "'liga' 0, 'clig' 0",
-      textRendering: "geometricPrecision"
-    };
-  }, [fontFamily, fillContainer]);
   const rootStyle = useMemo2(() => {
     return {
-      ...baseRootStyle,
+      display: "block",
+      width: fillContainer ? "100%" : "fit-content",
       background
     };
-  }, [baseRootStyle, background]);
+  }, [fillContainer, background]);
   return /* @__PURE__ */ jsxs2("div", { children: [
     showControls && /* @__PURE__ */ jsxs2(
       "div",
@@ -2661,296 +2593,11 @@ function AnsiVirtualDisplay({
   ] });
 }
 
-// src/asciiPerlinPlasma.tsx
-import React3 from "react";
-import { jsx as jsx3 } from "react/jsx-runtime";
-var DEFAULT_CHAR_WIDTH = 10;
-var DEFAULT_CHAR_HEIGHT = 14;
-var DEFAULT_CHARS = [
-  "@",
-  "0",
-  "#",
-  "2",
-  "$",
-  "*",
-  "+",
-  ":",
-  ",",
-  ".",
-  " ",
-  " ",
-  " ",
-  " ",
-  " ",
-  " "
-];
-var DEFAULT_TIME_SCALE = 0.4;
-var DEFAULT_FPS_CAP = 24;
-var DEFAULT_COLOR = "rgba(138, 230, 230, 1)";
-var DEFAULT_OCTAVES = [
-  {
-    scale: 0.02,
-    amplitude: 1,
-    timeScaleX: -1,
-    // Move right
-    timeScaleY: -0.5
-    // Move down
-  },
-  {
-    scale: 0.04,
-    amplitude: 1,
-    timeScaleX: -0.5,
-    // Move right
-    timeScaleY: -0.3
-    // Move down
-  }
-];
-var FADE_TABLE = new Float32Array(512);
-for (let i = 0; i < 512; i++) {
-  const t = i / 511;
-  FADE_TABLE[i] = t * t * t * (t * (t * 6 - 15) + 10);
-}
-function fastFade(t) {
-  return FADE_TABLE[t * 511 | 0];
-}
-var GRAD_VECTORS = new Float32Array([
-  0.707,
-  0.707,
-  -0.707,
-  0.707,
-  0.707,
-  -0.707,
-  -0.707,
-  -0.707,
-  1,
-  0,
-  -1,
-  0,
-  0,
-  1,
-  0,
-  -1,
-  0.866,
-  0.5,
-  -0.866,
-  0.5,
-  0.866,
-  -0.5,
-  -0.866,
-  -0.5
-]);
-var GRAD_TABLE = new Float32Array([
-  0.707,
-  0.707,
-  -0.707,
-  0.707,
-  0.707,
-  -0.707,
-  -0.707,
-  -0.707,
-  1,
-  0,
-  -1,
-  0,
-  0,
-  1,
-  0,
-  -1
-]);
-function fastGrad(hash3, x, y) {
-  const h = (hash3 & 7) << 1;
-  return GRAD_TABLE[h] * x + GRAD_TABLE[h | 1] * y;
-}
-function hash(x, y, seed) {
-  let h = x * 73856093 ^ y * 19349663 ^ seed;
-  h = h >>> 16 ^ h;
-  h *= 2146121005;
-  h ^= h >>> 15;
-  h *= 2221713035;
-  return h ^ h >>> 16;
-}
-var AsciiPerlinPlasma = (props) => {
-  const {
-    charWidth = DEFAULT_CHAR_WIDTH,
-    charHeight = DEFAULT_CHAR_HEIGHT,
-    chars = DEFAULT_CHARS,
-    timeScale = DEFAULT_TIME_SCALE,
-    fpsCap = DEFAULT_FPS_CAP,
-    color = DEFAULT_COLOR,
-    octaves = DEFAULT_OCTAVES,
-    className,
-    yOffset = 0,
-    virtualHeight
-  } = props;
-  const charCount = chars.length;
-  const fpsInterval = 1e3 / fpsCap;
-  const canvasRef = React3.useRef(null);
-  const dims = React3.useRef({ width: 0, height: 0 });
-  const rafId = React3.useRef();
-  const lastFrameTime = React3.useRef(0);
-  const yOffsetRef = React3.useRef(yOffset);
-  const virtualHeightRef = React3.useRef(virtualHeight);
-  const perm2 = React3.useRef(new Uint8Array(256));
-  const rows = React3.useRef([]);
-  const rowBuffer = React3.useRef([]);
-  const charLookup = React3.useRef([]);
-  const octaveConfigs = React3.useRef([]);
-  const ctx = React3.useRef(null);
-  function noise2D2(x, y) {
-    const X = Math.floor(x);
-    const Y = Math.floor(y);
-    x -= X;
-    y -= Y;
-    const u = fastFade(x);
-    const v = fastFade(y);
-    const seed = perm2.current[0];
-    const A = Math.abs(hash(X, Y, seed)) % 256;
-    const B = Math.abs(hash(X + 1, Y, seed)) % 256;
-    const C = Math.abs(hash(X, Y + 1, seed)) % 256;
-    const D = Math.abs(hash(X + 1, Y + 1, seed)) % 256;
-    const g00 = fastGrad(perm2.current[A], x, y);
-    const g10 = fastGrad(perm2.current[B], x - 1, y);
-    const g01 = fastGrad(perm2.current[C], x, y - 1);
-    const g11 = fastGrad(perm2.current[D], x - 1, y - 1);
-    const a = g00 + u * (g10 - g00);
-    const b = g01 + u * (g11 - g01);
-    return a + v * (b - a);
-  }
-  function drawPlasma(time = 0) {
-    const now = performance.now();
-    if (now - lastFrameTime.current < fpsInterval) {
-      rafId.current = requestAnimationFrame(() => drawPlasma(time));
-      return;
-    }
-    lastFrameTime.current = now;
-    const { width, height } = dims.current;
-    if (time % 60 === 0) {
-      console.log("[AsciiPerlinPlasma] Drawing frame:", {
-        time,
-        yOffset: yOffsetRef.current,
-        virtualHeight: virtualHeightRef.current,
-        yOffsetInChars: yOffsetRef.current / charHeight,
-        canvasSize: { width, height }
-      });
-    }
-    if (rows.current.length !== height) {
-      rows.current.length = height;
-    }
-    if (rowBuffer.current.length !== width) {
-      rowBuffer.current.length = width;
-    }
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        let value = 0;
-        const currentCharHeight = charHeight;
-        const yOffsetInChars = yOffsetRef.current / currentCharHeight;
-        const yPos = y + yOffsetInChars;
-        for (const octave of octaveConfigs.current) {
-          value += noise2D2(
-            (x + time * octave.timeScaleX) * octave.scaleX,
-            (yPos + time * octave.timeScaleY) * octave.scaleY
-          ) * octave.amplitude;
-        }
-        const clampedValue = value < -1 ? -1 : value > 1 ? 1 : value;
-        const charIndex = (clampedValue + 1) * 127.5 | 0;
-        rowBuffer.current[x] = charLookup.current[charIndex];
-      }
-      rows.current[y] = rowBuffer.current.join("");
-    }
-    if (ctx.current) {
-      const canvas = ctx.current.canvas;
-      ctx.current.fillStyle = color;
-      ctx.current.clearRect(0, 0, canvas.width, canvas.height);
-      for (let y = 0; y < height; y++) {
-        const row = rows.current[y];
-        for (let x = 0; x < width; x++) {
-          const char = row[x];
-          ctx.current.fillText(char, x * charWidth, (y + 1) * charHeight);
-        }
-      }
-    }
-    rafId.current = requestAnimationFrame(() => drawPlasma(time + timeScale));
-  }
-  function handleResize() {
-    if (!canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const newDims = {
-      width: Math.ceil(rect.width / charWidth),
-      height: Math.ceil(rect.height / charHeight)
-    };
-    if (newDims.width !== dims.current.width || newDims.height !== dims.current.height) {
-      dims.current = newDims;
-      const canvas = canvasRef.current;
-      const devicePixelRatio = window.devicePixelRatio || 1;
-      canvas.width = newDims.width * charWidth * devicePixelRatio;
-      canvas.height = newDims.height * charHeight * devicePixelRatio;
-      canvas.style.width = `${newDims.width * charWidth}px`;
-      canvas.style.height = `${newDims.height * charHeight}px`;
-      if (ctx.current) {
-        ctx.current.scale(devicePixelRatio, devicePixelRatio);
-        ctx.current.font = `${charHeight}px monospace`;
-        ctx.current.textBaseline = "bottom";
-        ctx.current.fillStyle = color;
-      }
-    }
-  }
-  React3.useEffect(() => {
-    console.log("[AsciiPerlinPlasma] Updating refs:", { yOffset, virtualHeight });
-    yOffsetRef.current = yOffset;
-    virtualHeightRef.current = virtualHeight;
-  }, [yOffset, virtualHeight]);
-  React3.useEffect(() => {
-    charLookup.current = new Array(256);
-    for (let i = 0; i < 256; i++) {
-      const normalizedValue = i / 255;
-      charLookup.current[i] = chars[Math.floor(normalizedValue * (charCount - 1e-3))];
-    }
-    octaveConfigs.current = octaves.map((octave) => ({
-      scaleX: octave.scale,
-      scaleY: octave.scale,
-      timeScaleX: octave.timeScaleX,
-      timeScaleY: octave.timeScaleY,
-      amplitude: octave.amplitude
-    }));
-    if (canvasRef.current && !ctx.current) {
-      ctx.current = canvasRef.current.getContext("2d");
-      if (ctx.current) {
-        ctx.current.font = `${charHeight}px monospace`;
-        ctx.current.textBaseline = "bottom";
-        ctx.current.fillStyle = color;
-      }
-    }
-    for (let i = 0; i < 256; i++) perm2.current[i] = i;
-    for (let i = 255; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [perm2.current[i], perm2.current[j]] = [perm2.current[j], perm2.current[i]];
-    }
-    handleResize();
-    const resizeObserver = new ResizeObserver(handleResize);
-    if (canvasRef.current) {
-      resizeObserver.observe(canvasRef.current);
-    }
-    drawPlasma();
-    return () => {
-      resizeObserver.disconnect();
-      if (rafId.current) cancelAnimationFrame(rafId.current);
-    };
-  }, [charWidth, charHeight, chars, timeScale, fpsCap, color, octaves, yOffset]);
-  return /* @__PURE__ */ jsx3(
-    "canvas",
-    {
-      ref: canvasRef,
-      className,
-      style: { display: "block", width: "100%", height: "100%" }
-    }
-  );
-};
-
 // src/PlasmaBackgroundLayout.tsx
 import { useCallback as useCallback2, useEffect as useEffect3, useMemo as useMemo3, useRef as useRef3, useState as useState3 } from "react";
 
 // src/generators/asciiPerlinPlasmaGenerator.ts
-var DEFAULT_CHARS2 = [
+var DEFAULT_CHARS = [
   "Q",
   "B",
   "$",
@@ -2972,7 +2619,7 @@ var DEFAULT_CHARS2 = [
   " ",
   " "
 ];
-var DEFAULT_OCTAVES2 = [
+var DEFAULT_OCTAVES = [
   {
     scale: 0.02,
     amplitude: 1,
@@ -2990,18 +2637,18 @@ var DEFAULT_OCTAVES2 = [
     // Much slower movement
   }
 ];
-var DEFAULT_TIME_SCALE2 = 0.9;
+var DEFAULT_TIME_SCALE = 0.9;
 var DEFAULT_FG_COLOR = "#55FFFF";
 var DEFAULT_BG_COLOR = "#000000";
-var FADE_TABLE2 = new Float32Array(512);
+var FADE_TABLE = new Float32Array(512);
 for (let i = 0; i < 512; i++) {
   const t = i / 511;
-  FADE_TABLE2[i] = t * t * t * (t * (t * 6 - 15) + 10);
+  FADE_TABLE[i] = t * t * t * (t * (t * 6 - 15) + 10);
 }
-function fastFade2(t) {
-  return FADE_TABLE2[t * 511 | 0];
+function fastFade(t) {
+  return FADE_TABLE[t * 511 | 0];
 }
-var GRAD_TABLE2 = new Float32Array([
+var GRAD_TABLE = new Float32Array([
   0.707,
   0.707,
   -0.707,
@@ -3019,11 +2666,11 @@ var GRAD_TABLE2 = new Float32Array([
   0,
   -1
 ]);
-function fastGrad2(hash3, x, y) {
-  const h = (hash3 & 7) << 1;
-  return GRAD_TABLE2[h] * x + GRAD_TABLE2[h | 1] * y;
+function fastGrad(hash2, x, y) {
+  const h = (hash2 & 7) << 1;
+  return GRAD_TABLE[h] * x + GRAD_TABLE[h | 1] * y;
 }
-function hash2(x, y, seed) {
+function hash(x, y, seed) {
   let h = x * 73856093 ^ y * 19349663 ^ seed;
   h = h >>> 16 ^ h;
   h *= 2146121005;
@@ -3050,28 +2697,28 @@ function noise2D(x, y, perm2) {
   const Y = Math.floor(y);
   x -= X;
   y -= Y;
-  const u = fastFade2(x);
-  const v = fastFade2(y);
+  const u = fastFade(x);
+  const v = fastFade(y);
   const seed = perm2[0];
-  const A = Math.abs(hash2(X, Y, seed)) % 256;
-  const B = Math.abs(hash2(X + 1, Y, seed)) % 256;
-  const C = Math.abs(hash2(X, Y + 1, seed)) % 256;
-  const D = Math.abs(hash2(X + 1, Y + 1, seed)) % 256;
-  const g00 = fastGrad2(perm2[A], x, y);
-  const g10 = fastGrad2(perm2[B], x - 1, y);
-  const g01 = fastGrad2(perm2[C], x, y - 1);
-  const g11 = fastGrad2(perm2[D], x - 1, y - 1);
+  const A = Math.abs(hash(X, Y, seed)) % 256;
+  const B = Math.abs(hash(X + 1, Y, seed)) % 256;
+  const C = Math.abs(hash(X, Y + 1, seed)) % 256;
+  const D = Math.abs(hash(X + 1, Y + 1, seed)) % 256;
+  const g00 = fastGrad(perm2[A], x, y);
+  const g10 = fastGrad(perm2[B], x - 1, y);
+  const g01 = fastGrad(perm2[C], x, y - 1);
+  const g11 = fastGrad(perm2[D], x - 1, y - 1);
   const a = g00 + u * (g10 - g00);
   const b = g01 + u * (g11 - g01);
   return a + v * (b - a);
 }
 function generateAsciiPerlinPlasmaFrame(frame, columns, rows, options = {}) {
   const {
-    chars = DEFAULT_CHARS2,
-    timeScale = DEFAULT_TIME_SCALE2,
+    chars = DEFAULT_CHARS,
+    timeScale = DEFAULT_TIME_SCALE,
     fgColor = DEFAULT_FG_COLOR,
     bgColor = DEFAULT_BG_COLOR,
-    octaves = DEFAULT_OCTAVES2,
+    octaves = DEFAULT_OCTAVES,
     seed = 12345
     // Fixed default seed for consistent patterns
   } = options;
@@ -3113,11 +2760,11 @@ function generateAsciiPerlinPlasmaFrame(frame, columns, rows, options = {}) {
 }
 function createAsciiPerlinPlasmaSampler(frame, options = {}) {
   const {
-    chars = DEFAULT_CHARS2,
-    timeScale = DEFAULT_TIME_SCALE2,
+    chars = DEFAULT_CHARS,
+    timeScale = DEFAULT_TIME_SCALE,
     fgColor = DEFAULT_FG_COLOR,
     bgColor = DEFAULT_BG_COLOR,
-    octaves = DEFAULT_OCTAVES2,
+    octaves = DEFAULT_OCTAVES,
     seed = 12345
   } = options;
   const charCount = chars.length;
@@ -3152,7 +2799,7 @@ function createAsciiPerlinPlasmaSampler(frame, options = {}) {
 }
 
 // src/PlasmaBackgroundLayout.tsx
-import { jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
+import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 function PlasmaBackgroundLayout({
   children,
   mode = "fixed",
@@ -3161,12 +2808,15 @@ function PlasmaBackgroundLayout({
   plasmaClassName,
   virtualWidthPx,
   virtualHeightPx,
+  chars,
+  timeScale,
+  octaves,
+  seed,
   fgColor,
   bgColor,
   showPerformanceOverlay = false,
   fps = 30,
-  bitmapFontUrl = "/ansi/fonts/Bm437_IBM_VGA_8x16.FON",
-  ...plasmaProps
+  bitmapFontUrl
 }) {
   const containerRef = useRef3(null);
   const scrollableRef = useRef3(null);
@@ -3263,30 +2913,16 @@ function PlasmaBackgroundLayout({
       }
     };
   }, [mode, isMounted]);
-  const memoizedPlasmaProps = useMemo3(
-    () => plasmaProps,
-    [
-      plasmaProps.charWidth,
-      plasmaProps.charHeight,
-      plasmaProps.chars,
-      plasmaProps.timeScale,
-      plasmaProps.fpsCap,
-      plasmaProps.color,
-      plasmaProps.octaves,
-      plasmaProps.yOffset,
-      plasmaProps.virtualHeight
-    ]
-  );
   const mergedOptions = useMemo3(() => {
-    const { color, ...restPlasmaProps } = memoizedPlasmaProps;
-    const finalFgColor = fgColor || color;
-    const options = {
-      ...restPlasmaProps,
-      ...finalFgColor && { fgColor: finalFgColor },
-      ...bgColor && { bgColor }
-    };
+    const options = {};
+    if (chars) options.chars = chars;
+    if (timeScale !== void 0) options.timeScale = timeScale;
+    if (octaves) options.octaves = octaves;
+    if (seed !== void 0) options.seed = seed;
+    if (fgColor) options.fgColor = fgColor;
+    if (bgColor) options.bgColor = bgColor;
     return options;
-  }, [memoizedPlasmaProps, fgColor, bgColor]);
+  }, [chars, timeScale, octaves, seed, fgColor, bgColor]);
   const fixedFrameGenerator = useCallback2(
     (frame, columns, rows) => {
       return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedOptions);
@@ -3320,7 +2956,7 @@ function PlasmaBackgroundLayout({
           width: "100%"
         },
         children: [
-          /* @__PURE__ */ jsx4(
+          /* @__PURE__ */ jsx3(
             "div",
             {
               style: {
@@ -3337,7 +2973,7 @@ function PlasmaBackgroundLayout({
                 const rows = Math.max(1, Math.ceil(viewportSize.height / 16));
                 const actualCellWidth = viewportSize.width / columns;
                 const actualCellHeight = viewportSize.height / rows;
-                return /* @__PURE__ */ jsx4(
+                return /* @__PURE__ */ jsx3(
                   AnsiVirtualDisplay,
                   {
                     columns,
@@ -3355,7 +2991,7 @@ function PlasmaBackgroundLayout({
               })()
             }
           ),
-          /* @__PURE__ */ jsx4(
+          /* @__PURE__ */ jsx3(
             "div",
             {
               ref: scrollableRef,
@@ -3376,7 +3012,7 @@ function PlasmaBackgroundLayout({
     );
   }
   if (!isMounted) {
-    return /* @__PURE__ */ jsx4(
+    return /* @__PURE__ */ jsx3(
       "div",
       {
         ref: containerRef,
@@ -3385,7 +3021,7 @@ function PlasmaBackgroundLayout({
           width: "100%",
           minHeight: "100vh"
         },
-        children: /* @__PURE__ */ jsx4(
+        children: /* @__PURE__ */ jsx3(
           "div",
           {
             ref: scrollableRef,
@@ -3427,7 +3063,7 @@ function PlasmaBackgroundLayout({
         minHeight: "100vh"
       },
       children: [
-        /* @__PURE__ */ jsx4(
+        /* @__PURE__ */ jsx3(
           "div",
           {
             style: {
@@ -3442,7 +3078,7 @@ function PlasmaBackgroundLayout({
             children: (() => {
               const actualCellWidth = viewportSize.width / visibleColumns;
               const actualCellHeight = viewportBounds.height / visibleRows;
-              return /* @__PURE__ */ jsx4(
+              return /* @__PURE__ */ jsx3(
                 AnsiVirtualDisplay,
                 {
                   columns: visibleColumns,
@@ -3465,7 +3101,7 @@ function PlasmaBackgroundLayout({
             })()
           }
         ),
-        /* @__PURE__ */ jsx4(
+        /* @__PURE__ */ jsx3(
           "div",
           {
             ref: scrollableRef,
@@ -3489,7 +3125,7 @@ function PlasmaBackgroundLayout({
 
 // src/FontCharacterChart.tsx
 import { useEffect as useEffect4, useMemo as useMemo4, useRef as useRef4, useState as useState4 } from "react";
-import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+import { jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
 function FontCharacterChart({ bitmapFontUrl }) {
   const [bitmapFont, setBitmapFont] = useState4(null);
   const [loading, setLoading] = useState4(true);
@@ -3581,7 +3217,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
     }
   }
   if (loading) {
-    return /* @__PURE__ */ jsx5("div", { children: "Loading font..." });
+    return /* @__PURE__ */ jsx4("div", { children: "Loading font..." });
   }
   if (error) {
     return /* @__PURE__ */ jsxs4("div", { children: [
@@ -3590,11 +3226,11 @@ function FontCharacterChart({ bitmapFontUrl }) {
     ] });
   }
   if (!bitmapFont) {
-    return /* @__PURE__ */ jsx5("div", { children: "No font loaded" });
+    return /* @__PURE__ */ jsx4("div", { children: "No font loaded" });
   }
   return /* @__PURE__ */ jsxs4("div", { style: { padding: "20px" }, children: [
-    /* @__PURE__ */ jsx5("div", { style: { marginBottom: "20px" }, children: /* @__PURE__ */ jsx5("button", { onClick: () => setSorted(!sorted), children: sorted ? "Show Original Order" : "Sort by Darkness (Darkest to Lightest)" }) }),
-    /* @__PURE__ */ jsx5(
+    /* @__PURE__ */ jsx4("div", { style: { marginBottom: "20px" }, children: /* @__PURE__ */ jsx4("button", { onClick: () => setSorted(!sorted), children: sorted ? "Show Original Order" : "Sort by Darkness (Darkest to Lightest)" }) }),
+    /* @__PURE__ */ jsx4(
       "div",
       {
         style: {
@@ -3618,7 +3254,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
             },
             title: `Click to copy: ${character}`,
             children: [
-              /* @__PURE__ */ jsx5(
+              /* @__PURE__ */ jsx4(
                 "canvas",
                 {
                   ref: (el) => {
@@ -3649,7 +3285,6 @@ export {
   ANSI_COLORS_RGB,
   AnsiArt,
   AnsiVirtualDisplay,
-  AsciiPerlinPlasma,
   FontCharacterChart,
   PlasmaBackgroundLayout,
   convertFrameDataToAnsi,
