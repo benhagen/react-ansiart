@@ -2,8 +2,8 @@ import { cp437ByteToChar } from './cp437'
 
 export type AnsiCell = {
 	ch: string
-	fg: number // 0-15
-	bg: number // 0-15
+	fg: number | string // ANSI color index (0-15) or CSS color string
+	bg: number | string // ANSI color index (0-15) or CSS color string
 	bold: boolean
 }
 
@@ -561,6 +561,105 @@ export function findNextRenderPoint(
 				}
 				// CSI command complete - render point
 				return i
+			}
+		}
+	}
+
+	return bytes.length
+}
+
+/**
+ * Find the next cursor movement in ANSI stream
+ * Stops after:
+ * - Cursor positioning commands: H, f, A, B, C, D, G, s, u
+ * - Batch of newlines (multiple lines at once for speed)
+ * - Large batch of chars (if no cursor commands found)
+ * This creates more natural animation by completing "drawing strokes"
+ */
+export function findNextCursorMove(
+	bytes: Uint8Array,
+	startIndex: number,
+	maxCharsBeforeStop: number = 2000,
+	linesPerBatch: number = 5
+): number {
+	if (startIndex >= bytes.length) return bytes.length
+
+	let i = startIndex
+	const ESC = 0x1b
+	let state: 'normal' | 'esc' | 'csi' = 'normal'
+	let csiParams = ''
+	let normalCharCount = 0
+	let newlineCount = 0
+	let foundAnyCursorCommand = false
+
+	while (i < bytes.length) {
+		const b = bytes[i++]
+		if (b === 0x1a) return i // soft EOF
+
+		switch (state) {
+			case 'normal': {
+				if (b === ESC) {
+					state = 'esc'
+					csiParams = ''
+					break
+				}
+				if (b === 0x0a || b === 0x0d) {
+					newlineCount++
+					// Stop after multiple lines for better batching
+					if (newlineCount >= linesPerBatch) {
+						return i
+					}
+					break
+				}
+				normalCharCount++
+				// Only stop after many chars if we've found cursor commands before
+				// This allows simple text files to render quickly in larger chunks
+				if (normalCharCount >= maxCharsBeforeStop) {
+					return i
+				}
+				break
+			}
+			case 'esc': {
+				if (b === 0x5b) {
+					// CSI - continue reading
+					state = 'csi'
+					break
+				}
+				// Other ESC sequence - not a cursor move, keep going
+				state = 'normal'
+				break
+			}
+			case 'csi': {
+				const ch = String.fromCharCode(b)
+				if ((b >= 0x30 && b <= 0x3f) || ch === ' ' || ch === '?') {
+					// Parameter bytes - accumulate
+					csiParams += ch
+					break
+				}
+				// Final byte - check if it's a cursor movement command
+				const isCursorMove =
+					ch === 'H' || // Cursor Position
+					ch === 'f' || // Horizontal Vertical Position
+					ch === 'A' || // Cursor Up
+					ch === 'B' || // Cursor Down
+					ch === 'C' || // Cursor Forward
+					ch === 'D' || // Cursor Back
+					ch === 'G' || // Cursor Horizontal Absolute
+					ch === 's' || // Save Cursor Position
+					ch === 'u' // Restore Cursor Position
+
+				state = 'normal'
+				csiParams = ''
+
+				if (isCursorMove) {
+					foundAnyCursorCommand = true
+					normalCharCount = 0 // Reset after cursor move
+					newlineCount = 0
+					// This is a cursor move - render here!
+					return i
+				}
+				// Not a cursor move (probably color/clear cmd) - keep going
+				break
 			}
 		}
 	}

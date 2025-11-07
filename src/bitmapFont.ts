@@ -6,6 +6,7 @@ export type BitmapFont = {
 	height: number
 	glyphs: Uint8Array[] // Array of 256 glyphs, each is height bytes (1 byte per row)
 	rawBitmapData?: Uint8Array // Optional raw bitmap data for debugging
+	glyphCache?: Map<string, HTMLCanvasElement> // Cache of pre-rendered glyphs as canvases
 }
 
 /**
@@ -62,6 +63,37 @@ export async function loadRawBitmapFont(url: string, width = 8, height = 16): Pr
 /**
  * Render a single glyph to a canvas context (pixel-perfect, no scaling)
  */
+// Cache for parsed colors to avoid repeated parsing
+const colorCache = new Map<string, { r: number; g: number; b: number }>()
+
+function parseColor(color: string): { r: number; g: number; b: number } {
+	if (colorCache.has(color)) {
+		return colorCache.get(color)!
+	}
+
+	// Parse hex colors (#RRGGBB)
+	if (color.startsWith('#')) {
+		const hex = color.slice(1)
+		const r = parseInt(hex.slice(0, 2), 16)
+		const g = parseInt(hex.slice(2, 4), 16)
+		const b = parseInt(hex.slice(4, 6), 16)
+		const rgb = { r, g, b }
+		colorCache.set(color, rgb)
+		return rgb
+	}
+
+	// Fallback: use a canvas to parse the color
+	const canvas = document.createElement('canvas')
+	canvas.width = canvas.height = 1
+	const ctx = canvas.getContext('2d')!
+	ctx.fillStyle = color
+	ctx.fillRect(0, 0, 1, 1)
+	const data = ctx.getImageData(0, 0, 1, 1).data
+	const rgb = { r: data[0], g: data[1], b: data[2] }
+	colorCache.set(color, rgb)
+	return rgb
+}
+
 export function renderGlyph(
 	ctx: CanvasRenderingContext2D,
 	font: BitmapFont,
@@ -71,24 +103,47 @@ export function renderGlyph(
 	fgColor: string,
 	bgColor: string
 ) {
-	const glyph = font.glyphs[charCode] || font.glyphs[0]
+	// Initialize cache if needed
+	if (!font.glyphCache) {
+		font.glyphCache = new Map()
+	}
 
-	// Fill background
-	ctx.fillStyle = bgColor
-	ctx.fillRect(x, y, font.width, font.height)
+	// Create cache key from charCode and colors
+	const cacheKey = `${charCode}:${fgColor}:${bgColor}`
+	let canvas = font.glyphCache.get(cacheKey)
 
-	// Draw foreground pixels (1:1 pixel mapping)
-	ctx.fillStyle = fgColor
-	for (let row = 0; row < font.height; row++) {
-		const byte = glyph[row]
-		// Bits are stored MSB first (bit 7 = leftmost pixel, bit 0 = rightmost)
-		for (let col = 0; col < font.width; col++) {
-			const bit = 7 - col
-			if (byte & (1 << bit)) {
-				ctx.fillRect(x + col, y + row, 1, 1)
+	if (!canvas) {
+		// Cache miss - render the glyph to an offscreen canvas
+		const glyph = font.glyphs[charCode] || font.glyphs[0]
+
+		// Create offscreen canvas for this glyph
+		canvas = document.createElement('canvas')
+		canvas.width = font.width
+		canvas.height = font.height
+		const offscreenCtx = canvas.getContext('2d', { willReadFrequently: false })!
+
+		// Fill background
+		offscreenCtx.fillStyle = bgColor
+		offscreenCtx.fillRect(0, 0, font.width, font.height)
+
+		// Draw foreground pixels using fillRect (but only once per glyph)
+		offscreenCtx.fillStyle = fgColor
+		for (let row = 0; row < font.height; row++) {
+			const byte = glyph[row]
+			for (let col = 0; col < font.width; col++) {
+				const bit = 7 - col
+				if (byte & (1 << bit)) {
+					offscreenCtx.fillRect(col, row, 1, 1)
+				}
 			}
 		}
+
+		// Store in cache
+		font.glyphCache.set(cacheKey, canvas)
 	}
+
+	// Draw the cached canvas using drawImage (much faster than putImageData)
+	ctx.drawImage(canvas, x, y)
 }
 
 /**
@@ -111,4 +166,3 @@ export function renderText(
 	}
 	return xPos - x // return width rendered
 }
-

@@ -1,16 +1,19 @@
 # react-ansiart
 
-A React component for rendering ANSI art files (.ANS, .ASC) with support for CP437 character encoding, cursor control codes, and progressive animation playback.
+React components for rendering ANSI art files (.ANS, .ASC) and creating animated virtual displays. Includes support for CP437 character encoding, cursor control codes, progressive animation playback, and procedural frame generation with Perlin noise effects.
 
 ## Features
 
 - **ANSI Art Rendering**: Displays .ANS and .ASC files with proper cursor control code support
+- **Virtual Display**: Create animated procedural displays using frame generation functions
 - **CP437 Encoding**: Full support for Code Page 437 characters including box-drawing and block elements
 - **Dual Rendering Modes**:
   - DOM mode: Uses HTML/CSS with fallback fonts
   - Canvas mode: Pixel-perfect rendering with optional bitmap font support
 - **Bitmap Font Support**: Load and use Windows .FON bitmap fonts for authentic VGA display
 - **Progressive Animation**: Animate ANSI sequences progressively to simulate BBS-era terminal playback
+- **Perlin Noise**: Built-in Perlin noise implementation for procedural effects
+- **Plasma Effect**: Default animated plasma generator using multi-octave Perlin noise
 - **Drag & Drop**: Drop .ans or .asc files directly onto the component
 - **Playback Controls**: Optional play/pause/restart controls for animated mode
 
@@ -87,7 +90,128 @@ function App() {
 }
 ```
 
+## Virtual Display
+
+The `AnsiVirtualDisplay` component creates an animated virtual display that generates frames using a callback function. It's perfect for creating procedural animations, demos, and effects rendered in ANSI style.
+
+### Basic Plasma Example
+
+```tsx
+import { AnsiVirtualDisplay } from 'react-ansiart'
+
+function App() {
+	return <AnsiVirtualDisplay columns={80} rows={25} fps={30} />
+}
+```
+
+### With Custom Display Size and Controls
+
+```tsx
+import { AnsiVirtualDisplay } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={120}
+			rows={40}
+			cellWidthPx={8}
+			cellHeightPx={16}
+			fps={60}
+			showControls={true}
+		/>
+	)
+}
+```
+
+### With Bitmap Font
+
+```tsx
+import { AnsiVirtualDisplay } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			bitmapFontUrl='/fonts/Bm437_IBM_VGA_8x16.FON'
+			fps={30}
+		/>
+	)
+}
+```
+
+### With Custom Palette
+
+```tsx
+import { AnsiVirtualDisplay } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			palette={64} // Use 64 evenly-spaced colors for better color accuracy
+			fps={30}
+		/>
+	)
+}
+```
+
+### Unconstrained Palette Mode
+
+```tsx
+import { AnsiVirtualDisplay } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			palette='unconstrained' // Use 256 colors for maximum color fidelity
+			fps={30}
+		/>
+	)
+}
+```
+
+### Custom Frame Generator
+
+```tsx
+import { AnsiVirtualDisplay, type FrameGenerator, type FrameData } from 'react-ansiart'
+
+// Create a custom frame generator
+const checkerboardGenerator: FrameGenerator = (frame, width, height) => {
+	const pixels = new Uint8Array(width * height * 3)
+	const size = 10
+	const offset = Math.floor(frame / 5) % size
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const checkX = Math.floor((x + offset) / size) % 2
+			const checkY = Math.floor(y / size) % 2
+			const isWhite = (checkX + checkY) % 2 === 0
+
+			const index = (y * width + x) * 3
+			const value = isWhite ? 255 : 0
+			pixels[index] = value // R
+			pixels[index + 1] = value // G
+			pixels[index + 2] = value // B
+		}
+	}
+
+	return { width, height, pixels }
+}
+
+function App() {
+	return (
+		<AnsiVirtualDisplay columns={80} rows={25} frameGenerator={checkerboardGenerator} fps={30} />
+	)
+}
+```
+
 ## Props
+
+### AnsiArt Props
 
 | Prop             | Type                | Default      | Description                                             |
 | ---------------- | ------------------- | ------------ | ------------------------------------------------------- |
@@ -107,6 +231,135 @@ function App() {
 | `frameDelay`     | `number`            | `50`         | Delay between frames in milliseconds                    |
 | `animationSpeed` | `number`            | `1.0`        | Speed multiplier (applied to frameDelay)                |
 | `showControls`   | `boolean`           | `false`      | Show play/pause/restart controls                        |
+
+### AnsiVirtualDisplay Props
+
+| Prop             | Type             | Default               | Description                                                                                                        |
+| ---------------- | ---------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `columns`        | `number`         | `80`                  | Number of character columns                                                                                        |
+| `rows`           | `number`         | `25`                  | Number of character rows                                                                                           |
+| `cellWidthPx`    | `number`         | `8`                   | Character cell width in pixels                                                                                     |
+| `cellHeightPx`   | `number`         | `16`                  | Character cell height in pixels                                                                                    |
+| `frameGenerator` | `FrameGenerator` | `generatePlasmaFrame` | Function that generates frame data                                                                                 |
+| `fps`            | `number`         | `30`                  | Frames per second                                                                                                  |
+| `fontFamily`     | `string`         | -                     | Override default font stack                                                                                        |
+| `background`     | `string`         | `'#000'`              | Background color                                                                                                   |
+| `bitmapFontUrl`  | `string`         | -                     | URL or path to .FON bitmap font file                                                                               |
+| `showControls`   | `boolean`        | `false`               | Show play/pause/restart controls                                                                                   |
+| `palette`        | `PaletteMode`    | `'ansi16'`            | Color palette mode: `'ansi16'` (16 ANSI colors), `'unconstrained'` (256 colors), or `number` (custom palette size) |
+
+## Frame Generators
+
+A `FrameGenerator` is a function that creates RGB pixel data for each frame:
+
+```tsx
+type FrameGenerator = (frame: number, width: number, height: number) => FrameData
+
+type FrameData = {
+	width: number
+	height: number
+	pixels: Uint8Array // RGB format: 3 bytes per pixel (r, g, b)
+}
+```
+
+The library includes a built-in plasma generator (`generatePlasmaFrame`) that uses Perlin noise to create flowing, organic patterns. You can also create custom generators for any effect you want.
+
+### Using Built-in Plasma Generator
+
+```tsx
+import { AnsiVirtualDisplay, generatePlasmaFrame } from 'react-ansiart'
+
+function App() {
+	return <AnsiVirtualDisplay columns={80} rows={25} frameGenerator={generatePlasmaFrame} fps={30} />
+}
+```
+
+### Creating Custom Frame Generators
+
+The `pixels` array stores RGB values in row-major order:
+
+- Index `(y * width + x) * 3` = Red
+- Index `(y * width + x) * 3 + 1` = Green
+- Index `(y * width + x) * 3 + 2` = Blue
+
+Example: Simple gradient animation
+
+```tsx
+import { AnsiVirtualDisplay, type FrameGenerator } from 'react-ansiart'
+
+const gradientGenerator: FrameGenerator = (frame, width, height) => {
+	const pixels = new Uint8Array(width * height * 3)
+	const offset = (frame % 360) / 360
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const hue = (x / width + offset) % 1
+			const [r, g, b] = hslToRgb(hue, 1, 0.5)
+
+			const index = (y * width + x) * 3
+			pixels[index] = r
+			pixels[index + 1] = g
+			pixels[index + 2] = b
+		}
+	}
+
+	return { width, height, pixels }
+}
+
+function App() {
+	return <AnsiVirtualDisplay columns={80} rows={25} frameGenerator={gradientGenerator} />
+}
+```
+
+### Color Conversion Utilities
+
+The library exports utilities for working with colors:
+
+- `rgbToAnsiColor(r, g, b)` - Convert RGB (0-255) to closest ANSI color index (0-15)
+- `rgbToPaletteColor(r, g, b, palette)` - Convert RGB to closest color in custom palette
+- `generateEvenlySpacedPalette(size)` - Generate evenly spaced color palette
+- `getPalette(mode)` - Get palette for a given mode (`'ansi16'`, `'unconstrained'`, or custom size)
+- `ANSI_COLORS_RGB` - Array of ANSI 16-color RGB values
+- `perlinNoise(x, y, z?)` - Generate Perlin noise values (-1 to 1)
+- `perlinNoise2D(x, y)` - 2D Perlin noise
+- `perlinNoise3D(x, y, z)` - 3D Perlin noise
+
+### Palette Modes
+
+The `palette` prop controls how colors are matched and rendered:
+
+- **`'ansi16'`** (default): Uses the standard ANSI 16-color VGA palette. This provides authentic retro terminal colors.
+
+- **`'unconstrained'`**: Uses 256 evenly-spaced colors for color matching. Provides better color accuracy while still rendering with ANSI-style characters.
+
+- **`number`** (e.g., `64`, `128`): Generates a custom palette with the specified number of evenly-spaced colors across the RGB spectrum. Useful for balancing color accuracy with performance.
+
+**Note**: While custom palettes provide better color matching during conversion, rendering still uses the ANSI 16-color set for display. The palette affects how source RGB colors are matched to the available ANSI colors.
+
+Example: Using Perlin noise in custom generator
+
+```tsx
+import { AnsiVirtualDisplay, perlinNoise3D, type FrameGenerator } from 'react-ansiart'
+
+const noiseGenerator: FrameGenerator = (frame, width, height) => {
+	const pixels = new Uint8Array(width * height * 3)
+	const time = frame * 0.1
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const noise = perlinNoise3D(x * 0.1, y * 0.1, time)
+			const value = Math.floor((noise + 1) * 127.5)
+
+			const index = (y * width + x) * 3
+			pixels[index] = value
+			pixels[index + 1] = value
+			pixels[index + 2] = value
+		}
+	}
+
+	return { width, height, pixels }
+}
+```
 
 ## Animation and Modem Speed Simulation
 
@@ -193,6 +446,7 @@ The component loads ANSI files and fonts via URLs using the `fetch` API. You can
 - Data URLs: For small files bundled with your app
 
 In frameworks like Next.js, place static files in the `public/` directory:
+
 - ANSI files: `public/ansi/*.ans` → accessible at `/ansi/*.ans`
 - Font files: `public/ansi/fonts/*.FON` → accessible at `/ansi/fonts/*.FON`
 
@@ -206,5 +460,6 @@ Requires:
 
 ## License
 
-MIT
+## References
 
+https://mrogalski.eu/ansi-art/
