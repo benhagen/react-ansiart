@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AnsiScreen } from './ansiParser'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
+import type { BitmapFont } from './bitmapFont'
+import { loadRawBitmapFont } from './bitmapFont'
+import { extractFontFromFON } from './fonExtractor'
 import type { AsciiPerlinPlasmaOptions } from './generators/asciiPerlinPlasmaGenerator'
 import {
 	createAsciiPerlinPlasmaSampler,
@@ -56,6 +59,41 @@ export function PlasmaBackgroundLayout({
 	const [scrollTop, setScrollTop] = useState(0)
 	const [maxScrollTop, setMaxScrollTop] = useState(0)
 	const [isMounted, setIsMounted] = useState(false)
+	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(null)
+
+	// Load font once and share with AnsiVirtualDisplay
+	useEffect(() => {
+		if (!bitmapFontUrl) {
+			setBitmapFont(null)
+			return
+		}
+		let cancelled = false
+		async function loadFont() {
+			try {
+				const fontResult = await extractFontFromFON(bitmapFontUrl)
+				if (fontResult && !cancelled) {
+					const { bitmapData, width, height } = fontResult
+					const bytesPerGlyph = height
+					const glyphs: Uint8Array[] = []
+					for (let i = 0; i < 256; i++) {
+						glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph))
+					}
+					setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData })
+				} else if (!cancelled) {
+					// Fallback to loadRawBitmapFont if extractFontFromFON fails
+					const font = await loadRawBitmapFont(bitmapFontUrl, 8, 16)
+					setBitmapFont(font)
+				}
+			} catch (e: any) {
+				console.warn('Failed to load font:', e)
+				if (!cancelled) setBitmapFont(null)
+			}
+		}
+		loadFont()
+		return () => {
+			cancelled = true
+		}
+	}, [bitmapFontUrl])
 
 	// Initialize viewport dimensions on client side after mount
 	useEffect(() => {
@@ -215,6 +253,10 @@ export function PlasmaBackgroundLayout({
 		[mergedOptions]
 	)
 
+	// Derive virtual world in character units using font dimensions
+	const cellWidthPx = bitmapFont?.width || 8 // Default fallback
+	const cellHeightPx = bitmapFont?.height || 16 // Default fallback
+
 	if (mode === 'fixed') {
 		return (
 			<div
@@ -238,18 +280,16 @@ export function PlasmaBackgroundLayout({
 					}}
 				>
 					{(() => {
-						const columns = Math.max(1, Math.ceil(viewportSize.width / 8))
-						const rows = Math.max(1, Math.ceil(viewportSize.height / 16))
-						const actualCellWidth = viewportSize.width / columns
-						const actualCellHeight = viewportSize.height / rows
+						const columns = Math.max(1, Math.ceil(viewportSize.width / cellWidthPx))
+						const rows = Math.max(1, Math.ceil(viewportSize.height / cellHeightPx))
+						// Only render if font is loaded (we load it ourselves, so don't pass bitmapFontUrl)
+						if (!bitmapFont) return null
 						return (
 							<AnsiVirtualDisplay
 								columns={columns}
 								rows={rows}
-								cellWidthPx={actualCellWidth}
-								cellHeightPx={actualCellHeight}
 								fillContainer={true}
-								bitmapFontUrl={bitmapFontUrl}
+								bitmapFont={bitmapFont}
 								frameGenerator={fixedFrameGenerator}
 								fps={fps}
 								background={bgColor || '#000'}
@@ -307,10 +347,6 @@ export function PlasmaBackgroundLayout({
 		)
 	}
 
-	// Derive virtual world in character units using AnsiVirtualDisplay cell dimensions
-	const cellHeightPx = 16 // default to 16 to match AnsiVirtualDisplay default
-	const cellWidthPx = 8 // default to 8
-
 	// Visible dimensions (what fits in the current viewport)
 	// Add 1 to columns/rows to ensure we fill the entire viewport even with partial cells
 	const visibleColumns = Math.max(1, Math.ceil(viewportSize.width / cellWidthPx))
@@ -356,29 +392,24 @@ export function PlasmaBackgroundLayout({
 					pointerEvents: 'none',
 				}}
 			>
-				{(() => {
-					const actualCellWidth = viewportSize.width / visibleColumns
-					const actualCellHeight = viewportBounds.height / visibleRows
-					return (
-						<AnsiVirtualDisplay
-							columns={visibleColumns}
-							rows={visibleRows}
-							cellWidthPx={actualCellWidth}
-							cellHeightPx={actualCellHeight}
-							fillContainer={true}
-							bitmapFontUrl={bitmapFontUrl}
-							virtualColumns={virtualColumns}
-							virtualRows={virtualRows}
-							viewX={viewX}
-							viewY={viewY}
-							pixelOffsetY={pixelOffsetY}
-							frameGenerator={scrollableFrameGenerator}
-							fps={fps}
-							background={bgColor || '#000'}
-							showPerformanceOverlay={showPerformanceOverlay}
-						/>
-					)
-				})()}
+				{/* Only render if font is loaded (we load it ourselves, so don't pass bitmapFontUrl) */}
+				{bitmapFont && (
+					<AnsiVirtualDisplay
+						columns={visibleColumns}
+						rows={visibleRows}
+						fillContainer={true}
+						bitmapFont={bitmapFont}
+						virtualColumns={virtualColumns}
+						virtualRows={virtualRows}
+						viewX={viewX}
+						viewY={viewY}
+						pixelOffsetY={pixelOffsetY}
+						frameGenerator={scrollableFrameGenerator}
+						fps={fps}
+						background={bgColor || '#000'}
+						showPerformanceOverlay={showPerformanceOverlay}
+					/>
+				)}
 			</div>
 
 			{/* Scrollable content layer */}

@@ -35,8 +35,6 @@ function colorToCss(color: number | string, defaultColor: string = '#AAAAAA'): s
 export type DisplayConfig = {
 	columns: number
 	rows: number
-	cellWidthPx: number
-	cellHeightPx: number
 	frameGenerator: DisplayFrameGenerator
 	fps: number
 	background: string
@@ -112,11 +110,7 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	updateConfig(config: Partial<DisplayConfig>): void {
-		const needsCanvasResize =
-			config.columns !== undefined ||
-			config.rows !== undefined ||
-			config.cellWidthPx !== undefined ||
-			config.cellHeightPx !== undefined
+		const needsCanvasResize = config.columns !== undefined || config.rows !== undefined
 
 		const overlayToggled =
 			config.showPerformanceOverlay !== undefined &&

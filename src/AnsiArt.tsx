@@ -142,15 +142,18 @@ export function AnsiArt({
 		let cancelled = false
 		async function loadFont() {
 			try {
-				const fontData = await extractFontFromFON(bitmapFontUrl!)
-				if (fontData && fontData.length >= 4096) {
-					if (!cancelled) setRawFontData(fontData)
+				const fontResult = await extractFontFromFON(bitmapFontUrl!)
+				if (fontResult) {
+					const { bitmapData, width, height } = fontResult
+					if (!cancelled) setRawFontData(bitmapData)
+					const bytesPerGlyph = height
 					const glyphs: Uint8Array[] = []
 					for (let i = 0; i < 256; i++) {
-						glyphs.push(fontData.slice(i * 16, (i + 1) * 16))
+						glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph))
 					}
-					if (!cancelled) setBitmapFont({ width: 8, height: 16, glyphs, rawBitmapData: fontData })
+					if (!cancelled) setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData })
 				} else {
+					// Fallback to loadRawBitmapFont if extractFontFromFON fails
 					const font = await loadRawBitmapFont(bitmapFontUrl!, 8, 16)
 					if (!cancelled) setBitmapFont(font)
 				}
@@ -538,11 +541,11 @@ export function AnsiArt({
 	}, [animated, isPlaying])
 
 	useEffect(() => {
-		if (!debugFont || !rawFontData) return
+		if (!debugFont || !rawFontData || !bitmapFont) return
 		const canvas = debugFontCanvasRef.current
 		if (!canvas) return
-		const charWidth = 8
-		const charHeight = 16
+		const charWidth = bitmapFont.width
+		const charHeight = bitmapFont.height
 		const cols = 16
 		const rows = 16
 		const cssWidth = cols * charWidth
@@ -560,25 +563,26 @@ export function AnsiArt({
 		ctx.fillStyle = '#000000'
 		ctx.fillRect(0, 0, cssWidth, cssHeight)
 		ctx.fillStyle = '#FFFFFF'
+		const bytesPerGlyph = charHeight
 		for (let charCode = 0; charCode < 256; charCode++) {
-			const charBase = charCode * 16
+			const charBase = charCode * bytesPerGlyph
 			const col = charCode % 16
 			const row = Math.floor(charCode / 16)
 			const baseX = col * charWidth
 			const baseY = row * charHeight
-			for (let rowIdx = 0; rowIdx < 16; rowIdx++) {
+			for (let rowIdx = 0; rowIdx < charHeight; rowIdx++) {
 				const byte = rawFontData[charBase + rowIdx]
 				const x = baseX
 				const y = baseY + rowIdx
-				for (let bit = 0; bit < 8; bit++) {
-					const bitValue = 7 - bit
+				for (let bit = 0; bit < charWidth; bit++) {
+					const bitValue = charWidth - 1 - bit
 					if (byte & (1 << bitValue)) {
 						ctx.fillRect(x + bit, y, 1, 1)
 					}
 				}
 			}
 		}
-	}, [debugFont, rawFontData])
+	}, [debugFont, rawFontData, bitmapFont])
 
 	if (error)
 		return (

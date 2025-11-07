@@ -11,12 +11,11 @@ import type { DisplayFrameGenerator, PixelFrameGenerator } from './types'
 export type AnsiVirtualDisplayProps = {
 	columns?: number // default 80
 	rows?: number // default 25
-	cellWidthPx?: number // default 8
-	cellHeightPx?: number // default 16
 	frameGenerator?: DisplayFrameGenerator // default: plasma with default converter
 	fps?: number // default 30
 	background?: string // default: '#000'. Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.)
-	bitmapFontUrl: string // path to .FON or raw bitmap font file
+	bitmapFont?: BitmapFont // Pre-loaded font (avoids duplicate loading)
+	bitmapFontUrl?: string // path to .FON or raw bitmap font file (required if bitmapFont not provided)
 	showControls?: boolean // show play/pause controls
 	showPerformanceOverlay?: boolean // show performance stats overlay
 	fillContainer?: boolean // fill the container width instead of fit-content
@@ -40,11 +39,10 @@ const defaultFrameGenerator: PixelFrameGenerator = {
 export function AnsiVirtualDisplay({
 	columns = 80,
 	rows = 25,
-	cellWidthPx = 8,
-	cellHeightPx = 16,
 	frameGenerator = defaultFrameGenerator,
 	fps = 30,
 	background = '#000',
+	bitmapFont: providedBitmapFont,
 	bitmapFontUrl,
 	showControls = false,
 	showPerformanceOverlay = false,
@@ -59,7 +57,7 @@ export function AnsiVirtualDisplay({
 }: AnsiVirtualDisplayProps) {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const engineRef = useRef<AnsiVirtualDisplayEngine | null>(null)
-	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(null)
+	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(providedBitmapFont || null)
 	const [isPlaying, setIsPlaying] = useState(true)
 
 	// Use the provided frameGenerator directly
@@ -77,8 +75,6 @@ export function AnsiVirtualDisplay({
 			engineRef.current = new AnsiVirtualDisplayEngine(canvas, {
 				columns,
 				rows,
-				cellWidthPx,
-				cellHeightPx,
 				frameGenerator: effectiveFrameGenerator,
 				fps,
 				background,
@@ -107,8 +103,6 @@ export function AnsiVirtualDisplay({
 		engineRef.current.updateConfig({
 			columns,
 			rows,
-			cellWidthPx,
-			cellHeightPx,
 			frameGenerator: effectiveFrameGenerator,
 			fps,
 			background,
@@ -123,8 +117,6 @@ export function AnsiVirtualDisplay({
 	}, [
 		columns,
 		rows,
-		cellWidthPx,
-		cellHeightPx,
 		effectiveFrameGenerator,
 		fps,
 		background,
@@ -143,8 +135,13 @@ export function AnsiVirtualDisplay({
 		engineRef.current.setBitmapFont(bitmapFont)
 	}, [bitmapFont])
 
-	// Load bitmap font if provided
+	// Use provided font or load from URL
 	useEffect(() => {
+		if (providedBitmapFont) {
+			setBitmapFont(providedBitmapFont)
+			return
+		}
+
 		if (!bitmapFontUrl) {
 			setBitmapFont(null)
 			return
@@ -152,16 +149,19 @@ export function AnsiVirtualDisplay({
 		let cancelled = false
 		async function loadFont() {
 			try {
-				const fontData = await extractFontFromFON(bitmapFontUrl!)
+				const fontResult = await extractFontFromFON(bitmapFontUrl!)
 
-				if (fontData && fontData.length >= 4096) {
+				if (fontResult) {
+					const { bitmapData, width, height } = fontResult
+					const bytesPerGlyph = height
 					const glyphs: Uint8Array[] = []
 					for (let i = 0; i < 256; i++) {
-						glyphs.push(fontData.slice(i * 16, (i + 1) * 16))
+						glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph))
 					}
 
-					if (!cancelled) setBitmapFont({ width: 8, height: 16, glyphs, rawBitmapData: fontData })
+					if (!cancelled) setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData })
 				} else {
+					// Fallback to loadRawBitmapFont if extractFontFromFON fails
 					const font = await loadRawBitmapFont(bitmapFontUrl!, 8, 16)
 					if (!cancelled) setBitmapFont(font)
 				}
@@ -174,7 +174,7 @@ export function AnsiVirtualDisplay({
 		return () => {
 			cancelled = true
 		}
-	}, [bitmapFontUrl])
+	}, [providedBitmapFont, bitmapFontUrl])
 
 	const handlePlayPause = () => {
 		if (!engineRef.current) return

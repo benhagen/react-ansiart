@@ -1,7 +1,14 @@
 // Extract bitmap font data from Windows .FON files
 // .FON files are NE (New Executable) format containing FNT resources
 
-export async function extractFontFromFON(url: string): Promise<Uint8Array | null> {
+export type FontExtractionResult = {
+	bitmapData: Uint8Array
+	width: number
+	height: number
+}
+
+export async function extractFontFromFON(url: string): Promise<FontExtractionResult | null> {
+	console.log('[fonExtractor] Extracting from:', url)
 	const response = await fetch(url)
 	if (!response.ok) throw new Error(`Failed to load FON: ${response.status}`)
 	const buffer = await response.arrayBuffer()
@@ -10,7 +17,8 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 	// Check for MZ header (DOS executable)
 	if (bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
 		// Not a .FON file, might be raw bitmap data
-		return bytes
+		// Default to 8x16 for raw bitmap data (common VGA font size)
+		return { bitmapData: bytes, width: 8, height: 16 }
 	}
 
 	// Get NE header offset from MZ header at offset 0x3C
@@ -45,6 +53,7 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 
 		if (typeId === 0x8008) {
 			// Found font resource
+			console.log('[fonExtractor] Found font resource, count:', count)
 			if (count > 0) {
 				// Get first font resource
 				const fontResOffset = (bytes[pos] | (bytes[pos + 1] << 8)) << alignShift
@@ -54,9 +63,25 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 				const fntData = bytes.slice(fontResOffset, fontResOffset + fontResLength)
 
 				// Parse FNT header to find bitmap data
+				// FNT header structure:
+				// +0x56: dfPixWidth (WORD, 2 bytes)
+				// +0x58: dfPixHeight (WORD, 2 bytes)
+				// +0x5f: dfFirstChar (BYTE)
+				// +0x60: dfLastChar (BYTE)
+				const dfPixWidth = fntData[0x56] | (fntData[0x57] << 8)
 				const dfPixHeight = fntData[0x58] | (fntData[0x59] << 8)
 				const dfFirstChar = fntData[0x5f]
 				const dfLastChar = fntData[0x60]
+				console.log(
+					'[fonExtractor] Font:',
+					dfPixWidth,
+					'x',
+					dfPixHeight,
+					'chars',
+					dfFirstChar,
+					'-',
+					dfLastChar
+				)
 
 				// For fixed-width VGA fonts: bitmap is stored sequentially after header + character table
 				const charTableStart = 117
@@ -73,17 +98,22 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 				// - char 32 (space) should be all zeros
 				// - char 65 (A) should have 5-7 blank rows then data
 				// - char 219 (0xDB, full block █) should be all 0xFF (all pixels on)
+				const bytesPerGlyph = dfPixHeight
 				let bestOffset = baseOffset
 				let bestScore = -1
 
 				for (let adj = -16; adj <= 16; adj++) {
 					const testOffset = baseOffset + adj
-					if (testOffset < 0 || fntData.length < testOffset + 4096) continue
+					const expectedBitmapSize = 256 * bytesPerGlyph
+					if (testOffset < 0 || fntData.length < testOffset + expectedBitmapSize) continue
 
 					let score = 0
 
 					// Check char 32 (space) - should be all zeros
-					const testChar32 = fntData.slice(testOffset + 32 * 16, testOffset + 32 * 16 + 16)
+					const testChar32 = fntData.slice(
+						testOffset + 32 * bytesPerGlyph,
+						testOffset + 32 * bytesPerGlyph + bytesPerGlyph
+					)
 					const spaceNonZero = testChar32.filter(b => b !== 0).length
 					if (spaceNonZero === 0) {
 						score += 20 // Perfect match: space is all zeros
@@ -94,7 +124,10 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 					}
 
 					// Check char 65 (A) - should have 5-7 blank rows then data
-					const testChar65 = fntData.slice(testOffset + 65 * 16, testOffset + 65 * 16 + 16)
+					const testChar65 = fntData.slice(
+						testOffset + 65 * bytesPerGlyph,
+						testOffset + 65 * bytesPerGlyph + bytesPerGlyph
+					)
 					const firstNonZero = testChar65.findIndex(b => b !== 0)
 					if (firstNonZero >= 5 && firstNonZero <= 7) {
 						score += 15 - Math.abs(firstNonZero - 6) // Prefer exactly 6 blank rows
@@ -107,7 +140,10 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 					}
 
 					// Check char 219 (0xDB, full block █) - should be all 0xFF
-					const testChar219 = fntData.slice(testOffset + 219 * 16, testOffset + 219 * 16 + 16)
+					const testChar219 = fntData.slice(
+						testOffset + 219 * bytesPerGlyph,
+						testOffset + 219 * bytesPerGlyph + bytesPerGlyph
+					)
 					const allFF = testChar219.every(b => b === 0xff)
 					if (allFF) {
 						score += 25 // Perfect: full block is all 0xFF
@@ -127,19 +163,37 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 				}
 
 				bitmapOffset = bestOffset
+				console.log('[fonExtractor] Bitmap offset:', bitmapOffset, 'score:', bestScore)
+
+				// Calculate expected bitmap size (256 glyphs * height bytes per glyph)
+				const expectedBitmapSize = 256 * bytesPerGlyph
 
 				// Check if bitmap is within FNT data
-				if (fntData.length >= bitmapOffset + 4096) {
-					return fntData.slice(bitmapOffset, bitmapOffset + 4096)
+				if (fntData.length >= bitmapOffset + expectedBitmapSize) {
+					console.log('[fonExtractor] Success: extracted bitmap')
+					return {
+						bitmapData: fntData.slice(bitmapOffset, bitmapOffset + expectedBitmapSize),
+						width: dfPixWidth,
+						height: dfPixHeight,
+					}
 				}
 
 				// If bitmap isn't in FNT data, it might be after the FNT resource in the main file
 				// Try reading from the main file at fontResOffset + bitmapOffset
 				const absoluteBitmapOffset = fontResOffset + bitmapOffset
-				if (bytes.length >= absoluteBitmapOffset + 4096) {
-					return bytes.slice(absoluteBitmapOffset, absoluteBitmapOffset + 4096)
+				if (bytes.length >= absoluteBitmapOffset + expectedBitmapSize) {
+					console.log('[fonExtractor] Success: extracted bitmap (absolute offset)')
+					return {
+						bitmapData: bytes.slice(
+							absoluteBitmapOffset,
+							absoluteBitmapOffset + expectedBitmapSize
+						),
+						width: dfPixWidth,
+						height: dfPixHeight,
+					}
 				}
 
+				console.log('[fonExtractor] Failed: bitmap not found')
 				return null
 			}
 		}
@@ -148,5 +202,6 @@ export async function extractFontFromFON(url: string): Promise<Uint8Array | null
 		pos += count * 12
 	}
 
+	console.log('[fonExtractor] Failed: no font resource found')
 	return null
 }
