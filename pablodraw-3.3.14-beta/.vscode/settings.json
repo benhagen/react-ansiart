@@ -1,9 +1,0 @@
-{
-    "vssolution.altSolutionFolders": [
-        "Source"
-    ],
-    "var": {
-        "BuildConfiguration": "Debug",
-    },
-    // "clangd.path": "clangd"
-}
