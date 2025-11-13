@@ -1,0 +1,57 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PabloDraw",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build-pablodraw",
+            "osx": {
+                "program": "${workspaceFolder}/artifacts/bin/PabloDraw/${config:var.BuildConfiguration}/net9.0/PabloDraw.app/Contents/MacOS/PabloDraw",
+            },
+            "windows": {
+                "program": "${workspaceFolder}/artifacts/bin/PabloDraw/${config:var.BuildConfiguration}/net9.0-windows/PabloDraw.dll",
+                // "targetArchitecture": "x86_64"
+            },
+            "linux": {
+                "program": "${workspaceFolder}/artifacts/bin/PabloDraw/${config:var.BuildConfiguration}/net9.0/PabloDraw.dll",
+            },
+            "args": [
+                // "--help"
+                // "${workspaceFolder}/Source/README.ans", "${workspaceFolder}/artifacts/convert/README.png"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            // "targetArchitecture": "",
+            "console": "internalConsole"
+        },
+        {
+            "name": "PabloDraw.Console",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "build-pablodraw-console",
+            "program": "${workspaceRoot}/artifacts/bin/PabloDraw.Console/x64/Debug/PabloDraw.Console",
+            "MIMode": "lldb",
+            "cwd": ".",
+            "args": [
+                "--help"
+                // "${workspaceFolder}/Source/README.ans", "${workspaceFolder}/artifacts/convert/README.png"
+            ],
+        },
+        {
+            "name": "PabloDraw.Console-windows",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "preLaunchTask": "build-pablodraw-console",
+            "program": "${workspaceRoot}/artifacts/bin/PabloDraw.Console/x64/Debug/PabloDraw.Console.exe",
+            "cwd": ".",
+            "args": [
+                "--help"
+                // "${workspaceFolder}/Source/README.ans", "${workspaceFolder}/artifacts/convert/README.png"
+            ],
+        }
+    ]
+}

@@ -1,0 +1,17 @@
+.DS_Store
+*.pbxuser
+*.perspectivev3
+artifacts/
+*.xcuserdatad
+*.xcworkspace
+*.userprefs
+*.user
+*.pidb
+*.suo
+bin/
+obj/
+.svn
+UpgradeLog.htm
+.vs
+compile_commands.json
+.cache
