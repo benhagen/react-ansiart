@@ -1,22 +1,22 @@
 'use client'
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnsiPlayerOverlay } from './AnsiPlayerOverlay'
 import { AnsiVirtualDisplayEngine } from './AnsiVirtualDisplayEngine'
-import { BitmapFont, loadRawBitmapFont } from './bitmapFont'
-import { extractFontFromFON } from './fonExtractor'
-import { convertFrameDataToAnsi } from './frameToAnsi'
-import { generatePlasmaFrame } from './plasma'
-import type { DisplayFrameGenerator, PixelFrameGenerator } from './types'
+import { BitmapFont } from './font/bitmapFont'
+import { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
+import type { DisplayFrameGenerator, GeneratorCapabilities } from './types'
 
 export type AnsiVirtualDisplayProps = {
 	columns?: number // default 80
 	rows?: number // default 25
-	frameGenerator?: DisplayFrameGenerator // default: plasma with default converter
+	frameGenerator: DisplayFrameGenerator // Required: frame generator function
 	fps?: number // default 30
 	background?: string // default: '#000'. Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.)
 	bitmapFont?: BitmapFont // Pre-loaded font (avoids duplicate loading)
 	bitmapFontUrl?: string // path to .FON or raw bitmap font file (required if bitmapFont not provided)
-	showControls?: boolean // show play/pause controls
+	showControls?: boolean // show simple play/pause controls (deprecated in favor of showOverlayControls)
+	showOverlayControls?: boolean // show YouTube-style overlay controls (only for supported generators)
 	showPerformanceOverlay?: boolean // show performance stats overlay
 	fillContainer?: boolean // fill the container width instead of fit-content
 	// Virtual world sizing (defaults to visible size for backward compatibility)
@@ -31,20 +31,16 @@ export type AnsiVirtualDisplayProps = {
 	onViewChange?: (view: { viewX: number; viewY: number }) => void
 }
 
-const defaultFrameGenerator: PixelFrameGenerator = {
-	generator: generatePlasmaFrame,
-	converter: convertFrameDataToAnsi,
-}
-
 export function AnsiVirtualDisplay({
 	columns = 80,
 	rows = 25,
-	frameGenerator = defaultFrameGenerator,
+	frameGenerator,
 	fps = 30,
 	background = '#000',
 	bitmapFont: providedBitmapFont,
 	bitmapFontUrl,
 	showControls = false,
+	showOverlayControls = false,
 	showPerformanceOverlay = false,
 	fillContainer = false,
 	virtualColumns,
@@ -58,7 +54,12 @@ export function AnsiVirtualDisplay({
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const engineRef = useRef<AnsiVirtualDisplayEngine | null>(null)
 	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(providedBitmapFont || null)
-	const [isPlaying, setIsPlaying] = useState(true)
+	const [isPlaying, setIsPlaying] = useState(false) // Will be synced with engine on init
+	const [isOverlayVisible, setIsOverlayVisible] = useState(false)
+	const [currentBytes, setCurrentBytes] = useState(0)
+	const [totalBytes, setTotalBytes] = useState(0)
+	const [currentSpeed, setCurrentSpeed] = useState(960) // Default: 9600 baud = 960 bytes/sec
+	const hideTimeoutRef = useRef<number | null>(null)
 
 	// Use the provided frameGenerator directly
 	// The caller (e.g. PlasmaBackgroundLayout) is responsible for handling windowing/sampling
@@ -66,12 +67,26 @@ export function AnsiVirtualDisplay({
 		return frameGenerator
 	}, [frameGenerator])
 
+	// Check if generator supports overlay controls (must be early for dependencies)
+	const generatorCapabilities = useMemo<GeneratorCapabilities | null>(() => {
+		if ('capabilities' in frameGenerator && frameGenerator.capabilities) {
+			return frameGenerator.capabilities as GeneratorCapabilities
+		}
+		return null
+	}, [frameGenerator])
+
+	const supportsOverlayControls =
+		showOverlayControls &&
+		generatorCapabilities !== null &&
+		(generatorCapabilities.supportsSeek || generatorCapabilities.supportsSpeedControl)
+
 	// Initialize engine when canvas is available
 	useEffect(() => {
 		const canvas = canvasRef.current
 		if (!canvas) return
 
 		if (!engineRef.current) {
+			const shouldStartPaused = supportsOverlayControls
 			engineRef.current = new AnsiVirtualDisplayEngine(canvas, {
 				columns,
 				rows,
@@ -85,7 +100,14 @@ export function AnsiVirtualDisplay({
 				viewY,
 				pixelOffsetX,
 				pixelOffsetY,
+				startPaused: shouldStartPaused, // Start paused if overlay controls enabled
 			})
+			// Sync initial playing state
+			setIsPlaying(!shouldStartPaused)
+			// Show overlay initially if starting paused
+			if (shouldStartPaused) {
+				setIsOverlayVisible(true)
+			}
 		}
 
 		return () => {
@@ -114,6 +136,14 @@ export function AnsiVirtualDisplay({
 			pixelOffsetX,
 			pixelOffsetY,
 		})
+
+		// Update overlay state after config change
+		if (supportsOverlayControls) {
+			const bytes = engineRef.current.getTotalBytes()
+			if (bytes) setTotalBytes(bytes)
+			const speed = engineRef.current.getCurrentBytesPerSecond()
+			if (speed) setCurrentSpeed(speed)
+		}
 	}, [
 		columns,
 		rows,
@@ -127,6 +157,7 @@ export function AnsiVirtualDisplay({
 		viewY,
 		pixelOffsetX,
 		pixelOffsetY,
+		supportsOverlayControls,
 	])
 
 	// Pass loaded font to engine
@@ -146,29 +177,11 @@ export function AnsiVirtualDisplay({
 			setBitmapFont(null)
 			return
 		}
+
 		let cancelled = false
 		async function loadFont() {
-			try {
-				const fontResult = await extractFontFromFON(bitmapFontUrl!)
-
-				if (fontResult) {
-					const { bitmapData, width, height } = fontResult
-					const bytesPerGlyph = height
-					const glyphs: Uint8Array[] = []
-					for (let i = 0; i < 256; i++) {
-						glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph))
-					}
-
-					if (!cancelled) setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData })
-				} else {
-					// Fallback to loadRawBitmapFont if extractFontFromFON fails
-					const font = await loadRawBitmapFont(bitmapFontUrl!, 8, 16)
-					if (!cancelled) setBitmapFont(font)
-				}
-			} catch (e: any) {
-				console.warn('Failed to load bitmap font:', e)
-				if (!cancelled) setBitmapFont(null)
-			}
+			const font = await loadBitmapFontFromUrl(bitmapFontUrl!)
+			if (!cancelled) setBitmapFont(font)
 		}
 		loadFont()
 		return () => {
@@ -182,7 +195,14 @@ export function AnsiVirtualDisplay({
 			engineRef.current.pause()
 			setIsPlaying(false)
 		} else {
-			engineRef.current.play()
+			// If at the end, restart from beginning
+			const currentBytePos = engineRef.current.getCurrentBytePosition()
+			const totalByteSize = engineRef.current.getTotalBytes()
+			if (totalByteSize > 0 && currentBytePos >= totalByteSize) {
+				engineRef.current.restart()
+			} else {
+				engineRef.current.play()
+			}
 			setIsPlaying(true)
 		}
 	}
@@ -190,8 +210,119 @@ export function AnsiVirtualDisplay({
 	const handleRestart = () => {
 		if (!engineRef.current) return
 		engineRef.current.restart()
+		setCurrentBytes(0)
 		setIsPlaying(true)
 	}
+
+	// Overlay control handlers
+	const handleMouseMove = useCallback(() => {
+		if (!showOverlayControls) return
+
+		setIsOverlayVisible(true)
+
+		// Clear existing timeout
+		if (hideTimeoutRef.current) {
+			clearTimeout(hideTimeoutRef.current)
+		}
+
+		// Only auto-hide if playing (not paused)
+		if (isPlaying) {
+			// Set new timeout to hide after 3 seconds
+			hideTimeoutRef.current = setTimeout(() => {
+				setIsOverlayVisible(false)
+			}, 3000)
+		}
+	}, [showOverlayControls, isPlaying])
+
+	const handleMouseLeave = useCallback(() => {
+		if (!showOverlayControls) return
+
+		// Clear timeout
+		if (hideTimeoutRef.current) {
+			clearTimeout(hideTimeoutRef.current)
+		}
+		// Only hide on mouse leave if playing (stay visible when paused)
+		if (isPlaying) {
+			setIsOverlayVisible(false)
+		}
+	}, [showOverlayControls, isPlaying])
+
+	const handleSeek = useCallback((bytePosition: number) => {
+		if (!engineRef.current) return
+		engineRef.current.seekToBytePosition(bytePosition)
+		setCurrentBytes(bytePosition)
+	}, [])
+
+	const handleSpeedChange = useCallback((bytesPerSecond: number) => {
+		if (!engineRef.current) return
+		engineRef.current.setSpeed(bytesPerSecond)
+		setCurrentSpeed(bytesPerSecond)
+	}, [])
+
+	const handleAdvanceByte = useCallback(() => {
+		if (!engineRef.current) return
+		engineRef.current.advanceByte()
+		setCurrentBytes(engineRef.current.getCurrentBytePosition())
+	}, [])
+
+	const handleRewindByte = useCallback(() => {
+		if (!engineRef.current) return
+		engineRef.current.rewindByte()
+		setCurrentBytes(engineRef.current.getCurrentBytePosition())
+	}, [])
+
+	// Update current byte position periodically for overlay
+	useEffect(() => {
+		if (!supportsOverlayControls || !isPlaying) return
+
+		const intervalId = setInterval(() => {
+			if (engineRef.current) {
+				const bytes = engineRef.current.getCurrentBytePosition()
+				const total = engineRef.current.getTotalBytes()
+
+				// Check if we've reached the end
+				if (total > 0 && bytes >= total) {
+					// Stop playback when animation completes
+					engineRef.current.pause()
+					setIsPlaying(false)
+					setCurrentBytes(total) // Cap at total
+				} else {
+					setCurrentBytes(bytes)
+				}
+			}
+		}, 100) // Update 10 times per second
+
+		return () => clearInterval(intervalId)
+	}, [supportsOverlayControls, isPlaying])
+
+	// Update current bytes and speed when playing state changes
+	useEffect(() => {
+		if (engineRef.current) {
+			setCurrentBytes(engineRef.current.getCurrentBytePosition())
+			const speed = engineRef.current.getCurrentBytesPerSecond()
+			if (speed) setCurrentSpeed(speed)
+		}
+	}, [isPlaying])
+
+	// Initialize current speed and total bytes from engine
+	useEffect(() => {
+		if (engineRef.current && supportsOverlayControls) {
+			const speed = engineRef.current.getCurrentBytesPerSecond()
+			if (speed) setCurrentSpeed(speed)
+
+			const bytes = engineRef.current.getTotalBytes()
+			if (bytes) setTotalBytes(bytes)
+		}
+	}, [supportsOverlayControls, frameGenerator])
+
+	// Clean up timeout on unmount
+	useEffect(() => {
+		return () => {
+			if (hideTimeoutRef.current) {
+				clearTimeout(hideTimeoutRef.current)
+			}
+		}
+	}, [])
 
 	const rootStyle: React.CSSProperties = useMemo(() => {
 		return {
@@ -203,7 +334,8 @@ export function AnsiVirtualDisplay({
 
 	return (
 		<div>
-			{showControls && (
+			{/* Simple controls (only show if overlay controls are disabled) */}
+			{showControls && !supportsOverlayControls && (
 				<div
 					style={{
 						display: 'flex',
@@ -254,8 +386,55 @@ export function AnsiVirtualDisplay({
 					</button>
 				</div>
 			)}
-			<canvas ref={canvasRef} style={rootStyle} aria-label='ANSI Virtual Display' />
-			{/* Optional: simple debug controls to pan (example - no UI change by default) */}
+
+			{/* Canvas with overlay controls */}
+			<div
+				style={{
+					position: 'relative',
+					display: 'inline-block',
+					width: fillContainer ? '100%' : 'fit-content',
+				}}
+				onMouseMove={handleMouseMove}
+				onMouseLeave={handleMouseLeave}
+			>
+				<canvas ref={canvasRef} style={rootStyle} aria-label='ANSI Virtual Display' />
+
+				{/* YouTube-style overlay controls */}
+				{supportsOverlayControls && (
+					<AnsiPlayerOverlay
+						isPlaying={isPlaying}
+						currentBytes={currentBytes}
+						totalBytes={totalBytes}
+						currentSpeed={currentSpeed}
+						isVisible={isOverlayVisible}
+						onPlayPause={handlePlayPause}
+						onRestart={handleRestart}
+						onSeek={handleSeek}
+						onSpeedChange={handleSpeedChange}
+						onAdvanceByte={handleAdvanceByte}
+						onRewindByte={handleRewindByte}
+						onMouseMove={handleMouseMove}
+					/>
+				)}
+				{/* Debug info - only show when overlay is visible */}
+				{supportsOverlayControls && isOverlayVisible && typeof window !== 'undefined' && (
+					<div
+						style={{
+							position: 'absolute',
+							top: 0,
+							left: 0,
+							background: 'rgba(0, 0, 0, 0.8)',
+							color: '#0f0',
+							padding: '4px 8px',
+							fontSize: '10px',
+							fontFamily: 'monospace',
+							pointerEvents: 'none',
+						}}
+					>
+						Bytes: {currentBytes} / {totalBytes} | Speed: {currentSpeed} bytes/sec
+					</div>
+				)}
+			</div>
 		</div>
 	)
 }

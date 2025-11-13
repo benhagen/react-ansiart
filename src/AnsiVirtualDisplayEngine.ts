@@ -1,7 +1,8 @@
 import { AnsiScreen } from './ansiParser'
-import { BitmapFont, renderGlyph } from './bitmapFont'
 import { charToCp437Byte } from './cp437'
+import { BitmapFont, renderGlyph } from './font/bitmapFont'
 import type { CharacterFrameGenerator, DisplayFrameGenerator, PixelFrameGenerator } from './types'
+import { drawPerformanceOverlay, type PerformanceStats } from './utils/performanceOverlay'
 
 const DOS_COLORS: Record<number, string> = {
 	0: '#000000',
@@ -49,6 +50,10 @@ export type DisplayConfig = {
 	pixelOffsetY?: number
 }
 
+export type DisplayConfigWithInitialState = DisplayConfig & {
+	startPaused?: boolean // Start in paused state (useful for overlay controls)
+}
+
 export class AnsiVirtualDisplayEngine {
 	private canvas: HTMLCanvasElement
 	private config: DisplayConfig
@@ -68,23 +73,34 @@ export class AnsiVirtualDisplayEngine {
 	private offscreenCanvas: HTMLCanvasElement | null = null
 	private offscreenCtx: CanvasRenderingContext2D | null = null
 	private lastRenderedViewY: number = -1
-	private bufferRows: number = 2 // Extra rows to render above/below for smooth scrolling
 
-	constructor(canvas: HTMLCanvasElement, config: DisplayConfig) {
+	constructor(canvas: HTMLCanvasElement, config: DisplayConfigWithInitialState) {
 		this.canvas = canvas
 		this.config = { ...config }
 		this.showPerformanceOverlay = config.showPerformanceOverlay ?? false
 		this.targetFps = config.fps
+		this.isPlaying = !config.startPaused // Start paused if requested
 		this._setupCanvas()
+		// Only auto-start animation if playing
 		if (this.isPlaying) {
 			this._startAnimation()
 		}
+		// Always render the first frame (at position 0)
 		this._generateAndRender()
 	}
 
 	play(): void {
 		if (this.isPlaying) return
 		this.isPlaying = true
+		// Clear manual byte position when resuming playback so time-based progression works
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.clearManualBytePosition === 'function') {
+			// Sync frame counter before clearing manual position
+			this._syncFrameToBytePosition(generator)
+			generator.clearManualBytePosition()
+			// Immediately render the current frame to show the correct position
+			this._generateAndRender()
+		}
 		this._startAnimation()
 	}
 
@@ -97,6 +113,11 @@ export class AnsiVirtualDisplayEngine {
 	restart(): void {
 		this.currentFrame = 0
 		this.isPlaying = true
+		// Clear manual byte position when restarting
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.clearManualBytePosition === 'function') {
+			generator.clearManualBytePosition()
+		}
 		this._generateAndRender()
 		if (this.isPlaying) {
 			this._startAnimation()
@@ -152,6 +173,48 @@ export class AnsiVirtualDisplayEngine {
 		return this.currentFrame
 	}
 
+	getCurrentBytePosition(): number {
+		// First try to get byte position from generator (for manual stepping)
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.getCurrentBytePosition === 'function') {
+			return generator.getCurrentBytePosition()
+		}
+
+		// Fall back to calculating from elapsed time and speed
+		if (generator && typeof generator.getCurrentSpeed === 'function') {
+			const bytesPerSecond = generator.getCurrentSpeed()
+			const elapsedSeconds = this.currentFrame / this.config.fps
+			const totalBytes = this.getTotalBytes()
+			return Math.min(Math.floor(elapsedSeconds * bytesPerSecond), totalBytes)
+		}
+		return 0
+	}
+
+	getTotalBytes(): number {
+		const generator = this.config.frameGenerator as any
+		if (
+			generator &&
+			generator.capabilities &&
+			typeof generator.capabilities.getTotalBytes === 'function'
+		) {
+			return generator.capabilities.getTotalBytes()
+		}
+		return 0
+	}
+
+	seekToBytePosition(bytePosition: number): void {
+		// Convert byte position to frame number based on current speed
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.getCurrentSpeed === 'function') {
+			const bytesPerSecond = generator.getCurrentSpeed()
+			if (bytesPerSecond > 0) {
+				const targetSeconds = bytePosition / bytesPerSecond
+				const targetFrame = Math.floor(targetSeconds * this.config.fps)
+				this.seekToFrame(targetFrame)
+			}
+		}
+	}
+
 	enablePerformanceOverlay(enabled: boolean): void {
 		this.showPerformanceOverlay = enabled
 		this._generateAndRender()
@@ -159,6 +222,72 @@ export class AnsiVirtualDisplayEngine {
 
 	destroy(): void {
 		this._stopAnimation()
+	}
+
+	seekToFrame(frame: number): void {
+		this.currentFrame = Math.max(0, frame)
+		this._generateAndRender()
+	}
+
+	setSpeed(bytesPerSecond: number): void {
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.setSpeed === 'function') {
+			generator.setSpeed(bytesPerSecond)
+		}
+	}
+
+	advanceByte(): void {
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.advanceByte === 'function') {
+			generator.advanceByte()
+			// Update the frame counter to match the new byte position
+			this._syncFrameToBytePosition(generator)
+			this._generateAndRender()
+		}
+	}
+
+	rewindByte(): void {
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.rewindByte === 'function') {
+			generator.rewindByte()
+			// Update the frame counter to match the new byte position
+			this._syncFrameToBytePosition(generator)
+			this._generateAndRender()
+		}
+	}
+
+	getMaxFrames(): number {
+		const generator = this.config.frameGenerator as any
+		if (
+			generator &&
+			generator.capabilities &&
+			typeof generator.capabilities.getTotalFrames === 'function'
+		) {
+			return generator.capabilities.getTotalFrames()
+		}
+		return 0
+	}
+
+	getCurrentTime(): number {
+		return this.currentFrame / this.config.fps
+	}
+
+	getTotalTime(): number {
+		const maxFrames = this.getMaxFrames()
+		return maxFrames > 0 ? maxFrames / this.config.fps : 0
+	}
+
+	getCurrentBytesPerSecond(): number {
+		const generator = this.config.frameGenerator as any
+		if (generator && typeof generator.getCurrentSpeed === 'function') {
+			return generator.getCurrentSpeed()
+		}
+		return 0
+	}
+
+	getGeneratorCapabilities(): any {
+		const generator = this.config.frameGenerator as any
+		return generator?.capabilities || null
 	}
 
 	private _startAnimation(): void {
@@ -171,6 +300,21 @@ export class AnsiVirtualDisplayEngine {
 		if (this.animationFrameId !== null) {
 			cancelAnimationFrame(this.animationFrameId)
 			this.animationFrameId = null
+		}
+	}
+
+	private _syncFrameToBytePosition(generator: any): void {
+		// Sync the engine's frame counter to match the generator's current byte position
+		if (
+			generator &&
+			typeof generator.getCurrentBytePosition === 'function' &&
+			typeof generator.getCurrentSpeed === 'function'
+		) {
+			const currentBytePos = generator.getCurrentBytePosition()
+			const bytesPerSecond = generator.getCurrentSpeed()
+			if (bytesPerSecond > 0) {
+				this.currentFrame = Math.floor((currentBytePos / bytesPerSecond) * this.config.fps)
+			}
 		}
 	}
 
@@ -203,6 +347,15 @@ export class AnsiVirtualDisplayEngine {
 			// For other FPS, we still sync but maintain the target interval
 			this.lastFrameTime = currentTime
 
+			// Check if we've reached the end (based on bytes, not frames)
+			const currentBytes = this.getCurrentBytePosition()
+			const totalBytes = this.getTotalBytes()
+			if (totalBytes > 0 && currentBytes >= totalBytes) {
+				// Stop at end of data
+				this.pause()
+				return
+			}
+
 			this.currentFrame++
 			this._generateAndRender()
 		}
@@ -217,32 +370,29 @@ export class AnsiVirtualDisplayEngine {
 		const viewY = this.config.viewY ?? 0
 		const cellViewY = Math.floor(viewY) // Character-aligned view position
 
-		// Always regenerate for animation - buffer lets us smooth scroll between regenerations
-		// Calculate buffered region: render extra rows above and below
-		const bufferedRows = this.config.rows + this.bufferRows * 2
-		const bufferedViewY = Math.max(0, cellViewY - this.bufferRows)
+		// Request exactly the rows needed for display (no buffer)
+		// Frame generators are responsible for providing content at the requested viewport position
+		const requestedRows = this.config.rows
 
 		// Check if it's a PixelFrameGenerator (has generator and converter properties)
 		if ('generator' in generator && 'converter' in generator) {
 			const pixelGen = generator as PixelFrameGenerator
 			// Generate frame data (width/height in pixels, but we'll convert to columns/rows)
-			const frameData = pixelGen.generator(this.currentFrame, this.config.columns, bufferedRows)
+			const frameData = pixelGen.generator(this.currentFrame, this.config.columns, requestedRows)
 			// Convert to ANSI screen using the bundled converter
-			this.screen = pixelGen.converter(frameData, this.config.columns, bufferedRows)
+			this.screen = pixelGen.converter(frameData, this.config.columns, requestedRows)
 		} else {
 			// It's a CharacterFrameGenerator - produces AnsiScreen directly
 			const charGen = generator as CharacterFrameGenerator
-			this.screen = charGen(this.currentFrame, this.config.columns, bufferedRows)
+			this.screen = charGen(this.currentFrame, this.config.columns, requestedRows)
 		}
 
 		this.lastRenderedViewY = cellViewY
 
 		this.renderTime = performance.now() - renderStart
 
-		// Add performance overlay if enabled
-		if (this.showPerformanceOverlay && this.screen) {
-			this._addPerformanceOverlay(this.screen)
-		}
+		// Performance overlay is now rendered as a separate layer in _render()
+		// No mutation of screen data
 
 		this._render()
 	}
@@ -324,9 +474,8 @@ export class AnsiVirtualDisplayEngine {
 			}
 		}
 
-		// Calculate pixel offset within the buffer for smooth scrolling
+		// Apply pixel offset for smooth scrolling (sub-character precision)
 		const pixelOffsetY = this.config.pixelOffsetY ?? 0
-		const bufferPixelOffset = this.bufferRows * charHeight + pixelOffsetY
 
 		// Copy visible portion of offscreen canvas to main canvas with pixel offset
 		const visibleHeight = this.config.rows * charHeight
@@ -335,7 +484,7 @@ export class AnsiVirtualDisplayEngine {
 		ctx.drawImage(
 			this.offscreenCanvas,
 			0,
-			bufferPixelOffset, // source Y with pixel offset
+			pixelOffsetY, // source Y with pixel offset (no buffer offset)
 			cssWidth,
 			visibleHeight, // source height
 			0,
@@ -347,89 +496,22 @@ export class AnsiVirtualDisplayEngine {
 		this.drawTime = performance.now() - drawStart
 		// Store for next frame's overlay
 		this.previousDrawTime = this.drawTime
-	}
 
-	private _addPerformanceOverlay(screen: AnsiScreen): void {
-		const screenRows = screen.lines.length
-		const screenCols = screen.columns
-
-		// Calculate overlay dimensions
-		const lines = [
-			`FPS: ${this.actualFps.toFixed(1)} / ${this.targetFps}`,
-			`Render: ${this.renderTime.toFixed(2)}ms`,
-			`Draw: ${this.previousDrawTime.toFixed(2)}ms`,
-			`World: ${this.config.virtualColumns ?? screenCols}x${this.config.virtualRows ?? screenRows}`,
-			`View: ${screenCols}x${screenRows} @ (${this.config.viewX ?? 0},${this.config.viewY ?? 0})`,
-		]
-		const maxLineLength = Math.max(...lines.map(l => l.length))
-		const overlayRows = lines.length + 2 // Add 2 for padding rows
-		const overlayCols = maxLineLength + 2 // Add 2 for padding columns
-
-		// Calculate visible region (excluding buffer rows)
-		const visibleRows = this.config.rows
-		const visibleStartRow = this.bufferRows // Buffer rows at top
-		const visibleEndRow = visibleStartRow + visibleRows
-
-		// Check if visible region is large enough
-		if (visibleRows < overlayRows || screenCols < overlayCols) {
-			return
-		}
-
-		// Position in bottom right corner of VISIBLE area (accounting for buffer)
-		const startRow = visibleEndRow - overlayRows
-		const startCol = screenCols - overlayCols
-
-		// Overwrite cells with performance stats
-		for (let r = 0; r < overlayRows; r++) {
-			const rowIndex = startRow + r
-
-			// Ensure row exists
-			if (!screen.lines[rowIndex]) {
-				screen.lines[rowIndex] = []
+		// Draw performance overlay as a separate layer (if enabled)
+		if (this.showPerformanceOverlay && this.bitmapFont) {
+			const stats: PerformanceStats = {
+				actualFps: this.actualFps,
+				targetFps: this.targetFps,
+				renderTime: this.renderTime,
+				drawTime: this.previousDrawTime,
+				virtualColumns: this.config.virtualColumns,
+				virtualRows: this.config.virtualRows,
+				viewColumns: this.config.columns,
+				viewRows: this.config.rows,
+				viewX: this.config.viewX ?? 0,
+				viewY: this.config.viewY ?? 0,
 			}
-
-			// Write characters with ANSI styling (dark background, bright foreground)
-			for (let c = 0; c < overlayCols; c++) {
-				const colIndex = startCol + c
-				let ch: string
-				let fg: number
-				let bg: number
-
-				// Determine if this is a border/padding cell or content cell
-				const isTopRow = r === 0
-				const isBottomRow = r === overlayRows - 1
-				const isLeftCol = c === 0
-				const isRightCol = c === overlayCols - 1
-				const isBorder = isTopRow || isBottomRow || isLeftCol || isRightCol
-
-				if (isBorder) {
-					// Border cells: black square
-					ch = '█'
-					fg = 0 // black
-					bg = 0 // black
-				} else {
-					// Content cells: text with padding
-					const lineIndex = r - 1 // Offset by 1 for top padding
-					const charIndex = c - 1 // Offset by 1 for left padding
-					const line = lines[lineIndex]
-					ch = charIndex < line.length ? line[charIndex] : ' '
-					fg = 15 // white
-					bg = 0 // black
-				}
-
-				// Ensure column exists
-				while (screen.lines[rowIndex].length <= colIndex) {
-					screen.lines[rowIndex].push({ ch: ' ', fg: 7, bg: 0, bold: false })
-				}
-
-				// Set performance overlay cell
-				screen.lines[rowIndex][colIndex] = {
-					ch,
-					fg,
-					bg,
-					bold: false,
-				}
-			}
+			drawPerformanceOverlay(ctx, stats, this.bitmapFont)
 		}
 	}
 }

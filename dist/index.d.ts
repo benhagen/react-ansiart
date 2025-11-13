@@ -15,19 +15,124 @@ type AnsiArtProps = {
     animateBy?: 'bytes' | 'cursor';
     showControls?: boolean;
     debugPerformance?: boolean;
+    debugCursorCodes?: boolean;
 };
-declare function AnsiArt({ src, columns, background, allowDrop, bitmapFontUrl, debugFont, animated, frameDelay, bytesPerFrame, linesPerFrame, animateBy, showControls, debugPerformance, }: AnsiArtProps): react_jsx_runtime.JSX.Element;
+declare function AnsiArt({ src, columns, background, allowDrop, bitmapFontUrl, debugFont, animated, frameDelay, bytesPerFrame, linesPerFrame, animateBy, showControls, debugPerformance, debugCursorCodes, }: AnsiArtProps): react_jsx_runtime.JSX.Element;
 
+type AnsiArtNGProps = {
+    src: string;
+    mode?: 'animated' | 'final';
+    viewscreen?: 'fixed' | 'dynamic';
+    columns?: number;
+    rows?: number;
+    background?: string;
+    bitmapFontUrl: string;
+    showControls?: boolean;
+    showOverlayControls?: boolean;
+    showPerformanceOverlay?: boolean;
+    fps?: number;
+    bytesPerSecond?: number;
+    allowDrop?: boolean;
+    debugCursorCodes?: boolean;
+};
+declare function AnsiArtNG({ src, mode, viewscreen, columns, rows, background, bitmapFontUrl, showControls, showOverlayControls, showPerformanceOverlay, fps, bytesPerSecond, // Default: 9600 baud (960 bytes/sec after conversion from baud/10)
+allowDrop, debugCursorCodes, }: AnsiArtNGProps): react_jsx_runtime.JSX.Element;
+
+type BitmapFont = {
+    width: number;
+    height: number;
+    glyphs: Uint8Array[];
+    rawBitmapData?: Uint8Array;
+    glyphCache?: Map<string, HTMLCanvasElement>;
+};
+/**
+ * Load a raw binary bitmap font (8xN format, 256 glyphs)
+ * Expected format: 256 consecutive glyphs, each N bytes (one byte per scanline)
+ */
+declare function loadRawBitmapFont(url: string, width?: number, height?: number): Promise<BitmapFont>;
+declare function renderGlyph(ctx: CanvasRenderingContext2D, font: BitmapFont, charCode: number, x: number, y: number, fgColor: string, bgColor: string): void;
+/**
+ * Render text string using bitmap font
+ */
+declare function renderText(ctx: CanvasRenderingContext2D, font: BitmapFont, text: string, x: number, y: number, fgColor: string, bgColor: string): number;
+
+type CharacterEncoding = 'cp437' | 'cp850' | 'cp1252' | 'iso-8859-1' | 'utf-8';
 type AnsiCell = {
     ch: string;
     fg: number | string;
     bg: number | string;
     bold: boolean;
 };
+type SauceMetadata = {
+    id: string;
+    version: number;
+    title: string;
+    author: string;
+    group: string;
+    date: string;
+    fileSize: number;
+    dataType: number;
+    fileType: number;
+    tInfo1: number;
+    tInfo2: number;
+    tInfo3: number;
+    tInfo4: number;
+    comments: number;
+    tFlags: number;
+    commentLines: string[];
+};
 type AnsiScreen = {
     lines: AnsiCell[][];
     columns: number;
+    sauce?: SauceMetadata;
 };
+/**
+ * Parse SAUCE metadata from the 128-byte trailer
+ * Returns undefined if no valid SAUCE data found
+ */
+declare function parseSauce(bytes: Uint8Array): SauceMetadata | undefined;
+/**
+ * Detect if an ANSI file contains animation sequences
+ * Returns true if the file appears to be animated (contains cursor positioning commands)
+ */
+declare function detectAnimation(bytes: Uint8Array): boolean;
+/**
+ * Enhanced SAUCE metadata interpretation
+ */
+declare function getSauceInfo(sauce: SauceMetadata | undefined): {
+    fileTypeDescription: string;
+    hasDimensions: boolean;
+    width: number | undefined;
+    height: number | undefined;
+    fontName: string | undefined;
+    iceColors: boolean;
+    letterSpacing: boolean;
+    aspectRatio: {
+        width: number;
+        height: number;
+    } | undefined;
+    id: string;
+    version: number;
+    title: string;
+    author: string;
+    group: string;
+    date: string;
+    fileSize: number;
+    dataType: number;
+    fileType: number;
+    tInfo1: number;
+    tInfo2: number;
+    tInfo3: number;
+    tInfo4: number;
+    comments: number;
+    tFlags: number;
+    commentLines: string[];
+} | null;
+/**
+ * Parse plain ASCII text (no ANSI codes) into AnsiScreen format
+ * Useful for simple text art files
+ */
+declare function parseAscii(bytes: Uint8Array, encoding?: CharacterEncoding): AnsiScreen;
 
 declare const ANSI_COLORS_RGB: Array<[number, number, number]>;
 /**
@@ -68,6 +173,22 @@ type PixelFrameGenerator = {
     converter: FrameConverter;
 };
 type DisplayFrameGenerator = CharacterFrameGenerator | PixelFrameGenerator;
+type GeneratorCapabilities = {
+    supportsSeek: boolean;
+    supportsSpeedControl: boolean;
+    getTotalFrames?: () => number;
+    getTotalBytes?: () => number;
+};
+type CharacterFrameGeneratorWithMetadata = CharacterFrameGenerator & {
+    capabilities?: GeneratorCapabilities;
+    setSpeed?: (bytesPerSecond: number) => void;
+    seekToFrame?: (frame: number) => void;
+    getCurrentSpeed?: () => number;
+    advanceByte?: () => void;
+    rewindByte?: () => void;
+    getCurrentBytePosition?: () => number;
+    clearManualBytePosition?: () => void;
+};
 type ViewportConfig = {
     virtualColumns: number;
     virtualRows: number;
@@ -78,13 +199,13 @@ type ViewportConfig = {
 type AnsiVirtualDisplayProps = {
     columns?: number;
     rows?: number;
-    cellWidthPx?: number;
-    cellHeightPx?: number;
-    frameGenerator?: DisplayFrameGenerator;
+    frameGenerator: DisplayFrameGenerator;
     fps?: number;
     background?: string;
-    bitmapFontUrl: string;
+    bitmapFont?: BitmapFont;
+    bitmapFontUrl?: string;
     showControls?: boolean;
+    showOverlayControls?: boolean;
     showPerformanceOverlay?: boolean;
     fillContainer?: boolean;
     virtualColumns?: number;
@@ -98,7 +219,23 @@ type AnsiVirtualDisplayProps = {
         viewY: number;
     }) => void;
 };
-declare function AnsiVirtualDisplay({ columns, rows, cellWidthPx, cellHeightPx, frameGenerator, fps, background, bitmapFontUrl, showControls, showPerformanceOverlay, fillContainer, virtualColumns, virtualRows, viewX, viewY, pixelOffsetX, pixelOffsetY, onViewChange, }: AnsiVirtualDisplayProps): react_jsx_runtime.JSX.Element;
+declare function AnsiVirtualDisplay({ columns, rows, frameGenerator, fps, background, bitmapFont: providedBitmapFont, bitmapFontUrl, showControls, showOverlayControls, showPerformanceOverlay, fillContainer, virtualColumns, virtualRows, viewX, viewY, pixelOffsetX, pixelOffsetY, onViewChange, }: AnsiVirtualDisplayProps): react_jsx_runtime.JSX.Element;
+
+type AnsiPlayerOverlayProps = {
+    isPlaying: boolean;
+    currentBytes: number;
+    totalBytes: number;
+    currentSpeed: number;
+    isVisible: boolean;
+    onPlayPause: () => void;
+    onRestart: () => void;
+    onSeek: (bytePosition: number) => void;
+    onSpeedChange: (bytesPerSecond: number) => void;
+    onAdvanceByte: () => void;
+    onRewindByte: () => void;
+    onMouseMove: () => void;
+};
+declare function AnsiPlayerOverlay({ isPlaying, currentBytes, totalBytes, currentSpeed, isVisible, onPlayPause, onRestart, onSeek, onSpeedChange, onAdvanceByte, onRewindByte, onMouseMove, }: AnsiPlayerOverlayProps): react_jsx_runtime.JSX.Element;
 
 interface OctaveConfig {
     scale: number;
@@ -163,34 +300,36 @@ type FontCharacterChartProps = {
 declare function FontCharacterChart({ bitmapFontUrl }: FontCharacterChartProps): react_jsx_runtime.JSX.Element;
 
 /**
- * 2D Perlin noise
- * @param x X coordinate
- * @param y Y coordinate
- * @returns Noise value between -1 and 1 (typically normalized to 0-1)
+ * Load a bitmap font from a URL
+ * Tries to extract from FON format first, falls back to raw bitmap format
+ * Framework-independent - can be used in any environment
  */
-declare function perlinNoise2D(x: number, y: number): number;
-/**
- * 3D Perlin noise
- * @param x X coordinate
- * @param y Y coordinate
- * @param z Z coordinate
- * @returns Noise value between -1 and 1 (typically normalized to 0-1)
- */
-declare function perlinNoise3D(x: number, y: number, z: number): number;
-/**
- * 2D or 3D Perlin noise
- * @param x X coordinate
- * @param y Y coordinate
- * @param z Optional Z coordinate for 3D noise
- * @returns Noise value between -1 and 1
- */
-declare function perlinNoise(x: number, y: number, z?: number): number;
+declare function loadBitmapFontFromUrl(bitmapFontUrl: string): Promise<BitmapFont | null>;
 
+type FontExtractionResult = {
+    bitmapData: Uint8Array;
+    width: number;
+    height: number;
+};
+declare function extractFontFromFON(url: string): Promise<FontExtractionResult | null>;
+
+type PerformanceStats = {
+    actualFps: number;
+    targetFps: number;
+    renderTime: number;
+    drawTime: number;
+    virtualColumns?: number;
+    virtualRows?: number;
+    viewColumns: number;
+    viewRows: number;
+    viewX: number;
+    viewY: number;
+};
 /**
- * Generate a plasma effect frame using Perlin noise
- * Creates flowing, organic color patterns that animate smoothly
+ * Draw performance overlay as a separate canvas layer
+ * Does not mutate screen data - renders directly to canvas
  */
-declare function generatePlasmaFrame(frame: number, width: number, height: number): FrameData;
+declare function drawPerformanceOverlay(ctx: CanvasRenderingContext2D, stats: PerformanceStats, font: BitmapFont): void;
 
 /**
  * Convert FrameData to AnsiScreen
@@ -199,4 +338,52 @@ declare function generatePlasmaFrame(frame: number, width: number, height: numbe
  */
 declare function convertFrameDataToAnsi(frame: FrameData, columns: number, rows: number, palette?: PaletteMode): AnsiScreen;
 
-export { ANSI_COLORS_RGB, AnsiArt, type AnsiArtProps, AnsiVirtualDisplay, type AnsiVirtualDisplayProps, type AsciiPerlinPlasmaOptions, type CharacterFrameGenerator, type DisplayFrameGenerator, FontCharacterChart, type FontCharacterChartProps, type FrameConverter, type FrameData, type FrameGenerator, type OctaveConfig, type PaletteMode, type PixelFrameGenerator, PlasmaBackgroundLayout, type PlasmaBackgroundLayoutProps, type RGBAColor, type ViewportConfig, convertFrameDataToAnsi, createAsciiPerlinPlasmaSampler, generateAsciiPerlinPlasmaFrame, generateEvenlySpacedPalette, generatePlasmaFrame, getPalette, perlinNoise, perlinNoise2D, perlinNoise3D, rgbToAnsiColor, rgbToPaletteColor };
+type AnsiFrameGeneratorOptions = {
+    ansiData: Uint8Array;
+    mode: 'animated' | 'final';
+    columns?: number;
+    rows?: number;
+    bytesPerSecond?: number;
+    fps?: number;
+    onDimensionsChange?: (dimensions: {
+        columns: number;
+        rows: number;
+    }) => void;
+    onScrollChange?: (scroll: {
+        viewY: number;
+        contentRows: number;
+    }) => void;
+    debugCursorCodes?: boolean;
+};
+/**
+ * Create a frame generator for ANSI art files
+ * Supports both animated (progressive) and final (complete) modes
+ * Supports both fixed and dynamic column sizing
+ */
+declare function createAnsiFrameGenerator(options: AnsiFrameGeneratorOptions): CharacterFrameGeneratorWithMetadata;
+type AnsiArtFrameGeneratorOptions = {
+    ansiData: Uint8Array;
+    mode: 'animated' | 'final';
+    viewscreen: 'fixed' | 'dynamic';
+    columns?: number;
+    rows?: number;
+    dynamicColumns?: number;
+    bytesPerSecond?: number;
+    fps?: number;
+    onDimensionsChange?: (dimensions: {
+        columns: number;
+        rows: number;
+    }) => void;
+    onScrollChange?: (scroll: {
+        viewY: number;
+        contentRows: number;
+    }) => void;
+    debugCursorCodes?: boolean;
+};
+/**
+ * Create a frame generator for AnsiArtNG component
+ * Handles the logic for determining effective columns based on viewscreen and mode
+ */
+declare function createAnsiArtFrameGenerator(options: AnsiArtFrameGeneratorOptions): CharacterFrameGeneratorWithMetadata | null;
+
+export { ANSI_COLORS_RGB, AnsiArt, type AnsiArtFrameGeneratorOptions, AnsiArtNG, type AnsiArtNGProps, type AnsiArtProps, type AnsiFrameGeneratorOptions, AnsiPlayerOverlay, type AnsiPlayerOverlayProps, AnsiVirtualDisplay, type AnsiVirtualDisplayProps, type AsciiPerlinPlasmaOptions, type BitmapFont, type CharacterEncoding, type CharacterFrameGenerator, type CharacterFrameGeneratorWithMetadata, type DisplayFrameGenerator, FontCharacterChart, type FontCharacterChartProps, type FontExtractionResult, type FrameConverter, type FrameData, type FrameGenerator, type GeneratorCapabilities, type OctaveConfig, type PaletteMode, type PerformanceStats, type PixelFrameGenerator, PlasmaBackgroundLayout, type PlasmaBackgroundLayoutProps, type RGBAColor, type SauceMetadata, type ViewportConfig, convertFrameDataToAnsi, createAnsiArtFrameGenerator, createAnsiFrameGenerator, createAsciiPerlinPlasmaSampler, detectAnimation, drawPerformanceOverlay, extractFontFromFON, generateAsciiPerlinPlasmaFrame, generateEvenlySpacedPalette, getPalette, getSauceInfo, loadBitmapFontFromUrl, loadRawBitmapFont, parseAscii, parseSauce, renderGlyph, renderText, rgbToAnsiColor, rgbToPaletteColor };

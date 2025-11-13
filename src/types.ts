@@ -32,6 +32,26 @@ export type PixelFrameGenerator = {
 
 export type DisplayFrameGenerator = CharacterFrameGenerator | PixelFrameGenerator
 
+// Generator capabilities for overlay controls
+export type GeneratorCapabilities = {
+	supportsSeek: boolean // Can jump to specific frames
+	supportsSpeedControl: boolean // Can change bytesPerSecond dynamically
+	getTotalFrames?: () => number // Optional: total duration in frames
+	getTotalBytes?: () => number // For calculating max timeline position
+}
+
+// Character frame generator with metadata for control features
+export type CharacterFrameGeneratorWithMetadata = CharacterFrameGenerator & {
+	capabilities?: GeneratorCapabilities
+	setSpeed?: (bytesPerSecond: number) => void
+	seekToFrame?: (frame: number) => void
+	getCurrentSpeed?: () => number
+	advanceByte?: () => void
+	rewindByte?: () => void
+	getCurrentBytePosition?: () => number
+	clearManualBytePosition?: () => void
+}
+
 // Virtual viewport configuration for windowed rendering
 export type ViewportConfig = {
 	// Full virtual world size in character cells

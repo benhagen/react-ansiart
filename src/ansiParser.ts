@@ -1,5 +1,34 @@
 import { cp437ByteToChar } from './cp437'
 
+export type CharacterEncoding = 'cp437' | 'cp850' | 'cp1252' | 'iso-8859-1' | 'utf-8'
+
+/**
+ * Convert a byte to a character using the specified encoding
+ */
+function byteToChar(byte: number, encoding: CharacterEncoding = 'cp437'): string {
+	switch (encoding) {
+		case 'cp437':
+			return cp437ByteToChar(byte)
+		case 'cp850':
+		case 'cp1252':
+		case 'iso-8859-1':
+			// For these encodings, most characters above 127 are similar to CP437
+			// For a full implementation, we'd need proper encoding tables
+			if (byte < 128) {
+				return String.fromCharCode(byte)
+			} else {
+				// Fallback to CP437 for extended characters
+				return cp437ByteToChar(byte)
+			}
+		case 'utf-8':
+			// For UTF-8, we need to handle multi-byte sequences
+			// For now, treat as single bytes (not proper UTF-8 handling)
+			return String.fromCharCode(byte)
+		default:
+			return cp437ByteToChar(byte)
+	}
+}
+
 export type AnsiCell = {
 	ch: string
 	fg: number | string // ANSI color index (0-15) or CSS color string
@@ -7,14 +36,34 @@ export type AnsiCell = {
 	bold: boolean
 }
 
+export type SauceMetadata = {
+	id: string // Should be "SAUCE"
+	version: number
+	title: string
+	author: string
+	group: string
+	date: string // YYYYMMDD format
+	fileSize: number
+	dataType: number
+	fileType: number
+	tInfo1: number // Type-specific info (width for ANSI)
+	tInfo2: number // Type-specific info (height for ANSI)
+	tInfo3: number // Type-specific info (font for ANSI)
+	tInfo4: number // Type-specific info (flags for ANSI)
+	comments: number // Number of comment lines
+	tFlags: number
+	commentLines: string[]
+}
+
 export type AnsiScreen = {
 	lines: AnsiCell[][]
 	columns: number
+	sauce?: SauceMetadata
 }
 
 type Cursor = { row: number; col: number }
 
-function createCell(fg: number, bg: number, bold: boolean): AnsiCell {
+function createCell(fg: number | string, bg: number | string, bold: boolean): AnsiCell {
 	return { ch: ' ', fg, bg, bold }
 }
 
@@ -22,8 +71,8 @@ function ensureRow(
 	lines: AnsiCell[][],
 	row: number,
 	columns: number,
-	fg: number,
-	bg: number,
+	fg: number | string,
+	bg: number | string,
 	bold: boolean
 ) {
 	while (lines.length <= row) {
@@ -38,8 +87,8 @@ function clearLine(
 	line: AnsiCell[],
 	from: number,
 	to: number,
-	fg: number,
-	bg: number,
+	fg: number | string,
+	bg: number | string,
 	bold: boolean
 ) {
 	const start = Math.max(0, from)
@@ -62,8 +111,86 @@ function isSauceTrailer(bytes: Uint8Array): boolean {
 	)
 }
 
-export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
+/**
+ * Parse SAUCE metadata from the 128-byte trailer
+ * Returns undefined if no valid SAUCE data found
+ */
+export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
+	if (!isSauceTrailer(bytes)) return undefined
+
+	const off = bytes.length - 128
+	const dataView = new DataView(bytes.buffer, bytes.byteOffset + off)
+
+	// Read null-terminated strings
+	function readString(offset: number, length: number): string {
+		let result = ''
+		for (let i = 0; i < length; i++) {
+			const byte = bytes[off + offset + i]
+			if (byte === 0) break // Null terminator
+			result += String.fromCharCode(byte)
+		}
+		return result.trim()
+	}
+
+	const id = readString(0, 5)
+	const version = bytes[off + 5]
+
+	const title = readString(6, 35)
+	const author = readString(41, 20)
+	const group = readString(61, 20)
+	const date = readString(81, 8)
+
+	const fileSize = dataView.getUint32(89, true) // Little-endian
+
+	const dataType = bytes[off + 93]
+	const fileType = bytes[off + 94]
+
+	const tInfo1 = dataView.getUint16(95, true) // Little-endian
+	const tInfo2 = dataView.getUint16(97, true) // Little-endian
+	const tInfo3 = bytes[off + 99]
+	const tInfo4 = bytes[off + 100]
+
+	const comments = dataView.getUint16(101, true) // Little-endian
+	const tFlags = bytes[off + 103]
+
+	// Read comment lines (each 64 bytes, up to comments count)
+	const commentLines: string[] = []
+	const commentStart = off + 104
+	for (let i = 0; i < comments && i < 255; i++) {
+		// Sanity limit
+		const commentOffset = commentStart + i * 64
+		if (commentOffset + 64 > bytes.length) break
+		const comment = readString(commentOffset - off, 64)
+		commentLines.push(comment)
+	}
+
+	return {
+		id,
+		version,
+		title,
+		author,
+		group,
+		date,
+		fileSize,
+		dataType,
+		fileType,
+		tInfo1,
+		tInfo2,
+		tInfo3,
+		tInfo4,
+		comments,
+		tFlags,
+		commentLines,
+	}
+}
+
+export function parseAnsi(
+	bytesInput: Uint8Array,
+	columns = 80,
+	encoding: CharacterEncoding = 'cp437'
+): AnsiScreen {
 	let bytes = bytesInput
+	const sauce = parseSauce(bytesInput)
 	if (isSauceTrailer(bytes)) {
 		bytes = bytes.slice(0, bytes.length - 128)
 	}
@@ -71,9 +198,11 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 	const lines: AnsiCell[][] = []
 	const cur: Cursor = { row: 0, col: 0 }
 	const savedCur: Cursor = { row: 0, col: 0 }
-	let fg = 7
-	let bg = 0
+	let fg: number | string = 7
+	let bg: number | string = 0
 	let bold = false
+	let lineWrap = true // ANSI line wrapping enabled by default
+	let iceColors = false // iCE color mode disabled by default
 
 	const ESC = 0x1b
 
@@ -93,9 +222,17 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 			return
 		}
 		if (cur.col < 0) cur.col = 0
-		// Don't write beyond column boundary - ANSI art is precisely positioned
+		// Handle line wrapping based on current mode
 		if (cur.col >= columns) {
-			return
+			if (lineWrap) {
+				// Wrap to next line
+				cur.row += 1
+				cur.col = 0
+				ensureRow(lines, cur.row, columns, fg, bg, bold)
+			} else {
+				// Stop at boundary
+				return
+			}
 		}
 		ensureRow(lines, cur.row, columns, fg, bg, bold)
 		lines[cur.row][cur.col] = { ch, fg, bg, bold }
@@ -130,6 +267,24 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 				bg = 0
 				continue
 			}
+			if (p === 7) {
+				// Reverse video - swap foreground and background
+				const tempFg = fg
+				const tempBg = bg
+				fg = tempBg
+				bg = tempFg
+				continue
+			}
+			if (p === 27) {
+				// Reverse video off - this is complex to undo, so we'll reset to defaults
+				fg = 7
+				bg = 0
+				continue
+			}
+			if (p === 25) {
+				// Blink off - currently not supported in our data structure, ignore
+				continue
+			}
 			if (p >= 30 && p <= 37) {
 				fg = ANSI_TO_DOS[p - 30]
 				continue
@@ -159,7 +314,7 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 					state = 'esc'
 					break
 				}
-				writeChar(cp437ByteToChar(b))
+				writeChar(byteToChar(b, encoding))
 				break
 			}
 			case 'esc': {
@@ -169,17 +324,27 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 					csiParams = ''
 					break
 				}
-				// Unrecognized ESC sequence; ignore
+				// Unrecognized ESC sequence; ignore and reset
 				state = 'normal'
 				break
 			}
 			case 'csi': {
 				const ch = String.fromCharCode(b)
 				if ((b >= 0x30 && b <= 0x3f) || ch === ' ' || ch === '?') {
-					csiParams += ch
+					// Prevent excessively long parameter strings (malformed input protection)
+					if (csiParams.length < 256) {
+						csiParams += ch
+					}
 					break
 				}
-				// Final byte
+				// Final byte - validate it's actually a valid command character
+				if (!isValidCsiCommand(ch)) {
+					// Invalid CSI command, reset and continue
+					state = 'normal'
+					csiParams = ''
+					break
+				}
+
 				const params = csiParams.trim().length
 					? csiParams.split(';').map(x => (x === '' ? NaN : parseInt(x, 10)))
 					: []
@@ -196,6 +361,22 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 					ensureRow(lines, cur.row, columns, fg, bg, bold)
 				} else if (ch === 'm') {
 					applySGR(params.filter(p => !Number.isNaN(p)))
+				} else if (ch === 't') {
+					// RGB color setting (iCE colors)
+					if (params.length >= 4) {
+						const mode = get(0, 0)
+						const r = Math.min(255, Math.max(0, get(1, 0)))
+						const g = Math.min(255, Math.max(0, get(2, 0)))
+						const b = Math.min(255, Math.max(0, get(3, 0)))
+						const rgbColor = `rgb(${r}, ${g}, ${b})`
+						if (mode === 0) {
+							// Background RGB color
+							bg = rgbColor
+						} else if (mode === 1) {
+							// Foreground RGB color
+							fg = rgbColor
+						}
+					}
 				} else if (ch === 'H' || ch === 'f') {
 					const r = Math.max(1, get(0, 1)) - 1
 					const c = Math.max(1, get(1, 1)) - 1
@@ -218,6 +399,41 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 				} else if (ch === 'G') {
 					const c = Math.max(1, get(0, 1)) - 1
 					cur.col = Math.max(0, Math.min(columns - 1, c))
+				} else if (ch === 'E') {
+					// Next Line - move to beginning of next line
+					const n = Math.max(1, get(0, 1))
+					cur.row += n
+					cur.col = 0
+					ensureRow(lines, cur.row, columns, fg, bg, bold)
+				} else if (ch === 'F') {
+					// Previous Line - move to beginning of previous line
+					const n = Math.max(1, get(0, 1))
+					cur.row = Math.max(0, cur.row - n)
+					cur.col = 0
+				} else if (ch === 'S') {
+					// Scroll up - shift screen up
+					const n = Math.max(1, get(0, 1))
+					for (let scroll = 0; scroll < n; scroll++) {
+						if (lines.length > 0) {
+							lines.shift() // Remove first line
+							// Add new empty line at bottom
+							const newLine: AnsiCell[] = []
+							for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false))
+							lines.push(newLine)
+						}
+					}
+				} else if (ch === 'T') {
+					// Scroll down - shift screen down
+					const n = Math.max(1, get(0, 1))
+					for (let scroll = 0; scroll < n; scroll++) {
+						if (lines.length > 0) {
+							lines.pop() // Remove last line
+							// Add new empty line at top
+							const newLine: AnsiCell[] = []
+							for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false))
+							lines.unshift(newLine)
+						}
+					}
 				} else if (ch === 'K') {
 					const mode = get(0, 0)
 					ensureRow(lines, cur.row, columns, fg, bg, bold)
@@ -245,6 +461,24 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 						} else {
 							for (let r = 0; r < cur.row; r++) clearLine(lines[r], 0, columns - 1, fg, bg, bold)
 							clearLine(lines[cur.row], 0, cur.col, fg, bg, bold)
+						}
+					}
+				} else if (ch === 'h') {
+					// Set Mode (enable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = true
+						} else if (param === 33) {
+							iceColors = true
+						}
+					}
+				} else if (ch === 'l') {
+					// Reset Mode (disable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = false
+						} else if (param === 33) {
+							iceColors = false
 						}
 					}
 				}
@@ -278,7 +512,7 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 		}
 	}
 
-	return { lines, columns }
+	return { lines, columns, sauce }
 }
 
 /**
@@ -288,9 +522,11 @@ export function parseAnsi(bytesInput: Uint8Array, columns = 80): AnsiScreen {
 export function parseAnsiIncremental(
 	bytesInput: Uint8Array,
 	columns: number,
-	maxByteIndex: number
+	maxByteIndex: number,
+	encoding: CharacterEncoding = 'cp437'
 ): AnsiScreen {
 	let bytes = bytesInput
+	const sauce = parseSauce(bytesInput)
 	if (isSauceTrailer(bytes)) {
 		bytes = bytes.slice(0, bytes.length - 128)
 	}
@@ -301,9 +537,11 @@ export function parseAnsiIncremental(
 	const lines: AnsiCell[][] = []
 	const cur: Cursor = { row: 0, col: 0 }
 	const savedCur: Cursor = { row: 0, col: 0 }
-	let fg = 7
-	let bg = 0
+	let fg: number | string = 7
+	let bg: number | string = 0
 	let bold = false
+	let lineWrap = true // ANSI line wrapping enabled by default
+	let iceColors = false // iCE color mode disabled by default
 
 	const ESC = 0x1b
 
@@ -323,8 +561,17 @@ export function parseAnsiIncremental(
 			return
 		}
 		if (cur.col < 0) cur.col = 0
+		// Handle line wrapping based on current mode
 		if (cur.col >= columns) {
-			return
+			if (lineWrap) {
+				// Wrap to next line
+				cur.row += 1
+				cur.col = 0
+				ensureRow(lines, cur.row, columns, fg, bg, bold)
+			} else {
+				// Stop at boundary
+				return
+			}
 		}
 		ensureRow(lines, cur.row, columns, fg, bg, bold)
 		lines[cur.row][cur.col] = { ch, fg, bg, bold }
@@ -357,6 +604,24 @@ export function parseAnsiIncremental(
 				bg = 0
 				continue
 			}
+			if (p === 7) {
+				// Reverse video - swap foreground and background
+				const tempFg = fg
+				const tempBg = bg
+				fg = tempBg
+				bg = tempFg
+				continue
+			}
+			if (p === 27) {
+				// Reverse video off - this is complex to undo, so we'll reset to defaults
+				fg = 7
+				bg = 0
+				continue
+			}
+			if (p === 25) {
+				// Blink off - currently not supported in our data structure, ignore
+				continue
+			}
 			if (p >= 30 && p <= 37) {
 				fg = ANSI_TO_DOS[p - 30]
 				continue
@@ -386,7 +651,7 @@ export function parseAnsiIncremental(
 					state = 'esc'
 					break
 				}
-				writeChar(cp437ByteToChar(b))
+				writeChar(byteToChar(b, encoding))
 				break
 			}
 			case 'esc': {
@@ -396,17 +661,27 @@ export function parseAnsiIncremental(
 					csiParams = ''
 					break
 				}
-				// Unrecognized ESC sequence; ignore
+				// Unrecognized ESC sequence; ignore and reset
 				state = 'normal'
 				break
 			}
 			case 'csi': {
 				const ch = String.fromCharCode(b)
 				if ((b >= 0x30 && b <= 0x3f) || ch === ' ' || ch === '?') {
-					csiParams += ch
+					// Prevent excessively long parameter strings (malformed input protection)
+					if (csiParams.length < 256) {
+						csiParams += ch
+					}
 					break
 				}
-				// Final byte
+				// Final byte - validate it's actually a valid command character
+				if (!isValidCsiCommand(ch)) {
+					// Invalid CSI command, reset and continue
+					state = 'normal'
+					csiParams = ''
+					break
+				}
+
 				const params = csiParams.trim().length
 					? csiParams.split(';').map(x => (x === '' ? NaN : parseInt(x, 10)))
 					: []
@@ -421,6 +696,22 @@ export function parseAnsiIncremental(
 					ensureRow(lines, cur.row, columns, fg, bg, bold)
 				} else if (ch === 'm') {
 					applySGR(params.filter(p => !Number.isNaN(p)))
+				} else if (ch === 't') {
+					// RGB color setting (iCE colors)
+					if (params.length >= 4) {
+						const mode = get(0, 0)
+						const r = Math.min(255, Math.max(0, get(1, 0)))
+						const g = Math.min(255, Math.max(0, get(2, 0)))
+						const b = Math.min(255, Math.max(0, get(3, 0)))
+						const rgbColor = `rgb(${r}, ${g}, ${b})`
+						if (mode === 0) {
+							// Background RGB color
+							bg = rgbColor
+						} else if (mode === 1) {
+							// Foreground RGB color
+							fg = rgbColor
+						}
+					}
 				} else if (ch === 'H' || ch === 'f') {
 					const r = Math.max(1, get(0, 1)) - 1
 					const c = Math.max(1, get(1, 1)) - 1
@@ -443,6 +734,41 @@ export function parseAnsiIncremental(
 				} else if (ch === 'G') {
 					const c = Math.max(1, get(0, 1)) - 1
 					cur.col = Math.max(0, Math.min(columns - 1, c))
+				} else if (ch === 'E') {
+					// Next Line - move to beginning of next line
+					const n = Math.max(1, get(0, 1))
+					cur.row += n
+					cur.col = 0
+					ensureRow(lines, cur.row, columns, fg, bg, bold)
+				} else if (ch === 'F') {
+					// Previous Line - move to beginning of previous line
+					const n = Math.max(1, get(0, 1))
+					cur.row = Math.max(0, cur.row - n)
+					cur.col = 0
+				} else if (ch === 'S') {
+					// Scroll up - shift screen up
+					const n = Math.max(1, get(0, 1))
+					for (let scroll = 0; scroll < n; scroll++) {
+						if (lines.length > 0) {
+							lines.shift() // Remove first line
+							// Add new empty line at bottom
+							const newLine: AnsiCell[] = []
+							for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false))
+							lines.push(newLine)
+						}
+					}
+				} else if (ch === 'T') {
+					// Scroll down - shift screen down
+					const n = Math.max(1, get(0, 1))
+					for (let scroll = 0; scroll < n; scroll++) {
+						if (lines.length > 0) {
+							lines.pop() // Remove last line
+							// Add new empty line at top
+							const newLine: AnsiCell[] = []
+							for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false))
+							lines.unshift(newLine)
+						}
+					}
 				} else if (ch === 'K') {
 					const mode = get(0, 0)
 					ensureRow(lines, cur.row, columns, fg, bg, bold)
@@ -468,6 +794,24 @@ export function parseAnsiIncremental(
 						} else {
 							for (let r = 0; r < cur.row; r++) clearLine(lines[r], 0, columns - 1, fg, bg, bold)
 							clearLine(lines[cur.row], 0, cur.col, fg, bg, bold)
+						}
+					}
+				} else if (ch === 'h') {
+					// Set Mode (enable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = true
+						} else if (param === 33) {
+							iceColors = true
+						}
+					}
+				} else if (ch === 'l') {
+					// Reset Mode (disable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = false
+						} else if (param === 33) {
+							iceColors = false
 						}
 					}
 				}
@@ -498,7 +842,889 @@ export function parseAnsiIncremental(
 		}
 	}
 
-	return { lines, columns }
+	return { lines, columns, sauce }
+}
+
+/**
+ * Parse ANSI without fixed column width - allows dynamic sizing
+ * Tracks maximum column and row used, returns actual dimensions
+ */
+export function parseAnsiDynamic(
+	bytesInput: Uint8Array,
+	encoding: CharacterEncoding = 'cp437'
+): AnsiScreen {
+	let bytes = bytesInput
+	const sauce = parseSauce(bytesInput)
+	if (isSauceTrailer(bytes)) {
+		bytes = bytes.slice(0, bytes.length - 128)
+	}
+
+	const lines: AnsiCell[][] = []
+	const cur: Cursor = { row: 0, col: 0 }
+	const savedCur: Cursor = { row: 0, col: 0 }
+	let fg: number | string = 7
+	let bg: number | string = 0
+	let bold = false
+	let lineWrap = true // ANSI line wrapping enabled by default
+	let iceColors = false // iCE color mode disabled by default
+	let maxCol = 0
+
+	const ESC = 0x1b
+
+	let i = 0
+	let state: 'normal' | 'esc' | 'csi' = 'normal'
+	let csiParams = ''
+
+	const writeChar = (ch: string) => {
+		if (ch === '') return
+		if (ch === '\n') {
+			cur.row += 1
+			cur.col = 0
+			return
+		}
+		if (ch === '\r') {
+			cur.col = 0
+			return
+		}
+		if (cur.col < 0) cur.col = 0
+		// Ensure row exists
+		while (lines.length <= cur.row) {
+			lines.push([])
+		}
+		// Ensure column exists in this row
+		while (lines[cur.row].length <= cur.col) {
+			lines[cur.row].push(createCell(7, 0, false))
+		}
+		lines[cur.row][cur.col] = { ch, fg, bg, bold }
+		cur.col += 1
+		// Track maximum column seen
+		if (cur.col > maxCol) {
+			maxCol = cur.col
+		}
+	}
+
+	const applySGR = (params: number[]) => {
+		if (params.length === 0) params = [0]
+		const ANSI_TO_DOS: number[] = [0, 4, 2, 6, 1, 5, 3, 7]
+		for (const p of params) {
+			if (p === 0) {
+				fg = 7
+				bg = 0
+				bold = false
+				continue
+			}
+			if (p === 1) {
+				bold = true
+				continue
+			}
+			if (p === 22) {
+				bold = false
+				continue
+			}
+			if (p === 39) {
+				fg = 7
+				continue
+			}
+			if (p === 49) {
+				bg = 0
+				continue
+			}
+			if (p === 7) {
+				// Reverse video - swap foreground and background
+				const tempFg = fg
+				const tempBg = bg
+				fg = tempBg
+				bg = tempFg
+				continue
+			}
+			if (p === 27) {
+				// Reverse video off - this is complex to undo, so we'll reset to defaults
+				fg = 7
+				bg = 0
+				continue
+			}
+			if (p === 25) {
+				// Blink off - currently not supported in our data structure, ignore
+				continue
+			}
+			if (p >= 30 && p <= 37) {
+				fg = ANSI_TO_DOS[p - 30]
+				continue
+			}
+			if (p >= 40 && p <= 47) {
+				bg = ANSI_TO_DOS[p - 40]
+				continue
+			}
+			if (p >= 90 && p <= 97) {
+				fg = 8 + ANSI_TO_DOS[p - 90]
+				continue
+			}
+			if (p >= 100 && p <= 107) {
+				bg = 8 + ANSI_TO_DOS[p - 100]
+				continue
+			}
+		}
+	}
+
+	while (i < bytes.length) {
+		const b = bytes[i++]
+		if (b === 0x1a) break // soft EOF
+
+		switch (state) {
+			case 'normal': {
+				if (b === ESC) {
+					state = 'esc'
+					break
+				}
+				writeChar(byteToChar(b, encoding))
+				break
+			}
+			case 'esc': {
+				if (b === 0x5b) {
+					// CSI
+					state = 'csi'
+					csiParams = ''
+					break
+				}
+				// Unrecognized ESC sequence; ignore and reset
+				state = 'normal'
+				break
+			}
+			case 'csi': {
+				const ch = String.fromCharCode(b)
+				if ((b >= 0x30 && b <= 0x3f) || ch === ' ' || ch === '?') {
+					// Prevent excessively long parameter strings (malformed input protection)
+					if (csiParams.length < 256) {
+						csiParams += ch
+					}
+					break
+				}
+				// Final byte - validate it's actually a valid command character
+				if (!isValidCsiCommand(ch)) {
+					// Invalid CSI command, reset and continue
+					state = 'normal'
+					csiParams = ''
+					break
+				}
+
+				const params = csiParams.trim().length
+					? csiParams.split(';').map(x => (x === '' ? NaN : parseInt(x, 10)))
+					: []
+				const get = (idx: number, def: number) =>
+					Number.isNaN(params[idx]) || params[idx] === undefined ? def : params[idx]
+				if (ch === 's') {
+					// Save cursor position
+					savedCur.row = cur.row
+					savedCur.col = cur.col
+				} else if (ch === 'u') {
+					// Restore cursor position
+					cur.row = savedCur.row
+					cur.col = savedCur.col
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+				} else if (ch === 'm') {
+					applySGR(params.filter(p => !Number.isNaN(p)))
+				} else if (ch === 'H' || ch === 'f') {
+					const r = Math.max(1, get(0, 1)) - 1
+					const c = Math.max(1, get(1, 1)) - 1
+					cur.row = r
+					cur.col = c
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+					if (cur.col > maxCol) {
+						maxCol = cur.col
+					}
+				} else if (ch === 'A') {
+					const n = Math.max(1, get(0, 1))
+					cur.row = Math.max(0, cur.row - n)
+				} else if (ch === 'B') {
+					const n = Math.max(1, get(0, 1))
+					cur.row = cur.row + n
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+				} else if (ch === 'C') {
+					const n = Math.max(1, get(0, 1))
+					cur.col = cur.col + n
+					if (cur.col > maxCol) {
+						maxCol = cur.col
+					}
+				} else if (ch === 'D') {
+					const n = Math.max(1, get(0, 1))
+					cur.col = Math.max(0, cur.col - n)
+				} else if (ch === 'G') {
+					const c = Math.max(1, get(0, 1)) - 1
+					cur.col = Math.max(0, c)
+					if (cur.col > maxCol) {
+						maxCol = cur.col
+					}
+				} else if (ch === 'K') {
+					const mode = get(0, 0)
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+					const line = lines[cur.row]
+					if (mode === 0) {
+						// Clear from cursor to end of line
+						for (let c = cur.col; c < line.length; c++) {
+							line[c] = createCell(fg, bg, bold)
+						}
+					} else if (mode === 1) {
+						// Clear from start of line to cursor
+						for (let c = 0; c <= cur.col; c++) {
+							if (c < line.length) {
+								line[c] = createCell(fg, bg, bold)
+							}
+						}
+					} else if (mode === 2) {
+						// Clear entire line
+						line.length = 0
+					}
+				} else if (ch === 'J') {
+					const mode = get(0, 0)
+					if (mode === 2) {
+						// clear entire display and reset cursor
+						lines.length = 0
+						cur.row = 0
+						cur.col = 0
+						maxCol = 0
+					} else if (mode === 0 || mode === 1) {
+						// Ensure row exists
+						while (lines.length <= cur.row) {
+							lines.push([])
+						}
+						if (mode === 0) {
+							// Clear from cursor to end
+							const line = lines[cur.row]
+							for (let c = cur.col; c < line.length; c++) {
+								line[c] = createCell(fg, bg, bold)
+							}
+							for (let r = cur.row + 1; r < lines.length; r++) {
+								lines[r].length = 0
+							}
+						} else {
+							// Clear from start to cursor
+							for (let r = 0; r < cur.row; r++) {
+								lines[r].length = 0
+							}
+							const line = lines[cur.row]
+							for (let c = 0; c <= cur.col; c++) {
+								if (c < line.length) {
+									line[c] = createCell(fg, bg, bold)
+								}
+							}
+						}
+					}
+				} else if (ch === 'h') {
+					// Set Mode (enable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = true
+						} else if (param === 33) {
+							iceColors = true
+						}
+					}
+				} else if (ch === 'l') {
+					// Reset Mode (disable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = false
+						} else if (param === 33) {
+							iceColors = false
+						}
+					}
+				}
+				state = 'normal'
+				csiParams = ''
+				break
+			}
+		}
+	}
+
+	// Ensure at least one line exists
+	if (lines.length === 0) {
+		lines.push([])
+	}
+
+	// Calculate actual dimensions
+	const actualRows = lines.length
+	const actualColumns = Math.max(1, maxCol)
+
+	// Pad all lines to the same width (max column seen)
+	for (let r = 0; r < lines.length; r++) {
+		const line = lines[r]
+		while (line.length < actualColumns) {
+			line.push(createCell(7, 0, false))
+		}
+	}
+
+	return { lines, columns: actualColumns, sauce }
+}
+
+/**
+ * Parse ANSI incrementally without fixed column width - allows dynamic sizing during animation
+ * Tracks maximum column and row seen so far, returns current state with actual dimensions
+ */
+export function parseAnsiIncrementalDynamic(
+	bytesInput: Uint8Array,
+	maxByteIndex: number,
+	encoding: CharacterEncoding = 'cp437'
+): AnsiScreen {
+	let bytes = bytesInput
+	const sauce = parseSauce(bytesInput)
+	if (isSauceTrailer(bytes)) {
+		bytes = bytes.slice(0, bytes.length - 128)
+	}
+
+	// Cap maxByteIndex to actual length
+	const stopAt = Math.min(maxByteIndex, bytes.length)
+
+	const lines: AnsiCell[][] = []
+	const cur: Cursor = { row: 0, col: 0 }
+	const savedCur: Cursor = { row: 0, col: 0 }
+	let fg: number | string = 7
+	let bg: number | string = 0
+	let bold = false
+	let lineWrap = true // ANSI line wrapping enabled by default
+	let iceColors = false // iCE color mode disabled by default
+	let maxCol = 0
+
+	const ESC = 0x1b
+
+	let i = 0
+	let state: 'normal' | 'esc' | 'csi' = 'normal'
+	let csiParams = ''
+
+	const writeChar = (ch: string) => {
+		if (ch === '') return
+		if (ch === '\n') {
+			cur.row += 1
+			cur.col = 0
+			return
+		}
+		if (ch === '\r') {
+			cur.col = 0
+			return
+		}
+		if (cur.col < 0) cur.col = 0
+		// Ensure row exists
+		while (lines.length <= cur.row) {
+			lines.push([])
+		}
+		// Ensure column exists in this row
+		while (lines[cur.row].length <= cur.col) {
+			lines[cur.row].push(createCell(7, 0, false))
+		}
+		lines[cur.row][cur.col] = { ch, fg, bg, bold }
+		cur.col += 1
+		// Track maximum column seen
+		if (cur.col > maxCol) {
+			maxCol = cur.col
+		}
+	}
+
+	const applySGR = (params: number[]) => {
+		if (params.length === 0) params = [0]
+		const ANSI_TO_DOS: number[] = [0, 4, 2, 6, 1, 5, 3, 7]
+		for (const p of params) {
+			if (p === 0) {
+				fg = 7
+				bg = 0
+				bold = false
+				continue
+			}
+			if (p === 1) {
+				bold = true
+				continue
+			}
+			if (p === 22) {
+				bold = false
+				continue
+			}
+			if (p === 39) {
+				fg = 7
+				continue
+			}
+			if (p === 49) {
+				bg = 0
+				continue
+			}
+			if (p === 7) {
+				// Reverse video - swap foreground and background
+				const tempFg = fg
+				const tempBg = bg
+				fg = tempBg
+				bg = tempFg
+				continue
+			}
+			if (p === 27) {
+				// Reverse video off - this is complex to undo, so we'll reset to defaults
+				fg = 7
+				bg = 0
+				continue
+			}
+			if (p === 25) {
+				// Blink off - currently not supported in our data structure, ignore
+				continue
+			}
+			if (p >= 30 && p <= 37) {
+				fg = ANSI_TO_DOS[p - 30]
+				continue
+			}
+			if (p >= 40 && p <= 47) {
+				bg = ANSI_TO_DOS[p - 40]
+				continue
+			}
+			if (p >= 90 && p <= 97) {
+				fg = 8 + ANSI_TO_DOS[p - 90]
+				continue
+			}
+			if (p >= 100 && p <= 107) {
+				bg = 8 + ANSI_TO_DOS[p - 100]
+				continue
+			}
+		}
+	}
+
+	while (i < stopAt) {
+		const b = bytes[i++]
+		if (b === 0x1a) break // soft EOF
+
+		switch (state) {
+			case 'normal': {
+				if (b === ESC) {
+					state = 'esc'
+					break
+				}
+				writeChar(byteToChar(b, encoding))
+				break
+			}
+			case 'esc': {
+				if (b === 0x5b) {
+					// CSI
+					state = 'csi'
+					csiParams = ''
+					break
+				}
+				// Unrecognized ESC sequence; ignore and reset
+				state = 'normal'
+				break
+			}
+			case 'csi': {
+				const ch = String.fromCharCode(b)
+				if ((b >= 0x30 && b <= 0x3f) || ch === ' ' || ch === '?') {
+					// Prevent excessively long parameter strings (malformed input protection)
+					if (csiParams.length < 256) {
+						csiParams += ch
+					}
+					break
+				}
+				// Final byte - validate it's actually a valid command character
+				if (!isValidCsiCommand(ch)) {
+					// Invalid CSI command, reset and continue
+					state = 'normal'
+					csiParams = ''
+					break
+				}
+
+				const params = csiParams.trim().length
+					? csiParams.split(';').map(x => (x === '' ? NaN : parseInt(x, 10)))
+					: []
+				const get = (idx: number, def: number) =>
+					Number.isNaN(params[idx]) || params[idx] === undefined ? def : params[idx]
+				if (ch === 's') {
+					savedCur.row = cur.row
+					savedCur.col = cur.col
+				} else if (ch === 'u') {
+					cur.row = savedCur.row
+					cur.col = savedCur.col
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+				} else if (ch === 'm') {
+					applySGR(params.filter(p => !Number.isNaN(p)))
+				} else if (ch === 't') {
+					// RGB color setting (iCE colors)
+					if (params.length >= 4) {
+						const mode = get(0, 0)
+						const r = Math.min(255, Math.max(0, get(1, 0)))
+						const g = Math.min(255, Math.max(0, get(2, 0)))
+						const b = Math.min(255, Math.max(0, get(3, 0)))
+						const rgbColor = `rgb(${r}, ${g}, ${b})`
+						if (mode === 0) {
+							// Background RGB color
+							bg = rgbColor
+						} else if (mode === 1) {
+							// Foreground RGB color
+							fg = rgbColor
+						}
+					}
+				} else if (ch === 'H' || ch === 'f') {
+					const r = Math.max(1, get(0, 1)) - 1
+					const c = Math.max(1, get(1, 1)) - 1
+					cur.row = r
+					cur.col = c
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+					if (cur.col > maxCol) {
+						maxCol = cur.col
+					}
+				} else if (ch === 'A') {
+					const n = Math.max(1, get(0, 1))
+					cur.row = Math.max(0, cur.row - n)
+				} else if (ch === 'B') {
+					const n = Math.max(1, get(0, 1))
+					cur.row = cur.row + n
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+				} else if (ch === 'C') {
+					const n = Math.max(1, get(0, 1))
+					cur.col = cur.col + n
+					if (cur.col > maxCol) {
+						maxCol = cur.col
+					}
+				} else if (ch === 'D') {
+					const n = Math.max(1, get(0, 1))
+					cur.col = Math.max(0, cur.col - n)
+				} else if (ch === 'G') {
+					const c = Math.max(1, get(0, 1)) - 1
+					cur.col = Math.max(0, c)
+					if (cur.col > maxCol) {
+						maxCol = cur.col
+					}
+				} else if (ch === 'K') {
+					const mode = get(0, 0)
+					// Ensure row exists
+					while (lines.length <= cur.row) {
+						lines.push([])
+					}
+					const line = lines[cur.row]
+					if (mode === 0) {
+						// Clear from cursor to end of line
+						for (let c = cur.col; c < line.length; c++) {
+							line[c] = createCell(fg, bg, bold)
+						}
+					} else if (mode === 1) {
+						// Clear from start of line to cursor
+						for (let c = 0; c <= cur.col; c++) {
+							if (c < line.length) {
+								line[c] = createCell(fg, bg, bold)
+							}
+						}
+					} else if (mode === 2) {
+						// Clear entire line
+						line.length = 0
+					}
+				} else if (ch === 'J') {
+					const mode = get(0, 0)
+					if (mode === 2) {
+						lines.length = 0
+						cur.row = 0
+						cur.col = 0
+						maxCol = 0
+					} else if (mode === 0 || mode === 1) {
+						// Ensure row exists
+						while (lines.length <= cur.row) {
+							lines.push([])
+						}
+						if (mode === 0) {
+							// Clear from cursor to end
+							const line = lines[cur.row]
+							for (let c = cur.col; c < line.length; c++) {
+								line[c] = createCell(fg, bg, bold)
+							}
+							for (let r = cur.row + 1; r < lines.length; r++) {
+								lines[r].length = 0
+							}
+						} else {
+							// Clear from start to cursor
+							for (let r = 0; r < cur.row; r++) {
+								lines[r].length = 0
+							}
+							const line = lines[cur.row]
+							for (let c = 0; c <= cur.col; c++) {
+								if (c < line.length) {
+									line[c] = createCell(fg, bg, bold)
+								}
+							}
+						}
+					}
+				} else if (ch === 'h') {
+					// Set Mode (enable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = true
+						} else if (param === 33) {
+							iceColors = true
+						}
+					}
+				} else if (ch === 'l') {
+					// Reset Mode (disable)
+					for (const param of params) {
+						if (param === 7) {
+							lineWrap = false
+						} else if (param === 33) {
+							iceColors = false
+						}
+					}
+				}
+				state = 'normal'
+				csiParams = ''
+				break
+			}
+		}
+	}
+
+	// Ensure at least one line exists
+	if (lines.length === 0) {
+		lines.push([])
+	}
+
+	// Calculate actual dimensions seen so far
+	const actualRows = lines.length
+	const actualColumns = Math.max(1, maxCol)
+
+	// Pad all lines to the same width (max column seen)
+	for (let r = 0; r < lines.length; r++) {
+		const line = lines[r]
+		while (line.length < actualColumns) {
+			line.push(createCell(7, 0, false))
+		}
+	}
+
+	return { lines, columns: actualColumns, sauce }
+}
+
+/**
+ * Detect if an ANSI file contains animation sequences
+ * Returns true if the file appears to be animated (contains cursor positioning commands)
+ */
+export function detectAnimation(bytes: Uint8Array): boolean {
+	// Check SAUCE metadata first
+	const sauce = parseSauce(bytes)
+	if (sauce && sauce.dataType === 1 && sauce.fileType === 2) {
+		// SAUCE indicates Ansimation type
+		return true
+	}
+
+	// Scan for cursor positioning commands (H and f) in first 2048 bytes
+	const maxCheck = Math.min(2048, bytes.length)
+	let i = 0
+
+	while (i < maxCheck) {
+		const b = bytes[i++]
+		if (b === 0x1b) {
+			// ESC
+			if (i < maxCheck && bytes[i] === 0x5b) {
+				// [
+				i++ // skip [
+				// Skip parameter bytes until we find a letter
+				while (i < maxCheck && !isLetter(bytes[i])) {
+					i++
+				}
+				if (i < maxCheck) {
+					const cmd = bytes[i]
+					if (cmd === 0x48 || cmd === 0x66) {
+						// H or f (cursor positioning)
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+function isLetter(byte: number): boolean {
+	return (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a)
+}
+
+function isValidCsiCommand(ch: string): boolean {
+	// Valid CSI command characters (letters and some symbols)
+	const validCommands = 'ABCDEFGHIJKLMPSTXYZhfmlr'
+	return validCommands.includes(ch)
+}
+
+/**
+ * Enhanced SAUCE metadata interpretation
+ */
+export function getSauceInfo(sauce: SauceMetadata | undefined) {
+	if (!sauce) return null
+
+	const info = {
+		...sauce,
+		// Interpret data types
+		fileTypeDescription: getFileTypeDescription(sauce.dataType, sauce.fileType),
+		// Check if file has valid dimensions
+		hasDimensions:
+			sauce.dataType === 1 &&
+			[1, 2].includes(sauce.fileType) &&
+			sauce.tInfo1 > 0 &&
+			sauce.tInfo2 > 0,
+		// Get dimensions if available
+		width: sauce.tInfo1 || undefined,
+		height: sauce.tInfo2 || undefined,
+		// Font information (for ANSI files)
+		fontName:
+			sauce.dataType === 1 && [1, 2].includes(sauce.fileType)
+				? getFontName(sauce.tInfo3)
+				: undefined,
+		// ICE colors flag
+		iceColors: (sauce.tFlags & 1) !== 0,
+		// Letter spacing (aspect ratio)
+		letterSpacing: (sauce.tFlags & 2) !== 0,
+		// Aspect ratio information
+		aspectRatio:
+			sauce.dataType === 1 && [1, 2].includes(sauce.fileType)
+				? getAspectRatio(sauce.tInfo4)
+				: undefined,
+	}
+
+	return info
+}
+
+function getFileTypeDescription(dataType: number, fileType: number): string {
+	const descriptions: Record<number, Record<number, string>> = {
+		0: {
+			// Text files
+			0: 'ASCII Text',
+			1: 'ANSI Text',
+			2: 'Ansimation',
+			3: 'RIP Script',
+			4: 'PCBoard',
+			5: 'Avatar',
+			6: 'HTML',
+			7: 'Source Code',
+			8: 'Tundra Draw',
+		},
+		1: {
+			// Character art
+			0: 'ASCII Character Art',
+			1: 'ANSI Character Art',
+			2: 'Ansimation',
+			3: 'RIP Character Art',
+			4: 'PCBoard Character Art',
+			5: 'Avatar Character Art',
+			6: 'HTML Character Art',
+			7: 'Source Character Art',
+			8: 'Tundra Draw Character Art',
+		},
+	}
+
+	return descriptions[dataType]?.[fileType] || `Unknown (Type ${dataType}:${fileType})`
+}
+
+function getFontName(fontId: number): string {
+	const fonts: Record<number, string> = {
+		0: 'Default',
+		1: 'Courier New',
+		2: 'Terminal',
+		3: 'Fixedsys',
+		4: 'System',
+		5: 'IBM VGA',
+		6: 'IBM VGA50',
+		7: 'IBM VGA25',
+		8: 'IBM EGA',
+		9: 'IBM EGA43',
+		10: 'Amiga Topaz 1',
+		11: 'Amiga Topaz 2',
+		12: 'Amiga P0T-NOoDLE',
+		13: 'Amiga MicroKnight',
+		14: 'Amiga MicroKnight Plus',
+		15: "Amiga mO'sOul",
+	}
+
+	return fonts[fontId] || `Font ${fontId}`
+}
+
+function getAspectRatio(flags: number): { width: number; height: number } | undefined {
+	// Aspect ratio is encoded in flags for some formats
+	// This is a simplified interpretation
+	const aspectRatios: Record<number, { width: number; height: number }> = {
+		0: { width: 1, height: 1 }, // Square pixels
+		1: { width: 4, height: 3 }, // 4:3 aspect
+		2: { width: 5, height: 4 }, // 5:4 aspect
+		3: { width: 16, height: 9 }, // 16:9 widescreen
+	}
+
+	return aspectRatios[flags] || { width: 1, height: 1 }
+}
+
+/**
+ * Parse plain ASCII text (no ANSI codes) into AnsiScreen format
+ * Useful for simple text art files
+ */
+export function parseAscii(bytes: Uint8Array, encoding: CharacterEncoding = 'cp437'): AnsiScreen {
+	const lines: AnsiCell[][] = []
+	let currentLine: AnsiCell[] = []
+
+	for (let i = 0; i < bytes.length; i++) {
+		const byte = bytes[i]
+
+		if (byte === 0x0a || byte === 0x0d) {
+			// LF or CR
+			if (currentLine.length > 0 || byte === 0x0a) {
+				// Pad line to ensure consistent width (find max line length)
+				lines.push([...currentLine])
+				currentLine = []
+			}
+			// Skip CR if followed by LF
+			if (byte === 0x0d && i + 1 < bytes.length && bytes[i + 1] === 0x0a) {
+				i++
+			}
+		} else if (byte === 0x1a) {
+			// EOF marker
+			break
+		} else {
+			const ch = byteToChar(byte, encoding)
+			currentLine.push({ ch, fg: 7, bg: 0, bold: false })
+		}
+	}
+
+	// Add final line if not empty
+	if (currentLine.length > 0) {
+		lines.push(currentLine)
+	}
+
+	// Find the maximum line length
+	let maxWidth = 0
+	for (const line of lines) {
+		maxWidth = Math.max(maxWidth, line.length)
+	}
+
+	// Pad all lines to the same width
+	for (const line of lines) {
+		while (line.length < maxWidth) {
+			line.push({ ch: ' ', fg: 7, bg: 0, bold: false })
+		}
+	}
+
+	// Ensure at least one line exists
+	if (lines.length === 0) {
+		lines.push(
+			Array(maxWidth || 80)
+				.fill(null)
+				.map(() => ({ ch: ' ', fg: 7, bg: 0, bold: false }))
+		)
+	}
+
+	return {
+		lines,
+		columns: maxWidth || 80,
+		sauce: parseSauce(bytes),
+	}
 }
 
 /**

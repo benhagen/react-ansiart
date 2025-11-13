@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AnsiScreen } from './ansiParser'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
-import type { BitmapFont } from './bitmapFont'
-import { loadRawBitmapFont } from './bitmapFont'
-import { extractFontFromFON } from './fonExtractor'
+import type { BitmapFont } from './font/bitmapFont'
+import { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
 import type { AsciiPerlinPlasmaOptions } from './generators/asciiPerlinPlasmaGenerator'
 import {
 	createAsciiPerlinPlasmaSampler,
@@ -67,27 +66,11 @@ export function PlasmaBackgroundLayout({
 			setBitmapFont(null)
 			return
 		}
+
 		let cancelled = false
 		async function loadFont() {
-			try {
-				const fontResult = await extractFontFromFON(bitmapFontUrl)
-				if (fontResult && !cancelled) {
-					const { bitmapData, width, height } = fontResult
-					const bytesPerGlyph = height
-					const glyphs: Uint8Array[] = []
-					for (let i = 0; i < 256; i++) {
-						glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph))
-					}
-					setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData })
-				} else if (!cancelled) {
-					// Fallback to loadRawBitmapFont if extractFontFromFON fails
-					const font = await loadRawBitmapFont(bitmapFontUrl, 8, 16)
-					setBitmapFont(font)
-				}
-			} catch (e: any) {
-				console.warn('Failed to load font:', e)
-				if (!cancelled) setBitmapFont(null)
-			}
+			const font = await loadBitmapFontFromUrl(bitmapFontUrl)
+			if (!cancelled) setBitmapFont(font)
 		}
 		loadFont()
 		return () => {
@@ -233,16 +216,27 @@ export function PlasmaBackgroundLayout({
 		[mergedOptions]
 	)
 
+	// Store current view position in a ref so the generator can access it
+	const viewYRef = useRef(0)
+
 	// Memoize the scrollable mode frame generator to avoid recreating on every render
 	const scrollableFrameGenerator = useCallback(
 		(frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
 			const sampler = createAsciiPerlinPlasmaSampler(frame, mergedOptions)
 			const lines: AnsiScreen['lines'] = []
 
-			for (let y = 0; y < reqRows; y++) {
+			// Sample from the virtual world at the current view position
+			const currentViewY = viewYRef.current
+
+			// Render one extra row for smooth scrolling with pixelOffsetY
+			// When pixelOffsetY shifts the view, we need extra content to avoid black space
+			const rowsToRender = reqRows + 1
+
+			for (let y = 0; y < rowsToRender; y++) {
 				const line: AnsiScreen['lines'][number] = []
 				for (let x = 0; x < reqColumns; x++) {
-					const cell = sampler(x, y)
+					// Sample at virtual world coordinates (x, currentViewY + y)
+					const cell = sampler(x, currentViewY + y)
 					line.push(cell)
 				}
 				lines.push(line)
@@ -367,6 +361,9 @@ export function PlasmaBackgroundLayout({
 	// Viewport position within virtual world (character-aligned)
 	const viewX = 0 // Horizontal scroll position (could be calculated from horizontal scroll in future)
 	const viewY = Math.max(0, Math.floor(scrollTop / cellHeightPx)) // Character-aligned vertical scroll position
+
+	// Update ref so generator can access current view position
+	viewYRef.current = viewY
 
 	// Pixel offsets for smooth scrolling (sub-character precision)
 	const pixelOffsetY = scrollTop % cellHeightPx

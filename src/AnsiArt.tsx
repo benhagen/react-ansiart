@@ -8,9 +8,9 @@ import {
 	parseAnsi,
 	parseAnsiIncremental,
 } from './ansiParser'
-import { BitmapFont, loadRawBitmapFont, renderGlyph } from './bitmapFont'
 import { charToCp437Byte } from './cp437'
-import { extractFontFromFON } from './fonExtractor'
+import { BitmapFont, loadRawBitmapFont, renderGlyph } from './font/bitmapFont'
+import { extractFontFromFON } from './font/fonExtractor'
 
 export type AnsiArtProps = {
 	src: string
@@ -26,6 +26,7 @@ export type AnsiArtProps = {
 	animateBy?: 'bytes' | 'cursor' // advance by byte count or cursor movements (default 'cursor')
 	showControls?: boolean // show play/pause/restart controls (default false)
 	debugPerformance?: boolean // if true, show performance metrics overlay (default false)
+	debugCursorCodes?: boolean // if true, log ANSI cursor control codes to console (default false)
 }
 
 const DOS_COLORS: Record<number, string> = {
@@ -71,6 +72,7 @@ export function AnsiArt({
 	animateBy = 'cursor',
 	showControls = false,
 	debugPerformance = false,
+	debugCursorCodes = false,
 }: AnsiArtProps) {
 	const [screen, setScreen] = useState<AnsiScreen | null>(null)
 	const [error, setError] = useState<string | null>(null)
@@ -102,6 +104,7 @@ export function AnsiArt({
 	const animateByRef = useRef(animateBy)
 	const backgroundRef = useRef(background)
 	const bitmapFontRef = useRef(bitmapFont)
+	const debugCursorCodesRef = useRef(debugCursorCodes)
 	const previousScreenRef = useRef<AnsiScreen | null>(null)
 	const lastFrameTimeRef = useRef(0)
 	const frameCountRef = useRef(0)
@@ -405,7 +408,17 @@ export function AnsiArt({
 		animateByRef.current = animateBy
 		backgroundRef.current = background
 		bitmapFontRef.current = bitmapFont
-	}, [columns, frameDelay, bytesPerFrame, linesPerFrame, animateBy, background, bitmapFont])
+		debugCursorCodesRef.current = debugCursorCodes
+	}, [
+		columns,
+		frameDelay,
+		bytesPerFrame,
+		linesPerFrame,
+		animateBy,
+		background,
+		bitmapFont,
+		debugCursorCodes,
+	])
 
 	// Animation function - stored in a ref to avoid recreating it
 	const animateRef = useRef<(() => void) | null>(null)

@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BitmapFont, loadRawBitmapFont, renderGlyph } from './bitmapFont'
 import { cp437ByteToChar } from './cp437'
-import { extractFontFromFON } from './fonExtractor'
+import { BitmapFont, loadRawBitmapFont, renderGlyph } from './font/bitmapFont'
+import { extractFontFromFON } from './font/fonExtractor'
 
 export type FontCharacterChartProps = {
 	bitmapFontUrl: string
@@ -30,15 +30,16 @@ export function FontCharacterChart({ bitmapFontUrl }: FontCharacterChartProps) {
 			setError(null)
 			try {
 				// Try extracting from FON file first
-				const fontData = await extractFontFromFON(bitmapFontUrl)
-				if (fontData && fontData.length >= 4096) {
-					// Parse raw bitmap data into glyphs
+				const fontResult = await extractFontFromFON(bitmapFontUrl)
+				if (fontResult) {
+					const { bitmapData, width, height } = fontResult
+					const bytesPerGlyph = height
 					const glyphs: Uint8Array[] = []
 					for (let i = 0; i < 256; i++) {
-						glyphs.push(fontData.slice(i * 16, (i + 1) * 16))
+						glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph))
 					}
 					if (!cancelled) {
-						setBitmapFont({ width: 8, height: 16, glyphs, rawBitmapData: fontData })
+						setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData })
 					}
 				} else {
 					// Fallback to direct loading
