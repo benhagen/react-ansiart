@@ -1,8 +1,8 @@
-import { AnsiScreen } from './ansiParser'
-import { charToCp437Byte } from './cp437'
-import { BitmapFont, renderGlyph } from './font/bitmapFont'
-import type { CharacterFrameGenerator, DisplayFrameGenerator, PixelFrameGenerator } from './types'
-import { drawPerformanceOverlay, type PerformanceStats } from './utils/performanceOverlay'
+import { AnsiScreen } from '../ansi/parser'
+import { charToCp437Byte } from '../utils/cp437'
+import { BitmapFont, renderGlyph } from '../font/bitmapFont'
+import type { CharacterFrameGenerator, DisplayFrameGenerator, PixelFrameGenerator } from '../types/types'
+import { drawPerformanceOverlay, type PerformanceStats } from '../utils/performanceOverlay'
 
 const DOS_COLORS: Record<number, string> = {
 	0: '#000000',
@@ -363,6 +363,12 @@ export class AnsiVirtualDisplayEngine {
 		this.animationFrameId = requestAnimationFrame(this._animate)
 	}
 
+	private _isFinalMode(): boolean {
+		// Final mode generators have capabilities.supportsSeek === false
+		const generator = this.config.frameGenerator as any
+		return generator && generator.capabilities && generator.capabilities.supportsSeek === false
+	}
+
 	private _generateAndRender(): void {
 		const renderStart = performance.now()
 		const generator = this.config.frameGenerator
@@ -385,6 +391,12 @@ export class AnsiVirtualDisplayEngine {
 			// It's a CharacterFrameGenerator - produces AnsiScreen directly
 			const charGen = generator as CharacterFrameGenerator
 			this.screen = charGen(this.currentFrame, this.config.columns, requestedRows)
+		}
+
+		// In final mode, resize canvas to match actual content height (ignore rows config)
+		if (this._isFinalMode() && this.screen && this.screen.lines.length !== this.config.rows) {
+			this.config.rows = this.screen.lines.length
+			this._setupCanvas()
 		}
 
 		this.lastRenderedViewY = cellViewY
@@ -477,8 +489,10 @@ export class AnsiVirtualDisplayEngine {
 		// Apply pixel offset for smooth scrolling (sub-character precision)
 		const pixelOffsetY = this.config.pixelOffsetY ?? 0
 
-		// Copy visible portion of offscreen canvas to main canvas with pixel offset
-		const visibleHeight = this.config.rows * charHeight
+		// In final mode, use full screen height; otherwise use config.rows
+		const isFinalMode = this._isFinalMode()
+		const visibleHeight = isFinalMode ? screenRows * charHeight : this.config.rows * charHeight
+
 		ctx.fillStyle = this.config.background
 		ctx.fillRect(0, 0, cssWidth, visibleHeight)
 		ctx.drawImage(

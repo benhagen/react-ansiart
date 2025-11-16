@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { cp437ByteToChar } from './cp437'
-import { BitmapFont, loadRawBitmapFont, renderGlyph } from './font/bitmapFont'
-import { extractFontFromFON } from './font/fonExtractor'
+import { cp437ByteToChar } from '../utils/cp437'
+import { BitmapFont, loadRawBitmapFont, renderGlyph } from '../font/bitmapFont'
+import { extractFontFromFON } from '../font/fonExtractor'
 
 export type FontCharacterChartProps = {
 	bitmapFontUrl: string

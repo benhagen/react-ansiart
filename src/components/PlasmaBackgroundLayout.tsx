@@ -1,13 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnsiScreen } from './ansiParser'
+import type { AnsiScreen } from '../ansi/parser'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
-import type { BitmapFont } from './font/bitmapFont'
-import { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
-import type { AsciiPerlinPlasmaOptions } from './generators/asciiPerlinPlasmaGenerator'
+import type { BitmapFont } from '../font/bitmapFont'
+import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
+import type { AsciiPerlinPlasmaOptions } from '../generators/asciiPerlinPlasmaGenerator'
 import {
 	createAsciiPerlinPlasmaSampler,
 	generateAsciiPerlinPlasmaFrame,
-} from './generators/asciiPerlinPlasmaGenerator'
+} from '../generators/asciiPerlinPlasmaGenerator'
+import type { AsciiFireOptions } from '../generators/asciiFireGenerator'
+import {
+	createAsciiFireSampler,
+	generateAsciiFireFrame,
+} from '../generators/asciiFireGenerator'
 
 export interface PlasmaBackgroundLayoutProps {
 	children: React.ReactNode
@@ -15,16 +20,21 @@ export interface PlasmaBackgroundLayoutProps {
 	contentClassName?: string
 	contentStyle?: React.CSSProperties
 	plasmaClassName?: string
+	// Generator selection
+	generatorType?: 'plasma' | 'fire' // Type of generator to use (default: 'plasma')
 	// Virtual world dimensions (in pixels) - if not provided, will be calculated from content
 	virtualWidthPx?: number
 	virtualHeightPx?: number
-	// Plasma generation options
+	// Plasma generation options (used when generatorType === 'plasma')
 	chars?: string[] // Array of characters to use for ASCII rendering
-	timeScale?: number // Animation speed multiplier
-	octaves?: AsciiPerlinPlasmaOptions['octaves'] // Noise octave configurations
+	timeScale?: number // Animation speed multiplier (plasma only)
+	octaves?: AsciiPerlinPlasmaOptions['octaves'] // Noise octave configurations (plasma only)
 	seed?: number // Random seed for noise generation
-	// Plasma colors
-	fgColor?: string // Foreground color (CSS color string)
+	// Fire generation options (used when generatorType === 'fire')
+	darkenAmount?: number // Constant value to subtract each frame (fire only)
+	sparkRange?: [number, number] // Min/max palette indices for bottom row sparks (fire only)
+	// Colors
+	fgColor?: string // Foreground color (CSS color string, plasma only)
 	bgColor?: string // Background color (CSS color string)
 	// Performance and rendering
 	showPerformanceOverlay?: boolean
@@ -38,12 +48,15 @@ export function PlasmaBackgroundLayout({
 	contentClassName,
 	contentStyle,
 	plasmaClassName,
+	generatorType = 'plasma',
 	virtualWidthPx,
 	virtualHeightPx,
 	chars,
 	timeScale,
 	octaves,
 	seed,
+	darkenAmount,
+	sparkRange,
 	fgColor,
 	bgColor,
 	showPerformanceOverlay = false,
@@ -69,8 +82,14 @@ export function PlasmaBackgroundLayout({
 
 		let cancelled = false
 		async function loadFont() {
-			const font = await loadBitmapFontFromUrl(bitmapFontUrl)
-			if (!cancelled) setBitmapFont(font)
+			try {
+				const font = await loadBitmapFontFromUrl(bitmapFontUrl)
+				if (!cancelled) {
+					setBitmapFont(font)
+				}
+			} catch (error) {
+				console.error('Font loading failed:', error)
+			}
 		}
 		loadFont()
 		return () => {
@@ -105,6 +124,10 @@ export function PlasmaBackgroundLayout({
 			return
 		}
 
+		let rafId: number | null = null
+		let lastScrollHeight = 0
+		let checkInterval: ReturnType<typeof setInterval> | null = null
+
 		const updateBounds = () => {
 			if (!containerRef.current || !scrollableRef.current || typeof window === 'undefined') {
 				return
@@ -118,9 +141,11 @@ export function PlasmaBackgroundLayout({
 			const clientHeight = scrollableEl.clientHeight
 			const currentScrollTop = scrollableEl.scrollTop
 
-			// Update container height to match full scrollable content height
-			// Use scrollHeight directly (full content height, not just viewport)
-			setContainerHeight(scrollHeight)
+			// Only update container height if it actually changed to avoid unnecessary re-renders
+			if (scrollHeight !== lastScrollHeight) {
+				setContainerHeight(scrollHeight)
+				lastScrollHeight = scrollHeight
+			}
 
 			// Track scroll position and maximum scrollable distance
 			setScrollTop(currentScrollTop)
@@ -139,7 +164,19 @@ export function PlasmaBackgroundLayout({
 			})
 		}
 
+		// Batched update function using requestAnimationFrame
+		const scheduleUpdate = () => {
+			if (rafId !== null) {
+				return // Already scheduled
+			}
+			rafId = requestAnimationFrame(() => {
+				rafId = null
+				updateBounds()
+			})
+		}
+
 		updateBounds()
+		lastScrollHeight = scrollableRef.current?.scrollHeight || 0
 
 		const handleScroll = () => {
 			const scrollableEl = scrollableRef.current
@@ -149,22 +186,17 @@ export function PlasmaBackgroundLayout({
 			const currentScrollTop = scrollableEl.scrollTop
 			setScrollTop(currentScrollTop)
 			// Update bounds to sync viewport calculations
-			requestAnimationFrame(() => {
-				if (!containerRef.current || !scrollableRef.current || typeof window === 'undefined') return
-				const containerRect = containerRef.current.getBoundingClientRect()
-				const visibleTop = Math.max(0, -containerRect.top)
-				const visibleBottom = Math.min(containerRect.height, window.innerHeight - containerRect.top)
-				const visibleHeight = Math.max(0, visibleBottom - visibleTop)
-				setViewportBounds({
-					top: Math.max(0, containerRect.top),
-					height: Math.max(0, Math.min(visibleHeight, window.innerHeight)),
-				})
-			})
+			scheduleUpdate()
 		}
 
 		// Use ResizeObserver to track container size changes
 		const resizeObserver = new ResizeObserver(() => {
-			updateBounds()
+			scheduleUpdate()
+		})
+
+		// Use MutationObserver to detect content changes (additions/removals)
+		const mutationObserver = new MutationObserver(() => {
+			scheduleUpdate()
 		})
 
 		const scrollableEl = scrollableRef.current
@@ -175,27 +207,52 @@ export function PlasmaBackgroundLayout({
 		}
 		if (scrollableEl) {
 			resizeObserver.observe(scrollableEl)
+			// Observe content changes in the scrollable element
+			mutationObserver.observe(scrollableEl, {
+				childList: true,
+				subtree: true,
+				attributes: false,
+				characterData: false,
+			})
 			// Listen to scroll events on the scrollable container
 			scrollableEl.addEventListener('scroll', handleScroll, { passive: true })
 		}
 
 		if (typeof window !== 'undefined') {
-			window.addEventListener('resize', updateBounds, { passive: true })
+			window.addEventListener('resize', scheduleUpdate, { passive: true })
 		}
 
+		// Periodic check as fallback to catch any missed scrollHeight changes
+		// Check every 500ms to catch cases where ResizeObserver/MutationObserver miss changes
+		checkInterval = setInterval(() => {
+			if (scrollableEl) {
+				const currentScrollHeight = scrollableEl.scrollHeight
+				if (currentScrollHeight !== lastScrollHeight) {
+					scheduleUpdate()
+				}
+			}
+		}, 500)
+
 		return () => {
+			if (rafId !== null) {
+				cancelAnimationFrame(rafId)
+			}
+			if (checkInterval !== null) {
+				clearInterval(checkInterval)
+			}
 			resizeObserver.disconnect()
+			mutationObserver.disconnect()
 			if (scrollableEl) {
 				scrollableEl.removeEventListener('scroll', handleScroll)
 			}
 			if (typeof window !== 'undefined') {
-				window.removeEventListener('resize', updateBounds)
+				window.removeEventListener('resize', scheduleUpdate)
 			}
 		}
 	}, [mode, isMounted])
 
 	// Memoize the plasma generation options
-	const mergedOptions = useMemo(() => {
+	const mergedPlasmaOptions = useMemo(() => {
 		const options: AsciiPerlinPlasmaOptions = {}
 
 		if (chars) options.chars = chars
@@ -208,44 +265,94 @@ export function PlasmaBackgroundLayout({
 		return options
 	}, [chars, timeScale, octaves, seed, fgColor, bgColor])
 
+	// Memoize the fire generation options
+	const mergedFireOptions = useMemo(() => {
+		const options: AsciiFireOptions = {}
+
+		if (chars) options.chars = chars
+		if (darkenAmount !== undefined) options.darkenAmount = darkenAmount
+		if (sparkRange) options.sparkRange = sparkRange
+		if (seed !== undefined) options.seed = seed
+		if (bgColor) options.bgColor = bgColor
+
+		return options
+	}, [chars, darkenAmount, sparkRange, seed, bgColor])
+
 	// Memoize the fixed mode frame generator to avoid recreating on every render
 	const fixedFrameGenerator = useCallback(
 		(frame: number, columns: number, rows: number) => {
-			return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedOptions)
+			if (generatorType === 'fire') {
+				return generateAsciiFireFrame(frame, columns, rows, mergedFireOptions)
+			} else {
+				return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions)
+			}
 		},
-		[mergedOptions]
+		[generatorType, mergedPlasmaOptions, mergedFireOptions]
 	)
 
 	// Store current view position in a ref so the generator can access it
 	const viewYRef = useRef(0)
 
-	// Memoize the scrollable mode frame generator to avoid recreating on every render
-	const scrollableFrameGenerator = useCallback(
-		(frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
-			const sampler = createAsciiPerlinPlasmaSampler(frame, mergedOptions)
-			const lines: AnsiScreen['lines'] = []
+	// Store virtual rows in a ref so it can be accessed in the generator without causing re-creation
+	const virtualRowsRef = useRef(0)
 
-			// Sample from the virtual world at the current view position
-			const currentViewY = viewYRef.current
+	// Store virtual columns in a ref for fire generator
+	const virtualColumnsRef = useRef(0)
 
-			// Render one extra row for smooth scrolling with pixelOffsetY
-			// When pixelOffsetY shifts the view, we need extra content to avoid black space
-			const rowsToRender = reqRows + 1
-
-			for (let y = 0; y < rowsToRender; y++) {
-				const line: AnsiScreen['lines'][number] = []
-				for (let x = 0; x < reqColumns; x++) {
-					// Sample at virtual world coordinates (x, currentViewY + y)
-					const cell = sampler(x, currentViewY + y)
-					line.push(cell)
+	// Create the scrollable mode frame generator
+	// For fire, pass worldHeight and worldWidth for positioning and sizing
+	const scrollableFrameGenerator = useMemo(() => {
+		if (generatorType === 'fire') {
+			// For fire, return a function that creates samplers with world dimensions
+			return (frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
+				const fireOptionsWithDimensions = {
+					...mergedFireOptions,
+					worldHeight: virtualRowsRef.current,
+					worldWidth: virtualColumnsRef.current,
 				}
-				lines.push(line)
-			}
 
-			return { lines, columns: reqColumns }
-		},
-		[mergedOptions]
-	)
+				const sampler = createAsciiFireSampler(frame, fireOptionsWithDimensions)
+				const lines: AnsiScreen['lines'] = []
+
+				// Sample from the virtual world at the current view position
+				const currentViewY = viewYRef.current
+
+				// Render one extra row for smooth scrolling with pixelOffsetY
+				const rowsToRender = reqRows + 1
+
+				for (let y = 0; y < rowsToRender; y++) {
+					const line: AnsiScreen['lines'][number] = []
+					for (let x = 0; x < reqColumns; x++) {
+						const cell = sampler(x, currentViewY + y)
+						line.push(cell)
+					}
+					lines.push(line)
+				}
+
+				return { lines, columns: reqColumns }
+			}
+		} else {
+			// For plasma, use the memoized version for performance
+			return (frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
+				const sampler = createAsciiPerlinPlasmaSampler(frame, mergedPlasmaOptions)
+				const lines: AnsiScreen['lines'] = []
+
+				const currentViewY = viewYRef.current
+				const rowsToRender = reqRows + 1
+
+				for (let y = 0; y < rowsToRender; y++) {
+					const line: AnsiScreen['lines'][number] = []
+					for (let x = 0; x < reqColumns; x++) {
+						const cell = sampler(x, currentViewY + y)
+						line.push(cell)
+					}
+					lines.push(line)
+				}
+
+				return { lines, columns: reqColumns }
+			}
+		}
+	}, [generatorType, mergedFireOptions, mergedPlasmaOptions])
 
 	// Derive virtual world in character units using font dimensions
 	const cellWidthPx = bitmapFont?.width || 8 // Default fallback
@@ -353,7 +460,7 @@ export function PlasmaBackgroundLayout({
 	// Use provided virtual dimensions or calculate from content size
 	const calculatedVirtualWidthPx = virtualWidthPx || Math.max(viewportSize.width, containerHeight) // Default to viewport width or container height as proxy
 	const calculatedVirtualHeightPx =
-		virtualHeightPx || Math.max(viewportSize.height, containerHeight) // Default to viewport height or container height
+		virtualHeightPx || containerHeight // Use full scrollable content height for proper fire positioning
 
 	const virtualColumns = Math.max(visibleColumns, Math.ceil(calculatedVirtualWidthPx / cellWidthPx))
 	const virtualRows = Math.max(visibleRows, Math.ceil(calculatedVirtualHeightPx / cellHeightPx))
@@ -362,8 +469,10 @@ export function PlasmaBackgroundLayout({
 	const viewX = 0 // Horizontal scroll position (could be calculated from horizontal scroll in future)
 	const viewY = Math.max(0, Math.floor(scrollTop / cellHeightPx)) // Character-aligned vertical scroll position
 
-	// Update ref so generator can access current view position
+	// Update refs so generator can access current view position and virtual dimensions
 	viewYRef.current = viewY
+	virtualRowsRef.current = virtualRows
+	virtualColumnsRef.current = virtualColumns
 
 	// Pixel offsets for smooth scrolling (sub-character precision)
 	const pixelOffsetY = scrollTop % cellHeightPx

@@ -1,6 +1,6 @@
-import type { AnsiCell, AnsiScreen } from './ansiParser'
-import type { FrameData } from './types'
-import { getPalette, rgbToPaletteColor, ANSI_COLORS_RGB, type PaletteMode } from './rgbToAnsi'
+import type { AnsiCell, AnsiScreen } from './parser'
+import type { FrameData } from '../types/types'
+import { getPalette, rgbToPaletteColor, ANSI_COLORS_RGB, type PaletteMode } from '../utils/rgbToAnsi'
 
 // Block characters for different brightness levels
 const BLOCK_CHARS = {

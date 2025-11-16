@@ -1,5 +1,5 @@
-import type { AnsiScreen } from './ansiParser'
-import type { PaletteMode } from './rgbToAnsi'
+import type { AnsiScreen } from '../ansi/parser'
+import type { PaletteMode } from '../utils/rgbToAnsi'
 
 export interface RGBAColor {
 	r: number // 0-255

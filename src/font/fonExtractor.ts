@@ -205,4 +205,3 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 	console.log('[fonExtractor] Failed: no font resource found')
 	return null
 }
-

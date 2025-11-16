@@ -1,11 +1,12 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { SauceMetadata } from '../ansi/parser'
 import { AnsiPlayerOverlay } from './AnsiPlayerOverlay'
-import { AnsiVirtualDisplayEngine } from './AnsiVirtualDisplayEngine'
-import { BitmapFont } from './font/bitmapFont'
-import { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
-import type { DisplayFrameGenerator, GeneratorCapabilities } from './types'
+import { AnsiVirtualDisplayEngine } from '../engines/AnsiVirtualDisplayEngine'
+import { BitmapFont } from '../font/bitmapFont'
+import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
+import type { DisplayFrameGenerator, GeneratorCapabilities } from '../types/types'
 
 export type AnsiVirtualDisplayProps = {
 	columns?: number // default 80
@@ -29,6 +30,11 @@ export type AnsiVirtualDisplayProps = {
 	pixelOffsetX?: number
 	pixelOffsetY?: number
 	onViewChange?: (view: { viewX: number; viewY: number }) => void
+	// SAUCE metadata
+	sauce?: SauceMetadata
+	onSauceClick?: () => void
+	// Animation control
+	autoStart?: boolean // Start animation automatically (default: true, only applies to animated mode)
 }
 
 export function AnsiVirtualDisplay({
@@ -50,9 +56,13 @@ export function AnsiVirtualDisplay({
 	pixelOffsetX = 0,
 	pixelOffsetY = 0,
 	onViewChange,
+	sauce,
+	onSauceClick,
+	autoStart,
 }: AnsiVirtualDisplayProps) {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const engineRef = useRef<AnsiVirtualDisplayEngine | null>(null)
+	const previousFrameGeneratorRef = useRef<DisplayFrameGenerator | null>(null)
 	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(providedBitmapFont || null)
 	const [isPlaying, setIsPlaying] = useState(false) // Will be synced with engine on init
 	const [isOverlayVisible, setIsOverlayVisible] = useState(false)
@@ -86,7 +96,11 @@ export function AnsiVirtualDisplay({
 		if (!canvas) return
 
 		if (!engineRef.current) {
-			const shouldStartPaused = supportsOverlayControls
+			// Determine if animation should start paused
+			// If autoStart is explicitly false, start paused
+			// If autoStart is true or undefined, start playing (unless overlay controls are enabled, then use current behavior)
+			const shouldStartPaused =
+				autoStart === false ? true : autoStart === true ? false : supportsOverlayControls // If autoStart is undefined, use current behavior
 			engineRef.current = new AnsiVirtualDisplayEngine(canvas, {
 				columns,
 				rows,
@@ -100,8 +114,10 @@ export function AnsiVirtualDisplay({
 				viewY,
 				pixelOffsetX,
 				pixelOffsetY,
-				startPaused: shouldStartPaused, // Start paused if overlay controls enabled
+				startPaused: shouldStartPaused,
 			})
+			// Initialize the ref to track the current frameGenerator
+			previousFrameGeneratorRef.current = effectiveFrameGenerator
 			// Sync initial playing state
 			setIsPlaying(!shouldStartPaused)
 			// Show overlay initially if starting paused
@@ -122,6 +138,9 @@ export function AnsiVirtualDisplay({
 	useEffect(() => {
 		if (!engineRef.current) return
 
+		const previousFrameGenerator = previousFrameGeneratorRef.current
+		const frameGeneratorChanged = effectiveFrameGenerator !== previousFrameGenerator
+
 		engineRef.current.updateConfig({
 			columns,
 			rows,
@@ -136,6 +155,19 @@ export function AnsiVirtualDisplay({
 			pixelOffsetX,
 			pixelOffsetY,
 		})
+
+		// If frameGenerator changed (new file loaded) and autoStart is true, restart and play
+		// Only do this if previousFrameGenerator was not null (i.e., not the initial creation)
+		if (frameGeneratorChanged && previousFrameGenerator !== null && autoStart !== false) {
+			engineRef.current.restart()
+			if (!engineRef.current.getPlayingState()) {
+				engineRef.current.play()
+				setIsPlaying(true)
+			}
+		}
+
+		// Update the ref to track the current frameGenerator
+		previousFrameGeneratorRef.current = effectiveFrameGenerator
 
 		// Update overlay state after config change
 		if (supportsOverlayControls) {
@@ -158,6 +190,7 @@ export function AnsiVirtualDisplay({
 		pixelOffsetX,
 		pixelOffsetY,
 		supportsOverlayControls,
+		autoStart,
 	])
 
 	// Pass loaded font to engine
@@ -414,6 +447,8 @@ export function AnsiVirtualDisplay({
 						onAdvanceByte={handleAdvanceByte}
 						onRewindByte={handleRewindByte}
 						onMouseMove={handleMouseMove}
+						sauce={sauce}
+						onSauceClick={onSauceClick}
 					/>
 				)}
 				{/* Debug info - only show when overlay is visible */}

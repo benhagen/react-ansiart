@@ -1,11 +1,6 @@
-import type { AnsiScreen } from '../ansiParser'
-import {
-	parseAnsi,
-	parseAnsiDynamic,
-	parseAnsiIncremental,
-	parseAnsiIncrementalDynamic,
-} from '../ansiParser'
-import type { CharacterFrameGeneratorWithMetadata } from '../types'
+import type { AnsiScreen } from '../ansi/parser'
+import { parseAnsiCore } from '../ansi/parser'
+import type { CharacterFrameGeneratorWithMetadata } from '../types/types'
 
 /**
  * Utility to create an empty row with default attributes
@@ -25,7 +20,8 @@ export type AnsiFrameGeneratorOptions = {
 	ansiData: Uint8Array
 	mode: 'animated' | 'final'
 	columns?: number // Fixed column width (for fixed mode, undefined for dynamic)
-	rows?: number // Display rows (for calculating scroll position in fixed animated mode)
+	rows?: number // Display rows (for calculating scroll position in fixed animated mode, undefined for auto)
+	finalHeightForCanvas?: number // Final height for canvas sizing in animated mode with rows='auto'
 	bytesPerSecond?: number // Bytes per second (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec
 	fps?: number // Frames per second (needed to calculate bytes per frame from bytesPerSecond)
 	onDimensionsChange?: (dimensions: { columns: number; rows: number }) => void // Callback for dynamic sizing
@@ -46,6 +42,7 @@ export function createAnsiFrameGenerator(
 		mode,
 		columns,
 		rows: displayRows,
+		finalHeightForCanvas,
 		bytesPerSecond: initialBytesPerSecond = 960, // Default: 9600 baud = 960 bytes/sec (baud/10 conversion)
 		fps = 30, // Default: 30 fps
 		onDimensionsChange,
@@ -61,11 +58,11 @@ export function createAnsiFrameGenerator(
 		let cachedScreen: AnsiScreen | null = null
 
 		if (columns !== undefined) {
-			// Fixed mode - use parseAnsi with fixed columns
-			cachedScreen = parseAnsi(ansiData, columns)
+			// Fixed mode - use parseAnsiCore with fixed columns
+			cachedScreen = parseAnsiCore(ansiData, { columns })
 		} else {
-			// Dynamic mode - use parseAnsiDynamic
-			cachedScreen = parseAnsiDynamic(ansiData)
+			// Dynamic mode - use parseAnsiCore with dynamic sizing
+			cachedScreen = parseAnsiCore(ansiData)
 			// Notify about dimensions
 			if (onDimensionsChange) {
 				onDimensionsChange({
@@ -141,11 +138,12 @@ export function createAnsiFrameGenerator(
 		// Parse incrementally
 		let screen: AnsiScreen
 		if (columns !== undefined) {
-			// Fixed mode - use parseAnsiIncremental with fixed columns
-			screen = parseAnsiIncremental(ansiData, columns, targetByteIndex)
+			// Fixed mode - use parseAnsiCore with fixed columns and incremental parsing
+			screen = parseAnsiCore(ansiData, { columns, maxByteIndex: targetByteIndex })
 
-			// For fixed mode animation, calculate scroll position and window content
+			// For fixed mode animation with fixed rows, calculate scroll position and window content
 			// Scroll to keep the bottom of the content visible when it exceeds display rows
+			// If displayRows is undefined (auto mode), show all content without scrolling
 			if (displayRows !== undefined) {
 				const contentRows = screen.lines.length
 				const viewY = Math.max(0, contentRows - displayRows)
@@ -169,13 +167,18 @@ export function createAnsiFrameGenerator(
 				screen.lines = [...windowedLines]
 
 				// Pad to match engine's requested rows (buffered rows)
-				while (screen.lines.length < rows) {
+				while (screen.lines.length < displayRows) {
+					screen.lines.push(createEmptyRow(columns))
+				}
+			} else if (displayRows === undefined && finalHeightForCanvas !== undefined) {
+				// Auto rows mode: show all content, pad to finalHeightForCanvas for canvas sizing
+				while (screen.lines.length < finalHeightForCanvas) {
 					screen.lines.push(createEmptyRow(columns))
 				}
 			}
 		} else {
-			// Dynamic mode - use parseAnsiIncrementalDynamic
-			screen = parseAnsiIncrementalDynamic(ansiData, targetByteIndex)
+			// Dynamic mode - use parseAnsiCore with dynamic sizing and incremental parsing
+			screen = parseAnsiCore(ansiData, { maxByteIndex: targetByteIndex })
 			// Check if dimensions have changed and notify
 			if (onDimensionsChange) {
 				const currentColumns = screen.columns
@@ -219,10 +222,9 @@ export function createAnsiFrameGenerator(
 export type AnsiArtFrameGeneratorOptions = {
 	ansiData: Uint8Array
 	mode: 'animated' | 'final'
-	viewscreen: 'fixed' | 'dynamic'
-	columns?: number // Required for fixed mode
-	rows?: number // Display rows (for calculating scroll in fixed animated mode)
-	dynamicColumns?: number // For dynamic final mode
+	columns?: number // undefined for auto mode
+	rows?: number // undefined for auto mode
+	finalHeightForAnimated?: number // Final height for animated mode with rows='auto'
 	bytesPerSecond?: number // Bytes per second (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec
 	fps?: number // Frames per second
 	onDimensionsChange?: (dimensions: { columns: number; rows: number }) => void
@@ -231,8 +233,8 @@ export type AnsiArtFrameGeneratorOptions = {
 }
 
 /**
- * Create a frame generator for AnsiArtNG component
- * Handles the logic for determining effective columns based on viewscreen and mode
+ * Create a frame generator for AnsiArt component
+ * Handles the logic for determining effective columns and rows based on auto/fixed settings
  */
 export function createAnsiArtFrameGenerator(
 	options: AnsiArtFrameGeneratorOptions
@@ -240,10 +242,9 @@ export function createAnsiArtFrameGenerator(
 	const {
 		ansiData,
 		mode,
-		viewscreen,
 		columns,
 		rows,
-		dynamicColumns,
+		finalHeightForAnimated,
 		bytesPerSecond = 960, // Default: 9600 baud = 960 bytes/sec
 		fps = 30,
 		onDimensionsChange,
@@ -251,27 +252,12 @@ export function createAnsiArtFrameGenerator(
 		debugCursorCodes = false,
 	} = options
 
-	// Validate fixed mode has columns
-	if (viewscreen === 'fixed' && !columns) {
-		return null
-	}
-
-	// Determine columns to use
-	// For dynamic animated mode, start with undefined (will grow)
-	// For dynamic final mode, use detected dimensions
-	// For fixed mode, use provided columns
-	const effectiveColumns =
-		viewscreen === 'fixed'
-			? columns
-			: viewscreen === 'dynamic' && mode === 'final'
-			? dynamicColumns
-			: undefined // Dynamic animated - will grow
-
 	return createAnsiFrameGenerator({
 		ansiData,
 		mode,
-		columns: effectiveColumns,
+		columns,
 		rows,
+		finalHeightForCanvas: finalHeightForAnimated,
 		bytesPerSecond,
 		fps,
 		onDimensionsChange,

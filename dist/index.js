@@ -1,7 +1,7 @@
-// src/AnsiArt.tsx
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// src/components/AnsiArt.tsx
+import { useCallback as useCallback3, useEffect as useEffect4, useMemo as useMemo2, useRef as useRef4, useState as useState3 } from "react";
 
-// src/cp437.ts
+// src/utils/cp437.ts
 var unicodeToCp437Map = /* @__PURE__ */ new Map();
 function cp437ByteToChar(byte) {
   if (byte === 10) return "\n";
@@ -99,6 +99,13 @@ function cp437ByteToChar(byte) {
   }
   return String.fromCharCode(byte);
 }
+function decodeCp437(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    out += cp437ByteToChar(bytes[i]);
+  }
+  return out;
+}
 function buildReverseMap() {
   if (unicodeToCp437Map.size > 0) return;
   for (let i = 0; i < 256; i++) {
@@ -117,86 +124,99 @@ function charToCp437Byte(ch) {
   return code < 256 ? code : 32;
 }
 
-// src/ansiParser.ts
-function byteToChar(byte, encoding = "cp437") {
-  switch (encoding) {
-    case "cp437":
-      return cp437ByteToChar(byte);
-    case "cp850":
-    case "cp1252":
-    case "iso-8859-1":
-      if (byte < 128) {
-        return String.fromCharCode(byte);
-      } else {
-        return cp437ByteToChar(byte);
-      }
-    case "utf-8":
-      return String.fromCharCode(byte);
-    default:
-      return cp437ByteToChar(byte);
-  }
-}
-function createCell(fg, bg, bold) {
-  return { ch: " ", fg, bg, bold };
-}
-function ensureRow(lines, row, columns, fg, bg, bold) {
-  while (lines.length <= row) {
-    const newLine = [];
-    for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-    lines.push(newLine);
-  }
-}
-function clearLine(line, from, to, fg, bg, bold) {
-  const start = Math.max(0, from);
-  const end = Math.min(line.length - 1, to);
-  for (let c = start; c <= end; c++) {
-    line[c] = createCell(fg, bg, bold);
-  }
-}
+// src/utils/sauce.ts
+var SAUCE_ID_S = 83;
+var SAUCE_ID_A = 65;
+var SAUCE_ID_U = 85;
+var SAUCE_ID_C = 67;
+var SAUCE_ID_E = 69;
+var SAUCE_TRAILER_SIZE = 128;
+var SAUCE_EOF = 26;
+var COMMENT_ID_C = 67;
+var COMMENT_ID_O = 79;
+var COMMENT_ID_M = 77;
+var COMMENT_ID_N = 78;
+var COMMENT_ID_T = 84;
+var COMMENT_SIZE = 64;
+var COMMENT_ID_SIZE = 5;
 function isSauceTrailer(bytes) {
-  if (bytes.length < 128) return false;
-  const off = bytes.length - 128;
-  return bytes[off] === 83 && // S
-  bytes[off + 1] === 65 && // A
-  bytes[off + 2] === 85 && // U
-  bytes[off + 3] === 67 && // C
-  bytes[off + 4] === 69;
+  if (bytes.length < SAUCE_TRAILER_SIZE + 1) return false;
+  const offWithEof = bytes.length - SAUCE_TRAILER_SIZE - 1;
+  const offWithoutEof = bytes.length - SAUCE_TRAILER_SIZE;
+  if (bytes[offWithEof] === SAUCE_EOF) {
+    return bytes[offWithEof + 1] === SAUCE_ID_S && bytes[offWithEof + 2] === SAUCE_ID_A && bytes[offWithEof + 3] === SAUCE_ID_U && bytes[offWithEof + 4] === SAUCE_ID_C && bytes[offWithEof + 5] === SAUCE_ID_E;
+  }
+  return bytes[offWithoutEof] === SAUCE_ID_S && bytes[offWithoutEof + 1] === SAUCE_ID_A && bytes[offWithoutEof + 2] === SAUCE_ID_U && bytes[offWithoutEof + 3] === SAUCE_ID_C && bytes[offWithoutEof + 4] === SAUCE_ID_E;
 }
 function parseSauce(bytes) {
-  if (!isSauceTrailer(bytes)) return void 0;
-  const off = bytes.length - 128;
-  const dataView = new DataView(bytes.buffer, bytes.byteOffset + off);
-  function readString(offset, length) {
-    let result = "";
-    for (let i = 0; i < length; i++) {
-      const byte = bytes[off + offset + i];
-      if (byte === 0) break;
-      result += String.fromCharCode(byte);
+  if (bytes.length < SAUCE_TRAILER_SIZE + 1) return void 0;
+  let saucePos = bytes.length - SAUCE_TRAILER_SIZE;
+  let hasEof = false;
+  if (bytes.length >= SAUCE_TRAILER_SIZE + 1) {
+    const eofPos = bytes.length - SAUCE_TRAILER_SIZE - 1;
+    if (bytes[eofPos] === SAUCE_EOF) {
+      hasEof = true;
+      saucePos = eofPos + 1;
     }
-    return result.trim();
+  }
+  if (bytes[saucePos] !== SAUCE_ID_S || bytes[saucePos + 1] !== SAUCE_ID_A || bytes[saucePos + 2] !== SAUCE_ID_U || bytes[saucePos + 3] !== SAUCE_ID_C || bytes[saucePos + 4] !== SAUCE_ID_E) {
+    return void 0;
+  }
+  const dataView = new DataView(bytes.buffer, bytes.byteOffset + saucePos);
+  function readString(offset, length) {
+    const charCodes = [];
+    for (let i = 0; i < length; i++) {
+      const byte = bytes[saucePos + offset + i];
+      charCodes.push(byte);
+    }
+    return String.fromCharCode(...charCodes).replace(/\0+$/, "").trimEnd();
   }
   const id = readString(0, 5);
-  const version = bytes[off + 5];
-  const title = readString(6, 35);
-  const author = readString(41, 20);
-  const group = readString(61, 20);
-  const date = readString(81, 8);
+  const version = bytes[saucePos + 5];
+  const title = readString(7, 35);
+  const author = readString(42, 20);
+  const group = readString(62, 20);
+  const date = readString(82, 8);
   const fileSize = dataView.getUint32(89, true);
-  const dataType = bytes[off + 93];
-  const fileType = bytes[off + 94];
+  const dataType = bytes[saucePos + 93];
+  const fileType = bytes[saucePos + 94];
   const tInfo1 = dataView.getUint16(95, true);
   const tInfo2 = dataView.getUint16(97, true);
-  const tInfo3 = bytes[off + 99];
-  const tInfo4 = bytes[off + 100];
-  const comments = dataView.getUint16(101, true);
-  const tFlags = bytes[off + 103];
+  const tInfo3 = dataView.getUint16(99, true);
+  const tInfo4 = dataView.getUint16(101, true);
+  const numComments = bytes[saucePos + 103];
+  const tFlags = bytes[saucePos + 104];
+  const tInfoSBytes = new Uint8Array(bytes.buffer, bytes.byteOffset + saucePos + 105, 22);
+  let tInfoSEnd = 22;
+  for (let i = 0; i < 22; i++) {
+    if (tInfoSBytes[i] === 0) {
+      tInfoSEnd = i;
+      break;
+    }
+  }
+  const tInfoS = String.fromCharCode(...Array.from(tInfoSBytes.slice(0, tInfoSEnd)));
   const commentLines = [];
-  const commentStart = off + 104;
-  for (let i = 0; i < comments && i < 255; i++) {
-    const commentOffset = commentStart + i * 64;
-    if (commentOffset + 64 > bytes.length) break;
-    const comment = readString(commentOffset - off, 64);
-    commentLines.push(comment);
+  if (numComments > 0) {
+    const commentStart = saucePos - numComments * COMMENT_SIZE - COMMENT_ID_SIZE;
+    if (commentStart >= 0) {
+      if (bytes[commentStart] === COMMENT_ID_C && bytes[commentStart + 1] === COMMENT_ID_O && bytes[commentStart + 2] === COMMENT_ID_M && bytes[commentStart + 3] === COMMENT_ID_N && bytes[commentStart + 4] === COMMENT_ID_T) {
+        for (let i = 0; i < numComments && i < 255; i++) {
+          const commentOffset = commentStart + COMMENT_ID_SIZE + i * COMMENT_SIZE;
+          if (commentOffset + COMMENT_SIZE > bytes.length) break;
+          const comment = readString(commentOffset - saucePos, COMMENT_SIZE);
+          if (comment) {
+            commentLines.push(comment);
+          }
+        }
+      }
+    }
+  }
+  let actualFileSize = bytes.length - SAUCE_TRAILER_SIZE;
+  if (numComments > 0) {
+    actualFileSize -= COMMENT_ID_SIZE + numComments * COMMENT_SIZE;
+  }
+  if (hasEof) {
+    actualFileSize -= 1;
   }
   return {
     id,
@@ -205,1185 +225,18 @@ function parseSauce(bytes) {
     author,
     group,
     date,
-    fileSize,
+    fileSize: actualFileSize,
     dataType,
     fileType,
     tInfo1,
     tInfo2,
     tInfo3,
     tInfo4,
-    comments,
+    comments: numComments,
     tFlags,
+    tInfoS: tInfoS || void 0,
     commentLines
   };
-}
-function parseAnsi(bytesInput, columns = 80, encoding = "cp437") {
-  let bytes = bytesInput;
-  const sauce = parseSauce(bytesInput);
-  if (isSauceTrailer(bytes)) {
-    bytes = bytes.slice(0, bytes.length - 128);
-  }
-  const lines = [];
-  const cur = { row: 0, col: 0 };
-  const savedCur = { row: 0, col: 0 };
-  let fg = 7;
-  let bg = 0;
-  let bold = false;
-  let lineWrap = true;
-  let iceColors = false;
-  const ESC = 27;
-  let i = 0;
-  let state = "normal";
-  let csiParams = "";
-  const writeChar = (ch) => {
-    if (ch === "") return;
-    if (ch === "\n") {
-      cur.row += 1;
-      cur.col = 0;
-      return;
-    }
-    if (ch === "\r") {
-      cur.col = 0;
-      return;
-    }
-    if (cur.col < 0) cur.col = 0;
-    if (cur.col >= columns) {
-      if (lineWrap) {
-        cur.row += 1;
-        cur.col = 0;
-        ensureRow(lines, cur.row, columns, fg, bg, bold);
-      } else {
-        return;
-      }
-    }
-    ensureRow(lines, cur.row, columns, fg, bg, bold);
-    lines[cur.row][cur.col] = { ch, fg, bg, bold };
-    cur.col += 1;
-  };
-  const applySGR = (params) => {
-    if (params.length === 0) params = [0];
-    const ANSI_TO_DOS = [0, 4, 2, 6, 1, 5, 3, 7];
-    for (const p of params) {
-      if (p === 0) {
-        fg = 7;
-        bg = 0;
-        bold = false;
-        continue;
-      }
-      if (p === 1) {
-        bold = true;
-        continue;
-      }
-      if (p === 22) {
-        bold = false;
-        continue;
-      }
-      if (p === 39) {
-        fg = 7;
-        continue;
-      }
-      if (p === 49) {
-        bg = 0;
-        continue;
-      }
-      if (p === 7) {
-        const tempFg = fg;
-        const tempBg = bg;
-        fg = tempBg;
-        bg = tempFg;
-        continue;
-      }
-      if (p === 27) {
-        fg = 7;
-        bg = 0;
-        continue;
-      }
-      if (p === 25) {
-        continue;
-      }
-      if (p >= 30 && p <= 37) {
-        fg = ANSI_TO_DOS[p - 30];
-        continue;
-      }
-      if (p >= 40 && p <= 47) {
-        bg = ANSI_TO_DOS[p - 40];
-        continue;
-      }
-      if (p >= 90 && p <= 97) {
-        fg = 8 + ANSI_TO_DOS[p - 90];
-        continue;
-      }
-      if (p >= 100 && p <= 107) {
-        bg = 8 + ANSI_TO_DOS[p - 100];
-        continue;
-      }
-    }
-  };
-  while (i < bytes.length) {
-    const b = bytes[i++];
-    if (b === 26) break;
-    switch (state) {
-      case "normal": {
-        if (b === ESC) {
-          state = "esc";
-          break;
-        }
-        writeChar(byteToChar(b, encoding));
-        break;
-      }
-      case "esc": {
-        if (b === 91) {
-          state = "csi";
-          csiParams = "";
-          break;
-        }
-        state = "normal";
-        break;
-      }
-      case "csi": {
-        const ch = String.fromCharCode(b);
-        if (b >= 48 && b <= 63 || ch === " " || ch === "?") {
-          if (csiParams.length < 256) {
-            csiParams += ch;
-          }
-          break;
-        }
-        if (!isValidCsiCommand(ch)) {
-          state = "normal";
-          csiParams = "";
-          break;
-        }
-        const params = csiParams.trim().length ? csiParams.split(";").map((x) => x === "" ? NaN : parseInt(x, 10)) : [];
-        const get = (idx, def) => Number.isNaN(params[idx]) || params[idx] === void 0 ? def : params[idx];
-        if (ch === "s") {
-          savedCur.row = cur.row;
-          savedCur.col = cur.col;
-        } else if (ch === "u") {
-          cur.row = savedCur.row;
-          cur.col = savedCur.col;
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "m") {
-          applySGR(params.filter((p) => !Number.isNaN(p)));
-        } else if (ch === "t") {
-          if (params.length >= 4) {
-            const mode = get(0, 0);
-            const r = Math.min(255, Math.max(0, get(1, 0)));
-            const g = Math.min(255, Math.max(0, get(2, 0)));
-            const b2 = Math.min(255, Math.max(0, get(3, 0)));
-            const rgbColor = `rgb(${r}, ${g}, ${b2})`;
-            if (mode === 0) {
-              bg = rgbColor;
-            } else if (mode === 1) {
-              fg = rgbColor;
-            }
-          }
-        } else if (ch === "H" || ch === "f") {
-          const r = Math.max(1, get(0, 1)) - 1;
-          const c = Math.max(1, get(1, 1)) - 1;
-          cur.row = r;
-          cur.col = Math.max(0, Math.min(columns - 1, c));
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "A") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = Math.max(0, cur.row - n);
-        } else if (ch === "B") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = cur.row + n;
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "C") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = Math.min(columns - 1, cur.col + n);
-        } else if (ch === "D") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = Math.max(0, cur.col - n);
-        } else if (ch === "G") {
-          const c = Math.max(1, get(0, 1)) - 1;
-          cur.col = Math.max(0, Math.min(columns - 1, c));
-        } else if (ch === "E") {
-          const n = Math.max(1, get(0, 1));
-          cur.row += n;
-          cur.col = 0;
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "F") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = Math.max(0, cur.row - n);
-          cur.col = 0;
-        } else if (ch === "S") {
-          const n = Math.max(1, get(0, 1));
-          for (let scroll = 0; scroll < n; scroll++) {
-            if (lines.length > 0) {
-              lines.shift();
-              const newLine = [];
-              for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-              lines.push(newLine);
-            }
-          }
-        } else if (ch === "T") {
-          const n = Math.max(1, get(0, 1));
-          for (let scroll = 0; scroll < n; scroll++) {
-            if (lines.length > 0) {
-              lines.pop();
-              const newLine = [];
-              for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-              lines.unshift(newLine);
-            }
-          }
-        } else if (ch === "K") {
-          const mode = get(0, 0);
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-          if (mode === 0) {
-            clearLine(lines[cur.row], cur.col, columns - 1, fg, bg, bold);
-          } else if (mode === 1) {
-            clearLine(lines[cur.row], 0, cur.col, fg, bg, bold);
-          } else if (mode === 2) {
-            clearLine(lines[cur.row], 0, columns - 1, fg, bg, bold);
-          }
-        } else if (ch === "J") {
-          const mode = get(0, 0);
-          if (mode === 2) {
-            lines.length = 0;
-            cur.row = 0;
-            cur.col = 0;
-          } else if (mode === 0 || mode === 1) {
-            ensureRow(lines, cur.row, columns, fg, bg, bold);
-            if (mode === 0) {
-              clearLine(lines[cur.row], cur.col, columns - 1, fg, bg, bold);
-              for (let r = cur.row + 1; r < lines.length; r++)
-                clearLine(lines[r], 0, columns - 1, fg, bg, bold);
-            } else {
-              for (let r = 0; r < cur.row; r++) clearLine(lines[r], 0, columns - 1, fg, bg, bold);
-              clearLine(lines[cur.row], 0, cur.col, fg, bg, bold);
-            }
-          }
-        } else if (ch === "h") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = true;
-            } else if (param === 33) {
-              iceColors = true;
-            }
-          }
-        } else if (ch === "l") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = false;
-            } else if (param === 33) {
-              iceColors = false;
-            }
-          }
-        }
-        state = "normal";
-        csiParams = "";
-        break;
-      }
-    }
-  }
-  if (lines.length === 0) {
-    const newLine = [];
-    for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-    lines.push(newLine);
-  }
-  for (let r = 0; r < lines.length; r++) {
-    const line = lines[r];
-    if (!line) {
-      lines[r] = [];
-      for (let c = 0; c < columns; c++) lines[r].push(createCell(7, 0, false));
-    } else {
-      while (line.length < columns) {
-        line.push(createCell(7, 0, false));
-      }
-    }
-  }
-  return { lines, columns, sauce };
-}
-function parseAnsiIncremental(bytesInput, columns, maxByteIndex, encoding = "cp437") {
-  let bytes = bytesInput;
-  const sauce = parseSauce(bytesInput);
-  if (isSauceTrailer(bytes)) {
-    bytes = bytes.slice(0, bytes.length - 128);
-  }
-  const stopAt = Math.min(maxByteIndex, bytes.length);
-  const lines = [];
-  const cur = { row: 0, col: 0 };
-  const savedCur = { row: 0, col: 0 };
-  let fg = 7;
-  let bg = 0;
-  let bold = false;
-  let lineWrap = true;
-  let iceColors = false;
-  const ESC = 27;
-  let i = 0;
-  let state = "normal";
-  let csiParams = "";
-  const writeChar = (ch) => {
-    if (ch === "") return;
-    if (ch === "\n") {
-      cur.row += 1;
-      cur.col = 0;
-      return;
-    }
-    if (ch === "\r") {
-      cur.col = 0;
-      return;
-    }
-    if (cur.col < 0) cur.col = 0;
-    if (cur.col >= columns) {
-      if (lineWrap) {
-        cur.row += 1;
-        cur.col = 0;
-        ensureRow(lines, cur.row, columns, fg, bg, bold);
-      } else {
-        return;
-      }
-    }
-    ensureRow(lines, cur.row, columns, fg, bg, bold);
-    lines[cur.row][cur.col] = { ch, fg, bg, bold };
-    cur.col += 1;
-  };
-  const applySGR = (params) => {
-    if (params.length === 0) params = [0];
-    const ANSI_TO_DOS = [0, 4, 2, 6, 1, 5, 3, 7];
-    for (const p of params) {
-      if (p === 0) {
-        fg = 7;
-        bg = 0;
-        bold = false;
-        continue;
-      }
-      if (p === 1) {
-        bold = true;
-        continue;
-      }
-      if (p === 22) {
-        bold = false;
-        continue;
-      }
-      if (p === 39) {
-        fg = 7;
-        continue;
-      }
-      if (p === 49) {
-        bg = 0;
-        continue;
-      }
-      if (p === 7) {
-        const tempFg = fg;
-        const tempBg = bg;
-        fg = tempBg;
-        bg = tempFg;
-        continue;
-      }
-      if (p === 27) {
-        fg = 7;
-        bg = 0;
-        continue;
-      }
-      if (p === 25) {
-        continue;
-      }
-      if (p >= 30 && p <= 37) {
-        fg = ANSI_TO_DOS[p - 30];
-        continue;
-      }
-      if (p >= 40 && p <= 47) {
-        bg = ANSI_TO_DOS[p - 40];
-        continue;
-      }
-      if (p >= 90 && p <= 97) {
-        fg = 8 + ANSI_TO_DOS[p - 90];
-        continue;
-      }
-      if (p >= 100 && p <= 107) {
-        bg = 8 + ANSI_TO_DOS[p - 100];
-        continue;
-      }
-    }
-  };
-  while (i < stopAt) {
-    const b = bytes[i++];
-    if (b === 26) break;
-    switch (state) {
-      case "normal": {
-        if (b === ESC) {
-          state = "esc";
-          break;
-        }
-        writeChar(byteToChar(b, encoding));
-        break;
-      }
-      case "esc": {
-        if (b === 91) {
-          state = "csi";
-          csiParams = "";
-          break;
-        }
-        state = "normal";
-        break;
-      }
-      case "csi": {
-        const ch = String.fromCharCode(b);
-        if (b >= 48 && b <= 63 || ch === " " || ch === "?") {
-          if (csiParams.length < 256) {
-            csiParams += ch;
-          }
-          break;
-        }
-        if (!isValidCsiCommand(ch)) {
-          state = "normal";
-          csiParams = "";
-          break;
-        }
-        const params = csiParams.trim().length ? csiParams.split(";").map((x) => x === "" ? NaN : parseInt(x, 10)) : [];
-        const get = (idx, def) => Number.isNaN(params[idx]) || params[idx] === void 0 ? def : params[idx];
-        if (ch === "s") {
-          savedCur.row = cur.row;
-          savedCur.col = cur.col;
-        } else if (ch === "u") {
-          cur.row = savedCur.row;
-          cur.col = savedCur.col;
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "m") {
-          applySGR(params.filter((p) => !Number.isNaN(p)));
-        } else if (ch === "t") {
-          if (params.length >= 4) {
-            const mode = get(0, 0);
-            const r = Math.min(255, Math.max(0, get(1, 0)));
-            const g = Math.min(255, Math.max(0, get(2, 0)));
-            const b2 = Math.min(255, Math.max(0, get(3, 0)));
-            const rgbColor = `rgb(${r}, ${g}, ${b2})`;
-            if (mode === 0) {
-              bg = rgbColor;
-            } else if (mode === 1) {
-              fg = rgbColor;
-            }
-          }
-        } else if (ch === "H" || ch === "f") {
-          const r = Math.max(1, get(0, 1)) - 1;
-          const c = Math.max(1, get(1, 1)) - 1;
-          cur.row = r;
-          cur.col = Math.max(0, Math.min(columns - 1, c));
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "A") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = Math.max(0, cur.row - n);
-        } else if (ch === "B") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = cur.row + n;
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "C") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = Math.min(columns - 1, cur.col + n);
-        } else if (ch === "D") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = Math.max(0, cur.col - n);
-        } else if (ch === "G") {
-          const c = Math.max(1, get(0, 1)) - 1;
-          cur.col = Math.max(0, Math.min(columns - 1, c));
-        } else if (ch === "E") {
-          const n = Math.max(1, get(0, 1));
-          cur.row += n;
-          cur.col = 0;
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-        } else if (ch === "F") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = Math.max(0, cur.row - n);
-          cur.col = 0;
-        } else if (ch === "S") {
-          const n = Math.max(1, get(0, 1));
-          for (let scroll = 0; scroll < n; scroll++) {
-            if (lines.length > 0) {
-              lines.shift();
-              const newLine = [];
-              for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-              lines.push(newLine);
-            }
-          }
-        } else if (ch === "T") {
-          const n = Math.max(1, get(0, 1));
-          for (let scroll = 0; scroll < n; scroll++) {
-            if (lines.length > 0) {
-              lines.pop();
-              const newLine = [];
-              for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-              lines.unshift(newLine);
-            }
-          }
-        } else if (ch === "K") {
-          const mode = get(0, 0);
-          ensureRow(lines, cur.row, columns, fg, bg, bold);
-          if (mode === 0) {
-            clearLine(lines[cur.row], cur.col, columns - 1, fg, bg, bold);
-          } else if (mode === 1) {
-            clearLine(lines[cur.row], 0, cur.col, fg, bg, bold);
-          } else if (mode === 2) {
-            clearLine(lines[cur.row], 0, columns - 1, fg, bg, bold);
-          }
-        } else if (ch === "J") {
-          const mode = get(0, 0);
-          if (mode === 2) {
-            lines.length = 0;
-            cur.row = 0;
-            cur.col = 0;
-          } else if (mode === 0 || mode === 1) {
-            ensureRow(lines, cur.row, columns, fg, bg, bold);
-            if (mode === 0) {
-              clearLine(lines[cur.row], cur.col, columns - 1, fg, bg, bold);
-              for (let r = cur.row + 1; r < lines.length; r++)
-                clearLine(lines[r], 0, columns - 1, fg, bg, bold);
-            } else {
-              for (let r = 0; r < cur.row; r++) clearLine(lines[r], 0, columns - 1, fg, bg, bold);
-              clearLine(lines[cur.row], 0, cur.col, fg, bg, bold);
-            }
-          }
-        } else if (ch === "h") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = true;
-            } else if (param === 33) {
-              iceColors = true;
-            }
-          }
-        } else if (ch === "l") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = false;
-            } else if (param === 33) {
-              iceColors = false;
-            }
-          }
-        }
-        state = "normal";
-        csiParams = "";
-        break;
-      }
-    }
-  }
-  if (lines.length === 0) {
-    const newLine = [];
-    for (let c = 0; c < columns; c++) newLine.push(createCell(7, 0, false));
-    lines.push(newLine);
-  }
-  for (let r = 0; r < lines.length; r++) {
-    const line = lines[r];
-    if (!line) {
-      lines[r] = [];
-      for (let c = 0; c < columns; c++) lines[r].push(createCell(7, 0, false));
-    } else {
-      while (line.length < columns) {
-        line.push(createCell(7, 0, false));
-      }
-    }
-  }
-  return { lines, columns, sauce };
-}
-function parseAnsiDynamic(bytesInput, encoding = "cp437") {
-  let bytes = bytesInput;
-  const sauce = parseSauce(bytesInput);
-  if (isSauceTrailer(bytes)) {
-    bytes = bytes.slice(0, bytes.length - 128);
-  }
-  const lines = [];
-  const cur = { row: 0, col: 0 };
-  const savedCur = { row: 0, col: 0 };
-  let fg = 7;
-  let bg = 0;
-  let bold = false;
-  let lineWrap = true;
-  let iceColors = false;
-  let maxCol = 0;
-  const ESC = 27;
-  let i = 0;
-  let state = "normal";
-  let csiParams = "";
-  const writeChar = (ch) => {
-    if (ch === "") return;
-    if (ch === "\n") {
-      cur.row += 1;
-      cur.col = 0;
-      return;
-    }
-    if (ch === "\r") {
-      cur.col = 0;
-      return;
-    }
-    if (cur.col < 0) cur.col = 0;
-    while (lines.length <= cur.row) {
-      lines.push([]);
-    }
-    while (lines[cur.row].length <= cur.col) {
-      lines[cur.row].push(createCell(7, 0, false));
-    }
-    lines[cur.row][cur.col] = { ch, fg, bg, bold };
-    cur.col += 1;
-    if (cur.col > maxCol) {
-      maxCol = cur.col;
-    }
-  };
-  const applySGR = (params) => {
-    if (params.length === 0) params = [0];
-    const ANSI_TO_DOS = [0, 4, 2, 6, 1, 5, 3, 7];
-    for (const p of params) {
-      if (p === 0) {
-        fg = 7;
-        bg = 0;
-        bold = false;
-        continue;
-      }
-      if (p === 1) {
-        bold = true;
-        continue;
-      }
-      if (p === 22) {
-        bold = false;
-        continue;
-      }
-      if (p === 39) {
-        fg = 7;
-        continue;
-      }
-      if (p === 49) {
-        bg = 0;
-        continue;
-      }
-      if (p === 7) {
-        const tempFg = fg;
-        const tempBg = bg;
-        fg = tempBg;
-        bg = tempFg;
-        continue;
-      }
-      if (p === 27) {
-        fg = 7;
-        bg = 0;
-        continue;
-      }
-      if (p === 25) {
-        continue;
-      }
-      if (p >= 30 && p <= 37) {
-        fg = ANSI_TO_DOS[p - 30];
-        continue;
-      }
-      if (p >= 40 && p <= 47) {
-        bg = ANSI_TO_DOS[p - 40];
-        continue;
-      }
-      if (p >= 90 && p <= 97) {
-        fg = 8 + ANSI_TO_DOS[p - 90];
-        continue;
-      }
-      if (p >= 100 && p <= 107) {
-        bg = 8 + ANSI_TO_DOS[p - 100];
-        continue;
-      }
-    }
-  };
-  while (i < bytes.length) {
-    const b = bytes[i++];
-    if (b === 26) break;
-    switch (state) {
-      case "normal": {
-        if (b === ESC) {
-          state = "esc";
-          break;
-        }
-        writeChar(byteToChar(b, encoding));
-        break;
-      }
-      case "esc": {
-        if (b === 91) {
-          state = "csi";
-          csiParams = "";
-          break;
-        }
-        state = "normal";
-        break;
-      }
-      case "csi": {
-        const ch = String.fromCharCode(b);
-        if (b >= 48 && b <= 63 || ch === " " || ch === "?") {
-          if (csiParams.length < 256) {
-            csiParams += ch;
-          }
-          break;
-        }
-        if (!isValidCsiCommand(ch)) {
-          state = "normal";
-          csiParams = "";
-          break;
-        }
-        const params = csiParams.trim().length ? csiParams.split(";").map((x) => x === "" ? NaN : parseInt(x, 10)) : [];
-        const get = (idx, def) => Number.isNaN(params[idx]) || params[idx] === void 0 ? def : params[idx];
-        if (ch === "s") {
-          savedCur.row = cur.row;
-          savedCur.col = cur.col;
-        } else if (ch === "u") {
-          cur.row = savedCur.row;
-          cur.col = savedCur.col;
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-        } else if (ch === "m") {
-          applySGR(params.filter((p) => !Number.isNaN(p)));
-        } else if (ch === "H" || ch === "f") {
-          const r = Math.max(1, get(0, 1)) - 1;
-          const c = Math.max(1, get(1, 1)) - 1;
-          cur.row = r;
-          cur.col = c;
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-          if (cur.col > maxCol) {
-            maxCol = cur.col;
-          }
-        } else if (ch === "A") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = Math.max(0, cur.row - n);
-        } else if (ch === "B") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = cur.row + n;
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-        } else if (ch === "C") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = cur.col + n;
-          if (cur.col > maxCol) {
-            maxCol = cur.col;
-          }
-        } else if (ch === "D") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = Math.max(0, cur.col - n);
-        } else if (ch === "G") {
-          const c = Math.max(1, get(0, 1)) - 1;
-          cur.col = Math.max(0, c);
-          if (cur.col > maxCol) {
-            maxCol = cur.col;
-          }
-        } else if (ch === "K") {
-          const mode = get(0, 0);
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-          const line = lines[cur.row];
-          if (mode === 0) {
-            for (let c = cur.col; c < line.length; c++) {
-              line[c] = createCell(fg, bg, bold);
-            }
-          } else if (mode === 1) {
-            for (let c = 0; c <= cur.col; c++) {
-              if (c < line.length) {
-                line[c] = createCell(fg, bg, bold);
-              }
-            }
-          } else if (mode === 2) {
-            line.length = 0;
-          }
-        } else if (ch === "J") {
-          const mode = get(0, 0);
-          if (mode === 2) {
-            lines.length = 0;
-            cur.row = 0;
-            cur.col = 0;
-            maxCol = 0;
-          } else if (mode === 0 || mode === 1) {
-            while (lines.length <= cur.row) {
-              lines.push([]);
-            }
-            if (mode === 0) {
-              const line = lines[cur.row];
-              for (let c = cur.col; c < line.length; c++) {
-                line[c] = createCell(fg, bg, bold);
-              }
-              for (let r = cur.row + 1; r < lines.length; r++) {
-                lines[r].length = 0;
-              }
-            } else {
-              for (let r = 0; r < cur.row; r++) {
-                lines[r].length = 0;
-              }
-              const line = lines[cur.row];
-              for (let c = 0; c <= cur.col; c++) {
-                if (c < line.length) {
-                  line[c] = createCell(fg, bg, bold);
-                }
-              }
-            }
-          }
-        } else if (ch === "h") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = true;
-            } else if (param === 33) {
-              iceColors = true;
-            }
-          }
-        } else if (ch === "l") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = false;
-            } else if (param === 33) {
-              iceColors = false;
-            }
-          }
-        }
-        state = "normal";
-        csiParams = "";
-        break;
-      }
-    }
-  }
-  if (lines.length === 0) {
-    lines.push([]);
-  }
-  const actualRows = lines.length;
-  const actualColumns = Math.max(1, maxCol);
-  for (let r = 0; r < lines.length; r++) {
-    const line = lines[r];
-    while (line.length < actualColumns) {
-      line.push(createCell(7, 0, false));
-    }
-  }
-  return { lines, columns: actualColumns, sauce };
-}
-function parseAnsiIncrementalDynamic(bytesInput, maxByteIndex, encoding = "cp437") {
-  let bytes = bytesInput;
-  const sauce = parseSauce(bytesInput);
-  if (isSauceTrailer(bytes)) {
-    bytes = bytes.slice(0, bytes.length - 128);
-  }
-  const stopAt = Math.min(maxByteIndex, bytes.length);
-  const lines = [];
-  const cur = { row: 0, col: 0 };
-  const savedCur = { row: 0, col: 0 };
-  let fg = 7;
-  let bg = 0;
-  let bold = false;
-  let lineWrap = true;
-  let iceColors = false;
-  let maxCol = 0;
-  const ESC = 27;
-  let i = 0;
-  let state = "normal";
-  let csiParams = "";
-  const writeChar = (ch) => {
-    if (ch === "") return;
-    if (ch === "\n") {
-      cur.row += 1;
-      cur.col = 0;
-      return;
-    }
-    if (ch === "\r") {
-      cur.col = 0;
-      return;
-    }
-    if (cur.col < 0) cur.col = 0;
-    while (lines.length <= cur.row) {
-      lines.push([]);
-    }
-    while (lines[cur.row].length <= cur.col) {
-      lines[cur.row].push(createCell(7, 0, false));
-    }
-    lines[cur.row][cur.col] = { ch, fg, bg, bold };
-    cur.col += 1;
-    if (cur.col > maxCol) {
-      maxCol = cur.col;
-    }
-  };
-  const applySGR = (params) => {
-    if (params.length === 0) params = [0];
-    const ANSI_TO_DOS = [0, 4, 2, 6, 1, 5, 3, 7];
-    for (const p of params) {
-      if (p === 0) {
-        fg = 7;
-        bg = 0;
-        bold = false;
-        continue;
-      }
-      if (p === 1) {
-        bold = true;
-        continue;
-      }
-      if (p === 22) {
-        bold = false;
-        continue;
-      }
-      if (p === 39) {
-        fg = 7;
-        continue;
-      }
-      if (p === 49) {
-        bg = 0;
-        continue;
-      }
-      if (p === 7) {
-        const tempFg = fg;
-        const tempBg = bg;
-        fg = tempBg;
-        bg = tempFg;
-        continue;
-      }
-      if (p === 27) {
-        fg = 7;
-        bg = 0;
-        continue;
-      }
-      if (p === 25) {
-        continue;
-      }
-      if (p >= 30 && p <= 37) {
-        fg = ANSI_TO_DOS[p - 30];
-        continue;
-      }
-      if (p >= 40 && p <= 47) {
-        bg = ANSI_TO_DOS[p - 40];
-        continue;
-      }
-      if (p >= 90 && p <= 97) {
-        fg = 8 + ANSI_TO_DOS[p - 90];
-        continue;
-      }
-      if (p >= 100 && p <= 107) {
-        bg = 8 + ANSI_TO_DOS[p - 100];
-        continue;
-      }
-    }
-  };
-  while (i < stopAt) {
-    const b = bytes[i++];
-    if (b === 26) break;
-    switch (state) {
-      case "normal": {
-        if (b === ESC) {
-          state = "esc";
-          break;
-        }
-        writeChar(byteToChar(b, encoding));
-        break;
-      }
-      case "esc": {
-        if (b === 91) {
-          state = "csi";
-          csiParams = "";
-          break;
-        }
-        state = "normal";
-        break;
-      }
-      case "csi": {
-        const ch = String.fromCharCode(b);
-        if (b >= 48 && b <= 63 || ch === " " || ch === "?") {
-          if (csiParams.length < 256) {
-            csiParams += ch;
-          }
-          break;
-        }
-        if (!isValidCsiCommand(ch)) {
-          state = "normal";
-          csiParams = "";
-          break;
-        }
-        const params = csiParams.trim().length ? csiParams.split(";").map((x) => x === "" ? NaN : parseInt(x, 10)) : [];
-        const get = (idx, def) => Number.isNaN(params[idx]) || params[idx] === void 0 ? def : params[idx];
-        if (ch === "s") {
-          savedCur.row = cur.row;
-          savedCur.col = cur.col;
-        } else if (ch === "u") {
-          cur.row = savedCur.row;
-          cur.col = savedCur.col;
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-        } else if (ch === "m") {
-          applySGR(params.filter((p) => !Number.isNaN(p)));
-        } else if (ch === "t") {
-          if (params.length >= 4) {
-            const mode = get(0, 0);
-            const r = Math.min(255, Math.max(0, get(1, 0)));
-            const g = Math.min(255, Math.max(0, get(2, 0)));
-            const b2 = Math.min(255, Math.max(0, get(3, 0)));
-            const rgbColor = `rgb(${r}, ${g}, ${b2})`;
-            if (mode === 0) {
-              bg = rgbColor;
-            } else if (mode === 1) {
-              fg = rgbColor;
-            }
-          }
-        } else if (ch === "H" || ch === "f") {
-          const r = Math.max(1, get(0, 1)) - 1;
-          const c = Math.max(1, get(1, 1)) - 1;
-          cur.row = r;
-          cur.col = c;
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-          if (cur.col > maxCol) {
-            maxCol = cur.col;
-          }
-        } else if (ch === "A") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = Math.max(0, cur.row - n);
-        } else if (ch === "B") {
-          const n = Math.max(1, get(0, 1));
-          cur.row = cur.row + n;
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-        } else if (ch === "C") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = cur.col + n;
-          if (cur.col > maxCol) {
-            maxCol = cur.col;
-          }
-        } else if (ch === "D") {
-          const n = Math.max(1, get(0, 1));
-          cur.col = Math.max(0, cur.col - n);
-        } else if (ch === "G") {
-          const c = Math.max(1, get(0, 1)) - 1;
-          cur.col = Math.max(0, c);
-          if (cur.col > maxCol) {
-            maxCol = cur.col;
-          }
-        } else if (ch === "K") {
-          const mode = get(0, 0);
-          while (lines.length <= cur.row) {
-            lines.push([]);
-          }
-          const line = lines[cur.row];
-          if (mode === 0) {
-            for (let c = cur.col; c < line.length; c++) {
-              line[c] = createCell(fg, bg, bold);
-            }
-          } else if (mode === 1) {
-            for (let c = 0; c <= cur.col; c++) {
-              if (c < line.length) {
-                line[c] = createCell(fg, bg, bold);
-              }
-            }
-          } else if (mode === 2) {
-            line.length = 0;
-          }
-        } else if (ch === "J") {
-          const mode = get(0, 0);
-          if (mode === 2) {
-            lines.length = 0;
-            cur.row = 0;
-            cur.col = 0;
-            maxCol = 0;
-          } else if (mode === 0 || mode === 1) {
-            while (lines.length <= cur.row) {
-              lines.push([]);
-            }
-            if (mode === 0) {
-              const line = lines[cur.row];
-              for (let c = cur.col; c < line.length; c++) {
-                line[c] = createCell(fg, bg, bold);
-              }
-              for (let r = cur.row + 1; r < lines.length; r++) {
-                lines[r].length = 0;
-              }
-            } else {
-              for (let r = 0; r < cur.row; r++) {
-                lines[r].length = 0;
-              }
-              const line = lines[cur.row];
-              for (let c = 0; c <= cur.col; c++) {
-                if (c < line.length) {
-                  line[c] = createCell(fg, bg, bold);
-                }
-              }
-            }
-          }
-        } else if (ch === "h") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = true;
-            } else if (param === 33) {
-              iceColors = true;
-            }
-          }
-        } else if (ch === "l") {
-          for (const param of params) {
-            if (param === 7) {
-              lineWrap = false;
-            } else if (param === 33) {
-              iceColors = false;
-            }
-          }
-        }
-        state = "normal";
-        csiParams = "";
-        break;
-      }
-    }
-  }
-  if (lines.length === 0) {
-    lines.push([]);
-  }
-  const actualRows = lines.length;
-  const actualColumns = Math.max(1, maxCol);
-  for (let r = 0; r < lines.length; r++) {
-    const line = lines[r];
-    while (line.length < actualColumns) {
-      line.push(createCell(7, 0, false));
-    }
-  }
-  return { lines, columns: actualColumns, sauce };
-}
-function detectAnimation(bytes) {
-  const sauce = parseSauce(bytes);
-  if (sauce && sauce.dataType === 1 && sauce.fileType === 2) {
-    return true;
-  }
-  const maxCheck = Math.min(2048, bytes.length);
-  let i = 0;
-  while (i < maxCheck) {
-    const b = bytes[i++];
-    if (b === 27) {
-      if (i < maxCheck && bytes[i] === 91) {
-        i++;
-        while (i < maxCheck && !isLetter(bytes[i])) {
-          i++;
-        }
-        if (i < maxCheck) {
-          const cmd = bytes[i];
-          if (cmd === 72 || cmd === 102) {
-            return true;
-          }
-        }
-      }
-    }
-  }
-  return false;
-}
-function isLetter(byte) {
-  return byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122;
-}
-function isValidCsiCommand(ch) {
-  const validCommands = "ABCDEFGHIJKLMPSTXYZhfmlr";
-  return validCommands.includes(ch);
-}
-function getSauceInfo(sauce) {
-  if (!sauce) return null;
-  const info = {
-    ...sauce,
-    // Interpret data types
-    fileTypeDescription: getFileTypeDescription(sauce.dataType, sauce.fileType),
-    // Check if file has valid dimensions
-    hasDimensions: sauce.dataType === 1 && [1, 2].includes(sauce.fileType) && sauce.tInfo1 > 0 && sauce.tInfo2 > 0,
-    // Get dimensions if available
-    width: sauce.tInfo1 || void 0,
-    height: sauce.tInfo2 || void 0,
-    // Font information (for ANSI files)
-    fontName: sauce.dataType === 1 && [1, 2].includes(sauce.fileType) ? getFontName(sauce.tInfo3) : void 0,
-    // ICE colors flag
-    iceColors: (sauce.tFlags & 1) !== 0,
-    // Letter spacing (aspect ratio)
-    letterSpacing: (sauce.tFlags & 2) !== 0,
-    // Aspect ratio information
-    aspectRatio: sauce.dataType === 1 && [1, 2].includes(sauce.fileType) ? getAspectRatio(sauce.tInfo4) : void 0
-  };
-  return info;
 }
 function getFileTypeDescription(dataType, fileType) {
   const descriptions = {
@@ -1448,24 +301,743 @@ function getAspectRatio(flags) {
   };
   return aspectRatios[flags] || { width: 1, height: 1 };
 }
+function getSauceInfo(sauce) {
+  if (!sauce) return null;
+  const info = {
+    ...sauce,
+    // Interpret data types
+    fileTypeDescription: getFileTypeDescription(sauce.dataType, sauce.fileType),
+    // Check if file has valid dimensions
+    hasDimensions: sauce.dataType === 1 && [1, 2].includes(sauce.fileType) && sauce.tInfo1 > 0 && sauce.tInfo2 > 0,
+    // Get dimensions if available
+    width: sauce.tInfo1 || void 0,
+    height: sauce.tInfo2 || void 0,
+    // Font information (for ANSI files)
+    fontName: sauce.dataType === 1 && [1, 2].includes(sauce.fileType) ? getFontName(sauce.tInfo3) : void 0,
+    // ICE colors flag
+    iceColors: (sauce.tFlags & 1) !== 0,
+    // Letter spacing (aspect ratio)
+    letterSpacing: (sauce.tFlags & 2) !== 0,
+    // Aspect ratio information
+    aspectRatio: sauce.dataType === 1 && [1, 2].includes(sauce.fileType) ? getAspectRatio(sauce.tInfo4) : void 0
+  };
+  return info;
+}
+
+// src/ansi/parser.ts
+var ESC = 27;
+var CSI_BRACKET = 91;
+var SOFT_EOF = 26;
+var LF = 10;
+var CR = 13;
+var DIGIT_MIN = 48;
+var DIGIT_MAX = 57;
+var PARAMETER_BYTE_MIN = 48;
+var PARAMETER_BYTE_MAX = 63;
+var SEMICOLON = 59;
+var SPACE = 32;
+var QUESTION_MARK = 63;
+var MAX_CSI_PARAMS = 256;
+var ANSI_RESET = 0;
+var ANSI_BOLD = 1;
+var ANSI_BOLD_OFF = 22;
+var ANSI_REVERSE_VIDEO = 7;
+var ANSI_REVERSE_VIDEO_OFF = 27;
+var ANSI_BLINK_OFF = 25;
+var ANSI_FG_DEFAULT = 39;
+var ANSI_BG_DEFAULT = 49;
+var ANSI_FG_BASE_MIN = 30;
+var ANSI_FG_BASE_MAX = 37;
+var ANSI_BG_BASE_MIN = 40;
+var ANSI_BG_BASE_MAX = 47;
+var ANSI_FG_BRIGHT_MIN = 90;
+var ANSI_FG_BRIGHT_MAX = 97;
+var ANSI_BG_BRIGHT_MIN = 100;
+var ANSI_BG_BRIGHT_MAX = 107;
+var ANSI_TO_DOS = [0, 4, 2, 6, 1, 5, 3, 7];
+var DEFAULT_FG = 7;
+var DEFAULT_BG = 0;
+var DEFAULT_COLUMNS = 80;
+var CSI_CMD_CURSOR_UP = "A";
+var CSI_CMD_CURSOR_DOWN = "B";
+var CSI_CMD_CURSOR_FORWARD = "C";
+var CSI_CMD_CURSOR_BACK = "D";
+var CSI_CMD_CURSOR_NEXT_LINE = "E";
+var CSI_CMD_CURSOR_PREV_LINE = "F";
+var CSI_CMD_CURSOR_HORIZONTAL_ABS = "G";
+var CSI_CMD_CURSOR_POSITION = "H";
+var CSI_CMD_CURSOR_POSITION_ALT = "f";
+var CSI_CMD_CURSOR_SAVE = "s";
+var CSI_CMD_CURSOR_RESTORE = "u";
+var CSI_CMD_ERASE_LINE = "K";
+var CSI_CMD_ERASE_DISPLAY = "J";
+var CSI_CMD_SCROLL_UP = "S";
+var CSI_CMD_SCROLL_DOWN = "T";
+var CSI_CMD_SGR = "m";
+var CSI_CMD_ICE_COLOR = "t";
+var CSI_CMD_SET_MODE = "h";
+var CSI_CMD_RESET_MODE = "l";
+var MODE_LINE_WRAP = 7;
+var MODE_ICE_COLORS = 33;
+var LETTER_UPPER_MIN = 65;
+var LETTER_UPPER_MAX = 90;
+var LETTER_LOWER_MIN = 97;
+var LETTER_LOWER_MAX = 122;
+var VALID_CSI_COMMANDS = "ABCDEFGHIJKLMPSTXYZhfmlrmsu";
+function byteToChar(byte, encoding = "cp437") {
+  switch (encoding) {
+    case "cp437":
+      return cp437ByteToChar(byte);
+    case "cp850":
+    case "cp1252":
+    case "iso-8859-1":
+      if (byte < 128) {
+        return String.fromCharCode(byte);
+      } else {
+        return cp437ByteToChar(byte);
+      }
+    case "utf-8":
+      return String.fromCharCode(byte);
+    default:
+      return cp437ByteToChar(byte);
+  }
+}
+function createCell(fg, bg, bold) {
+  return { ch: " ", fg, bg, bold };
+}
+var DEFAULT_CELL = createCell(DEFAULT_FG, DEFAULT_BG, false);
+function createEmptyLine(columns) {
+  return Array.from({ length: columns }, () => ({ ...DEFAULT_CELL }));
+}
+function parseCsiParams(csiParamBytes) {
+  if (csiParamBytes.length === 0) return [];
+  const params = [];
+  let currentParam = 0;
+  let hasValue = false;
+  for (let i = 0; i < csiParamBytes.length; i++) {
+    const byte = csiParamBytes[i];
+    if (byte === SPACE || byte === QUESTION_MARK) continue;
+    if (byte === SEMICOLON) {
+      params.push(hasValue ? currentParam : NaN);
+      currentParam = 0;
+      hasValue = false;
+      continue;
+    }
+    if (byte >= DIGIT_MIN && byte <= DIGIT_MAX) {
+      currentParam = currentParam * 10 + (byte - DIGIT_MIN);
+      hasValue = true;
+    } else {
+      if (hasValue) {
+        params.push(currentParam);
+        currentParam = 0;
+        hasValue = false;
+      }
+    }
+  }
+  if (hasValue) {
+    params.push(currentParam);
+  }
+  return params;
+}
+function ensureRow(lines, row, columns, fg, bg, bold) {
+  while (lines.length <= row) {
+    lines.push(createEmptyLine(columns));
+  }
+}
+function clearLine(line, from, to, fg, bg, bold) {
+  const start = Math.max(0, from);
+  const end = Math.min(line.length - 1, to);
+  for (let c = start; c <= end; c++) {
+    line[c] = createCell(fg, bg, bold);
+  }
+}
+function isLetter(byte) {
+  return byte >= LETTER_UPPER_MIN && byte <= LETTER_UPPER_MAX || byte >= LETTER_LOWER_MIN && byte <= LETTER_LOWER_MAX;
+}
+function isValidCsiCommand(ch) {
+  return VALID_CSI_COMMANDS.includes(ch);
+}
+function applySGR(params, state) {
+  if (params.length === 0) params = [ANSI_RESET];
+  for (const p of params) {
+    if (p === ANSI_RESET) {
+      state.fg = DEFAULT_FG;
+      state.bg = DEFAULT_BG;
+      state.bold = false;
+      continue;
+    }
+    if (p === ANSI_BOLD) {
+      state.bold = true;
+      continue;
+    }
+    if (p === ANSI_BOLD_OFF) {
+      state.bold = false;
+      continue;
+    }
+    if (p === ANSI_FG_DEFAULT) {
+      state.fg = DEFAULT_FG;
+      continue;
+    }
+    if (p === ANSI_BG_DEFAULT) {
+      state.bg = DEFAULT_BG;
+      continue;
+    }
+    if (p === ANSI_REVERSE_VIDEO) {
+      const tempFg = state.fg;
+      const tempBg = state.bg;
+      state.fg = tempBg;
+      state.bg = tempFg;
+      continue;
+    }
+    if (p === ANSI_REVERSE_VIDEO_OFF) {
+      state.fg = DEFAULT_FG;
+      state.bg = DEFAULT_BG;
+      continue;
+    }
+    if (p === ANSI_BLINK_OFF) {
+      continue;
+    }
+    if (p >= ANSI_FG_BASE_MIN && p <= ANSI_FG_BASE_MAX) {
+      state.fg = ANSI_TO_DOS[p - ANSI_FG_BASE_MIN];
+      continue;
+    }
+    if (p >= ANSI_BG_BASE_MIN && p <= ANSI_BG_BASE_MAX) {
+      state.bg = ANSI_TO_DOS[p - ANSI_BG_BASE_MIN];
+      continue;
+    }
+    if (p >= ANSI_FG_BRIGHT_MIN && p <= ANSI_FG_BRIGHT_MAX) {
+      state.fg = 8 + ANSI_TO_DOS[p - ANSI_FG_BRIGHT_MIN];
+      continue;
+    }
+    if (p >= ANSI_BG_BRIGHT_MIN && p <= ANSI_BG_BRIGHT_MAX) {
+      state.bg = 8 + ANSI_TO_DOS[p - ANSI_BG_BRIGHT_MIN];
+      continue;
+    }
+  }
+}
+function handleCursorSave(ctx) {
+  if (ctx.params.length === 0) {
+    ctx.state.savedCur.row = ctx.state.cur.row;
+    ctx.state.savedCur.col = ctx.state.cur.col;
+  }
+}
+function handleCursorRestore(ctx) {
+  if (ctx.params.length === 0) {
+    ctx.state.cur.row = ctx.state.savedCur.row;
+    ctx.state.cur.col = ctx.state.savedCur.col;
+    ctx.ensureRow();
+  }
+}
+function handleCursorPosition(ctx) {
+  const r = Math.max(1, ctx.get(0, 1)) - 1;
+  const c = Math.max(1, ctx.get(1, 1)) - 1;
+  ctx.state.cur.row = r;
+  if (ctx.state.isDynamic) {
+    ctx.state.cur.col = Math.max(0, c);
+    if (ctx.state.maxCol !== void 0 && ctx.state.cur.col > ctx.state.maxCol) {
+      ctx.state.maxCol = ctx.state.cur.col;
+    }
+  } else {
+    ctx.state.cur.col = Math.max(0, Math.min(ctx.columns - 1, c));
+  }
+  ctx.ensureRow();
+}
+function handleCursorUp(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  ctx.state.cur.row = Math.max(0, ctx.state.cur.row - n);
+}
+function handleCursorDown(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  ctx.state.cur.row = ctx.state.cur.row + n;
+  ctx.ensureRow();
+}
+function handleCursorForward(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  if (ctx.state.isDynamic) {
+    ctx.state.cur.col = ctx.state.cur.col + n;
+    if (ctx.state.maxCol !== void 0 && ctx.state.cur.col > ctx.state.maxCol) {
+      ctx.state.maxCol = ctx.state.cur.col;
+    }
+  } else {
+    ctx.state.cur.col = Math.min(ctx.columns - 1, ctx.state.cur.col + n);
+  }
+}
+function handleCursorBack(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  ctx.state.cur.col = Math.max(0, ctx.state.cur.col - n);
+}
+function handleCursorHorizontalAbsolute(ctx) {
+  const c = Math.max(1, ctx.get(0, 1)) - 1;
+  if (ctx.state.isDynamic) {
+    ctx.state.cur.col = Math.max(0, c);
+    if (ctx.state.maxCol !== void 0 && ctx.state.cur.col > ctx.state.maxCol) {
+      ctx.state.maxCol = ctx.state.cur.col;
+    }
+  } else {
+    ctx.state.cur.col = Math.max(0, Math.min(ctx.columns - 1, c));
+  }
+}
+function handleCursorNextLine(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  ctx.state.cur.row += n;
+  ctx.state.cur.col = 0;
+  ctx.ensureRow();
+}
+function handleCursorPrevLine(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  ctx.state.cur.row = Math.max(0, ctx.state.cur.row - n);
+  ctx.state.cur.col = 0;
+}
+function handleSGR(ctx) {
+  applySGR(
+    ctx.params.filter((p) => !Number.isNaN(p)),
+    ctx.state
+  );
+}
+function handleIceColors(ctx) {
+  if (ctx.params.length >= 4) {
+    const mode = ctx.get(0, 0);
+    const r = Math.min(255, Math.max(0, ctx.get(1, 0)));
+    const g = Math.min(255, Math.max(0, ctx.get(2, 0)));
+    const b = Math.min(255, Math.max(0, ctx.get(3, 0)));
+    const rgbColor = `rgb(${r}, ${g}, ${b})`;
+    if (mode === 0) {
+      ctx.state.bg = rgbColor;
+    } else if (mode === 1) {
+      ctx.state.fg = rgbColor;
+    }
+  }
+}
+function handleEraseLine(ctx) {
+  const mode = ctx.get(0, 0);
+  ctx.ensureRow();
+  if (ctx.state.isDynamic) {
+    const line = ctx.state.lines[ctx.state.cur.row];
+    if (mode === 0) {
+      for (let c = ctx.state.cur.col; c < line.length; c++) {
+        line[c] = createCell(ctx.state.fg, ctx.state.bg, ctx.state.bold);
+      }
+    } else if (mode === 1) {
+      for (let c = 0; c <= ctx.state.cur.col; c++) {
+        if (c < line.length) {
+          line[c] = createCell(ctx.state.fg, ctx.state.bg, ctx.state.bold);
+        }
+      }
+    } else if (mode === 2) {
+      line.length = 0;
+    }
+  } else {
+    if (mode === 0) {
+      clearLine(
+        ctx.state.lines[ctx.state.cur.row],
+        ctx.state.cur.col,
+        ctx.columns - 1,
+        ctx.state.fg,
+        ctx.state.bg,
+        ctx.state.bold
+      );
+    } else if (mode === 1) {
+      clearLine(
+        ctx.state.lines[ctx.state.cur.row],
+        0,
+        ctx.state.cur.col,
+        ctx.state.fg,
+        ctx.state.bg,
+        ctx.state.bold
+      );
+    } else if (mode === 2) {
+      clearLine(
+        ctx.state.lines[ctx.state.cur.row],
+        0,
+        ctx.columns - 1,
+        ctx.state.fg,
+        ctx.state.bg,
+        ctx.state.bold
+      );
+    }
+  }
+}
+function handleEraseDisplay(ctx) {
+  const mode = ctx.get(0, 0);
+  if (mode === 2) {
+    ctx.state.lines.length = 0;
+    if (ctx.state.isDynamic && ctx.state.maxCol !== void 0) {
+      const newLine = [];
+      for (let c = 0; c < Math.max(ctx.state.maxCol + 1, DEFAULT_COLUMNS); c++) {
+        newLine.push(createCell(DEFAULT_FG, DEFAULT_BG, false));
+      }
+      ctx.state.lines.push(newLine);
+      ctx.state.maxCol = 0;
+    } else {
+      ctx.state.lines.push(createEmptyLine(ctx.columns));
+    }
+    ctx.state.cur.row = 0;
+    ctx.state.cur.col = 0;
+  } else if (mode === 0 || mode === 1) {
+    ctx.ensureRow();
+    if (ctx.state.isDynamic) {
+      if (mode === 0) {
+        const line = ctx.state.lines[ctx.state.cur.row];
+        for (let c = ctx.state.cur.col; c < line.length; c++) {
+          line[c] = createCell(ctx.state.fg, ctx.state.bg, ctx.state.bold);
+        }
+        for (let r = ctx.state.cur.row + 1; r < ctx.state.lines.length; r++) {
+          ctx.state.lines[r].length = 0;
+        }
+      } else {
+        for (let r = 0; r < ctx.state.cur.row; r++) {
+          ctx.state.lines[r].length = 0;
+        }
+        const line = ctx.state.lines[ctx.state.cur.row];
+        for (let c = 0; c <= ctx.state.cur.col; c++) {
+          if (c < line.length) {
+            line[c] = createCell(ctx.state.fg, ctx.state.bg, ctx.state.bold);
+          }
+        }
+      }
+    } else {
+      if (mode === 0) {
+        clearLine(
+          ctx.state.lines[ctx.state.cur.row],
+          ctx.state.cur.col,
+          ctx.columns - 1,
+          ctx.state.fg,
+          ctx.state.bg,
+          ctx.state.bold
+        );
+        for (let r = ctx.state.cur.row + 1; r < ctx.state.lines.length; r++)
+          clearLine(
+            ctx.state.lines[r],
+            0,
+            ctx.columns - 1,
+            ctx.state.fg,
+            ctx.state.bg,
+            ctx.state.bold
+          );
+      } else {
+        for (let r = 0; r < ctx.state.cur.row; r++)
+          clearLine(
+            ctx.state.lines[r],
+            0,
+            ctx.columns - 1,
+            ctx.state.fg,
+            ctx.state.bg,
+            ctx.state.bold
+          );
+        clearLine(
+          ctx.state.lines[ctx.state.cur.row],
+          0,
+          ctx.state.cur.col,
+          ctx.state.fg,
+          ctx.state.bg,
+          ctx.state.bold
+        );
+      }
+    }
+  }
+}
+function handleScrollUp(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  for (let scroll = 0; scroll < n; scroll++) {
+    if (ctx.state.lines.length > 0) {
+      ctx.state.lines.shift();
+      if (ctx.state.isDynamic) {
+        const colWidth = ctx.state.maxCol !== void 0 ? Math.max(ctx.state.maxCol + 1, DEFAULT_COLUMNS) : DEFAULT_COLUMNS;
+        ctx.state.lines.push(createEmptyLine(colWidth));
+      } else {
+        ctx.state.lines.push(createEmptyLine(ctx.columns));
+      }
+    }
+  }
+}
+function handleScrollDown(ctx) {
+  const n = Math.max(1, ctx.get(0, 1));
+  for (let scroll = 0; scroll < n; scroll++) {
+    if (ctx.state.lines.length > 0) {
+      ctx.state.lines.pop();
+      if (ctx.state.isDynamic) {
+        const colWidth = ctx.state.maxCol !== void 0 ? Math.max(ctx.state.maxCol + 1, DEFAULT_COLUMNS) : DEFAULT_COLUMNS;
+        ctx.state.lines.unshift(createEmptyLine(colWidth));
+      } else {
+        ctx.state.lines.unshift(createEmptyLine(ctx.columns));
+      }
+    }
+  }
+}
+function handleSetMode(ctx) {
+  for (const param of ctx.params) {
+    if (param === MODE_LINE_WRAP) {
+      ctx.state.lineWrap = true;
+    } else if (param === MODE_ICE_COLORS) {
+      ctx.state.iceColors = true;
+    }
+  }
+}
+function handleResetMode(ctx) {
+  for (const param of ctx.params) {
+    if (param === MODE_LINE_WRAP) {
+      ctx.state.lineWrap = false;
+    } else if (param === MODE_ICE_COLORS) {
+      ctx.state.iceColors = false;
+    }
+  }
+}
+var CSI_HANDLERS = {
+  [CSI_CMD_CURSOR_SAVE]: handleCursorSave,
+  [CSI_CMD_CURSOR_RESTORE]: handleCursorRestore,
+  [CSI_CMD_CURSOR_POSITION]: handleCursorPosition,
+  [CSI_CMD_CURSOR_POSITION_ALT]: handleCursorPosition,
+  [CSI_CMD_CURSOR_UP]: handleCursorUp,
+  [CSI_CMD_CURSOR_DOWN]: handleCursorDown,
+  [CSI_CMD_CURSOR_FORWARD]: handleCursorForward,
+  [CSI_CMD_CURSOR_BACK]: handleCursorBack,
+  [CSI_CMD_CURSOR_HORIZONTAL_ABS]: handleCursorHorizontalAbsolute,
+  [CSI_CMD_CURSOR_NEXT_LINE]: handleCursorNextLine,
+  [CSI_CMD_CURSOR_PREV_LINE]: handleCursorPrevLine,
+  [CSI_CMD_SGR]: handleSGR,
+  [CSI_CMD_ICE_COLOR]: handleIceColors,
+  [CSI_CMD_ERASE_LINE]: handleEraseLine,
+  [CSI_CMD_ERASE_DISPLAY]: handleEraseDisplay,
+  [CSI_CMD_SCROLL_UP]: handleScrollUp,
+  [CSI_CMD_SCROLL_DOWN]: handleScrollDown,
+  [CSI_CMD_SET_MODE]: handleSetMode,
+  [CSI_CMD_RESET_MODE]: handleResetMode
+};
+function parseAnsiCore(bytesInput, options = {}) {
+  const { columns, maxByteIndex, encoding = "cp437" } = options;
+  const isDynamic = columns === void 0;
+  const isIncremental = maxByteIndex !== void 0;
+  let bytes = bytesInput;
+  const sauce = parseSauce(bytesInput);
+  if (isSauceTrailer(bytes)) {
+    let stripSize = SAUCE_TRAILER_SIZE;
+    const eofPos = bytes.length - SAUCE_TRAILER_SIZE - 1;
+    if (eofPos >= 0 && bytes[eofPos] === SAUCE_EOF) {
+      stripSize += 1;
+    }
+    if (sauce && sauce.comments > 0) {
+      stripSize += COMMENT_ID_SIZE + sauce.comments * COMMENT_SIZE;
+    }
+    bytes = bytes.slice(0, bytes.length - stripSize);
+  }
+  const stopAt = isIncremental ? Math.min(maxByteIndex, bytes.length) : bytes.length;
+  const state = {
+    lines: [],
+    cur: { row: 0, col: 0 },
+    savedCur: { row: 0, col: 0 },
+    fg: DEFAULT_FG,
+    bg: DEFAULT_BG,
+    bold: false,
+    lineWrap: true,
+    iceColors: false,
+    columns,
+    maxCol: isDynamic ? 0 : void 0,
+    isDynamic
+  };
+  let i = 0;
+  let parserState = "normal";
+  let csiParams = [];
+  const writeChar = (ch) => {
+    if (ch === "") return;
+    if (ch === "\n") {
+      state.cur.row += 1;
+      state.cur.col = 0;
+      return;
+    }
+    if (ch === "\r") {
+      return;
+    }
+    if (state.cur.col < 0) state.cur.col = 0;
+    if (isDynamic) {
+      while (state.lines.length <= state.cur.row) {
+        state.lines.push([]);
+      }
+      while (state.lines[state.cur.row].length <= state.cur.col) {
+        state.lines[state.cur.row].push(createCell(DEFAULT_FG, DEFAULT_BG, false));
+      }
+      state.lines[state.cur.row][state.cur.col] = {
+        ch,
+        fg: state.fg,
+        bg: state.bg,
+        bold: state.bold
+      };
+      state.cur.col += 1;
+      if (state.maxCol !== void 0 && state.cur.col > state.maxCol) {
+        state.maxCol = state.cur.col;
+      }
+    } else {
+      ensureRow(state.lines, state.cur.row, columns, state.fg, state.bg, state.bold);
+      if (state.cur.col >= 0 && state.cur.col < columns) {
+        state.lines[state.cur.row][state.cur.col] = {
+          ch,
+          fg: state.fg,
+          bg: state.bg,
+          bold: state.bold
+        };
+      }
+      state.cur.col += 1;
+      if (state.cur.col > columns - 1) {
+        if (state.lineWrap) {
+          state.cur.row += 1;
+          state.cur.col = 0;
+        } else {
+          state.cur.col = columns - 1;
+        }
+      }
+    }
+  };
+  while (i < stopAt) {
+    const b = bytes[i++];
+    if (b === SOFT_EOF) break;
+    switch (parserState) {
+      case "normal": {
+        if (b === ESC) {
+          parserState = "esc";
+          break;
+        }
+        writeChar(byteToChar(b, encoding));
+        break;
+      }
+      case "esc": {
+        if (b === CSI_BRACKET) {
+          parserState = "csi";
+          csiParams = [];
+          break;
+        }
+        parserState = "normal";
+        break;
+      }
+      case "csi": {
+        const ch = String.fromCharCode(b);
+        if (b >= PARAMETER_BYTE_MIN && b <= PARAMETER_BYTE_MAX || ch === " " || ch === "?") {
+          if (csiParams.length < MAX_CSI_PARAMS) {
+            csiParams.push(b);
+          }
+          break;
+        }
+        if (!isValidCsiCommand(ch)) {
+          parserState = "normal";
+          csiParams = [];
+          break;
+        }
+        const params = parseCsiParams(csiParams);
+        const get = (idx, def) => Number.isNaN(params[idx]) || params[idx] === void 0 ? def : params[idx];
+        const handler = CSI_HANDLERS[ch];
+        if (handler) {
+          const ctx = {
+            state,
+            params,
+            get,
+            columns: columns || 0,
+            ensureRow: () => {
+              if (isDynamic) {
+                while (state.lines.length <= state.cur.row) {
+                  state.lines.push([]);
+                }
+              } else {
+                ensureRow(state.lines, state.cur.row, columns, state.fg, state.bg, state.bold);
+              }
+            }
+          };
+          handler(ctx);
+        }
+        parserState = "normal";
+        csiParams = [];
+        break;
+      }
+    }
+  }
+  if (state.lines.length === 0) {
+    if (isDynamic) {
+      state.lines.push([]);
+    } else {
+      state.lines.push(createEmptyLine(columns));
+    }
+  }
+  let finalColumns;
+  if (isDynamic) {
+    finalColumns = Math.max(1, state.maxCol || 0);
+    for (let r = 0; r < state.lines.length; r++) {
+      const line = state.lines[r];
+      while (line.length < finalColumns) {
+        line.push({ ...DEFAULT_CELL });
+      }
+    }
+  } else {
+    finalColumns = columns;
+    for (let r = 0; r < state.lines.length; r++) {
+      const line = state.lines[r];
+      if (!line) {
+        state.lines[r] = createEmptyLine(columns);
+      } else {
+        while (line.length < columns) {
+          line.push({ ...DEFAULT_CELL });
+        }
+      }
+    }
+  }
+  return { lines: state.lines, columns: finalColumns, sauce };
+}
+function parseAnsi(bytesInput, columns = DEFAULT_COLUMNS, encoding = "cp437") {
+  return parseAnsiCore(bytesInput, { columns, encoding });
+}
+function detectAnimation(bytes) {
+  const sauce = parseSauce(bytes);
+  if (sauce && sauce.dataType === 1 && sauce.fileType === 2) {
+    return true;
+  }
+  const maxCheck = Math.min(2048, bytes.length);
+  let i = 0;
+  while (i < maxCheck) {
+    const b = bytes[i++];
+    if (b === ESC) {
+      if (i < maxCheck && bytes[i] === CSI_BRACKET) {
+        i++;
+        while (i < maxCheck && !isLetter(bytes[i])) {
+          i++;
+        }
+        if (i < maxCheck) {
+          const cmd = bytes[i];
+          if (cmd === 72 || cmd === 102) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
 function parseAscii(bytes, encoding = "cp437") {
+  let bytesToParse = bytes;
+  const sauce = parseSauce(bytes);
+  if (isSauceTrailer(bytes)) {
+    let stripSize = SAUCE_TRAILER_SIZE;
+    const eofPos = bytes.length - SAUCE_TRAILER_SIZE - 1;
+    if (eofPos >= 0 && bytes[eofPos] === SAUCE_EOF) {
+      stripSize += 1;
+    }
+    if (sauce && sauce.comments > 0) {
+      stripSize += COMMENT_ID_SIZE + sauce.comments * COMMENT_SIZE;
+    }
+    bytesToParse = bytes.slice(0, bytes.length - stripSize);
+  }
   const lines = [];
   let currentLine = [];
-  for (let i = 0; i < bytes.length; i++) {
-    const byte = bytes[i];
-    if (byte === 10 || byte === 13) {
-      if (currentLine.length > 0 || byte === 10) {
+  for (let i = 0; i < bytesToParse.length; i++) {
+    const byte = bytesToParse[i];
+    if (byte === LF || byte === CR) {
+      if (currentLine.length > 0 || byte === LF) {
         lines.push([...currentLine]);
         currentLine = [];
       }
-      if (byte === 13 && i + 1 < bytes.length && bytes[i + 1] === 10) {
+      if (byte === CR && i + 1 < bytes.length && bytes[i + 1] === LF) {
         i++;
       }
-    } else if (byte === 26) {
+    } else if (byte === SOFT_EOF) {
       break;
     } else {
       const ch = byteToChar(byte, encoding);
-      currentLine.push({ ch, fg: 7, bg: 0, bold: false });
+      currentLine.push({ ch, fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false });
     }
   }
   if (currentLine.length > 0) {
@@ -1477,129 +1049,471 @@ function parseAscii(bytes, encoding = "cp437") {
   }
   for (const line of lines) {
     while (line.length < maxWidth) {
-      line.push({ ch: " ", fg: 7, bg: 0, bold: false });
+      line.push({ ch: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false });
     }
   }
   if (lines.length === 0) {
-    lines.push(Array(maxWidth || 80).fill(null).map(() => ({ ch: " ", fg: 7, bg: 0, bold: false })));
+    lines.push(
+      Array(maxWidth || DEFAULT_COLUMNS).fill(null).map(() => ({ ch: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false }))
+    );
   }
   return {
     lines,
-    columns: maxWidth || 80,
-    sauce: parseSauce(bytes)
+    columns: maxWidth || DEFAULT_COLUMNS,
+    sauce
   };
 }
-function findNextRenderPoint(bytes, startIndex, batchSize = 50) {
-  if (startIndex >= bytes.length) return bytes.length;
-  let i = startIndex;
-  const ESC = 27;
-  let state = "normal";
-  let normalCharCount = 0;
-  while (i < bytes.length) {
-    const b = bytes[i++];
-    if (b === 26) return i;
-    switch (state) {
-      case "normal": {
-        if (b === ESC) {
-          if (normalCharCount > 0) return i - 1;
-          state = "esc";
-          break;
-        }
-        if (b === 10 || b === 13) {
-          return i;
-        }
-        normalCharCount++;
-        if (normalCharCount >= batchSize) {
-          return i;
-        }
-        break;
-      }
-      case "esc": {
-        if (b === 91) {
-          state = "csi";
-          break;
-        }
-        return i;
-      }
-      case "csi": {
-        const ch = String.fromCharCode(b);
-        if (b >= 48 && b <= 63 || ch === " " || ch === "?") {
-          break;
-        }
-        return i;
-      }
-    }
-  }
-  return bytes.length;
+
+// src/components/AnsiVirtualDisplay.tsx
+import { useCallback as useCallback2, useEffect as useEffect2, useMemo, useRef as useRef2, useState as useState2 } from "react";
+
+// src/components/AnsiPlayerOverlay.tsx
+import { useCallback, useEffect, useRef, useState } from "react";
+import { jsx, jsxs } from "react/jsx-runtime";
+var SPEED_PRESETS = [
+  { label: "300 baud", value: Math.floor(300 / 10) },
+  // 30 bytes/sec
+  { label: "1200 baud", value: Math.floor(1200 / 10) },
+  // 120 bytes/sec
+  { label: "2400 baud", value: Math.floor(2400 / 10) },
+  // 240 bytes/sec
+  { label: "9600 baud", value: Math.floor(9600 / 10) },
+  // 960 bytes/sec
+  { label: "14.4k baud", value: Math.floor(14400 / 10) },
+  // 1440 bytes/sec
+  { label: "28.8k baud", value: Math.floor(28800 / 10) },
+  // 2880 bytes/sec
+  { label: "33.6k baud", value: Math.floor(33600 / 10) },
+  // 3360 bytes/sec
+  { label: "56k baud", value: Math.floor(56e3 / 10) }
+  // 5600 bytes/sec
+];
+function formatTime(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
-function findNextCursorMove(bytes, startIndex, maxCharsBeforeStop = 2e3, linesPerBatch = 5) {
-  if (startIndex >= bytes.length) return bytes.length;
-  let i = startIndex;
-  const ESC = 27;
-  let state = "normal";
-  let csiParams = "";
-  let normalCharCount = 0;
-  let newlineCount = 0;
-  let foundAnyCursorCommand = false;
-  while (i < bytes.length) {
-    const b = bytes[i++];
-    if (b === 26) return i;
-    switch (state) {
-      case "normal": {
-        if (b === ESC) {
-          state = "esc";
-          csiParams = "";
-          break;
-        }
-        if (b === 10 || b === 13) {
-          newlineCount++;
-          if (newlineCount >= linesPerBatch) {
-            return i;
-          }
-          break;
-        }
-        normalCharCount++;
-        if (normalCharCount >= maxCharsBeforeStop) {
-          return i;
-        }
-        break;
-      }
-      case "esc": {
-        if (b === 91) {
-          state = "csi";
-          break;
-        }
-        state = "normal";
-        break;
-      }
-      case "csi": {
-        const ch = String.fromCharCode(b);
-        if (b >= 48 && b <= 63 || ch === " " || ch === "?") {
-          csiParams += ch;
-          break;
-        }
-        const isCursorMove = ch === "H" || // Cursor Position
-        ch === "f" || // Horizontal Vertical Position
-        ch === "A" || // Cursor Up
-        ch === "B" || // Cursor Down
-        ch === "C" || // Cursor Forward
-        ch === "D" || // Cursor Back
-        ch === "G" || // Cursor Horizontal Absolute
-        ch === "s" || // Save Cursor Position
-        ch === "u";
-        state = "normal";
-        csiParams = "";
-        if (isCursorMove) {
-          foundAnyCursorCommand = true;
-          normalCharCount = 0;
-          newlineCount = 0;
-          return i;
-        }
-        break;
+function AnsiPlayerOverlay({
+  isPlaying,
+  currentBytes,
+  totalBytes,
+  currentSpeed,
+  isVisible,
+  onPlayPause,
+  onRestart,
+  onSeek,
+  onSpeedChange,
+  onAdvanceByte,
+  onRewindByte,
+  onMouseMove,
+  sauce,
+  onSauceClick
+}) {
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState(false);
+  const [scrubValue, setScrubValue] = useState(currentBytes);
+  const progressBarRef = useRef(null);
+  const speedMenuRef = useRef(null);
+  useEffect(() => {
+    if (!isScrubbing) {
+      setScrubValue(currentBytes);
+    }
+  }, [currentBytes, isScrubbing]);
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (speedMenuRef.current && !speedMenuRef.current.contains(event.target)) {
+        setIsSpeedMenuOpen(false);
       }
     }
-  }
-  return bytes.length;
+    if (isSpeedMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+      };
+    }
+  }, [isSpeedMenuOpen]);
+  const handleProgressBarClick = useCallback(
+    (e) => {
+      if (!progressBarRef.current || totalBytes === 0) return;
+      const rect = progressBarRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const percentage = Math.max(0, Math.min(1, x / rect.width));
+      const targetBytes = Math.floor(percentage * totalBytes);
+      onSeek(targetBytes);
+    },
+    [totalBytes, onSeek]
+  );
+  const handleProgressBarMouseDown = useCallback(
+    (e) => {
+      if (!progressBarRef.current || totalBytes === 0) return;
+      setIsScrubbing(true);
+      const rect = progressBarRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const percentage = Math.max(0, Math.min(1, x / rect.width));
+      const targetBytes = Math.floor(percentage * totalBytes);
+      setScrubValue(targetBytes);
+      let finalBytes = targetBytes;
+      function handleMouseMove(moveEvent) {
+        if (!progressBarRef.current) return;
+        const rect2 = progressBarRef.current.getBoundingClientRect();
+        const x2 = moveEvent.clientX - rect2.left;
+        const percentage2 = Math.max(0, Math.min(1, x2 / rect2.width));
+        const targetBytes2 = Math.floor(percentage2 * totalBytes);
+        finalBytes = targetBytes2;
+        setScrubValue(targetBytes2);
+      }
+      function handleMouseUp() {
+        setIsScrubbing(false);
+        onSeek(finalBytes);
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+      }
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    },
+    [totalBytes, onSeek]
+  );
+  const handleSpeedSelect = useCallback(
+    (speed) => {
+      onSpeedChange(speed);
+      setIsSpeedMenuOpen(false);
+    },
+    [onSpeedChange]
+  );
+  const progressPercent = totalBytes > 0 ? scrubValue / totalBytes * 100 : 0;
+  const currentTime = currentSpeed > 0 ? currentBytes / currentSpeed : 0;
+  const totalTime = currentSpeed > 0 ? totalBytes / currentSpeed : 0;
+  const currentSpeedLabel = SPEED_PRESETS.find((preset) => preset.value === currentSpeed)?.label || `${currentSpeed} bps`;
+  const isAtEnd = totalBytes > 0 && currentBytes >= totalBytes;
+  const hasStarted = currentBytes > 0;
+  const shouldShow = isVisible || isScrubbing || isSpeedMenuOpen || isAtEnd || !isPlaying;
+  return /* @__PURE__ */ jsxs(
+    "div",
+    {
+      style: {
+        position: "absolute",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background: "linear-gradient(to top, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0))",
+        padding: "40px 16px 16px",
+        transition: "opacity 0.3s ease",
+        opacity: shouldShow ? 1 : 0,
+        pointerEvents: shouldShow ? "auto" : "none"
+      },
+      onMouseMove,
+      children: [
+        /* @__PURE__ */ jsxs(
+          "div",
+          {
+            ref: progressBarRef,
+            onMouseDown: handleProgressBarMouseDown,
+            onClick: handleProgressBarClick,
+            style: {
+              width: "100%",
+              height: "8px",
+              background: "rgba(255, 255, 255, 0.3)",
+              borderRadius: "4px",
+              cursor: "pointer",
+              marginBottom: "12px",
+              position: "relative"
+            },
+            children: [
+              /* @__PURE__ */ jsx(
+                "div",
+                {
+                  style: {
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    height: "100%",
+                    width: `${progressPercent}%`,
+                    background: "#ff0000",
+                    borderRadius: "4px",
+                    transition: isScrubbing ? "none" : "width 0.1s linear"
+                  }
+                }
+              ),
+              /* @__PURE__ */ jsx(
+                "div",
+                {
+                  style: {
+                    position: "absolute",
+                    top: "50%",
+                    left: `${progressPercent}%`,
+                    width: "14px",
+                    height: "14px",
+                    borderRadius: "50%",
+                    background: "#ff0000",
+                    transform: "translate(-50%, -50%)",
+                    transition: isScrubbing ? "none" : "left 0.1s linear"
+                  }
+                }
+              )
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxs(
+          "div",
+          {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+              color: "#fff",
+              fontFamily: "monospace",
+              fontSize: "14px"
+            },
+            children: [
+              /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: onPlayPause,
+                  style: {
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "none",
+                    color: "#fff",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "16px",
+                    transition: "background 0.2s"
+                  },
+                  onMouseEnter: (e) => {
+                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+                  },
+                  onMouseLeave: (e) => {
+                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                  },
+                  title: isAtEnd ? "Restart" : isPlaying ? "Pause" : "Play",
+                  children: isAtEnd ? "\u21BB" : isPlaying ? "\u23F8" : "\u25B6"
+                }
+              ),
+              hasStarted && !isAtEnd && /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: onRestart,
+                  style: {
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "none",
+                    color: "#fff",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "16px",
+                    transition: "background 0.2s"
+                  },
+                  onMouseEnter: (e) => {
+                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+                  },
+                  onMouseLeave: (e) => {
+                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                  },
+                  title: "Return to beginning",
+                  children: "\u23EE"
+                }
+              ),
+              /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: onRewindByte,
+                  disabled: currentBytes <= 0,
+                  style: {
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "none",
+                    color: currentBytes <= 0 ? "rgba(255, 255, 255, 0.5)" : "#fff",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    cursor: currentBytes <= 0 ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "16px",
+                    transition: "background 0.2s"
+                  },
+                  onMouseEnter: (e) => {
+                    if (currentBytes > 0) {
+                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+                    }
+                  },
+                  onMouseLeave: (e) => {
+                    if (currentBytes > 0) {
+                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                    }
+                  },
+                  title: "Rewind one byte",
+                  children: "\u2039\u2039"
+                }
+              ),
+              /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: onAdvanceByte,
+                  disabled: currentBytes >= totalBytes,
+                  style: {
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "none",
+                    color: currentBytes >= totalBytes ? "rgba(255, 255, 255, 0.5)" : "#fff",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    cursor: currentBytes >= totalBytes ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "16px",
+                    transition: "background 0.2s"
+                  },
+                  onMouseEnter: (e) => {
+                    if (currentBytes < totalBytes) {
+                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+                    }
+                  },
+                  onMouseLeave: (e) => {
+                    if (currentBytes < totalBytes) {
+                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                    }
+                  },
+                  title: "Advance one byte",
+                  children: "\u203A\u203A"
+                }
+              ),
+              /* @__PURE__ */ jsxs(
+                "div",
+                {
+                  style: {
+                    minWidth: "120px",
+                    textAlign: "left"
+                  },
+                  children: [
+                    formatTime(currentTime),
+                    " / ",
+                    formatTime(totalTime)
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsx("div", { style: { flex: 1 } }),
+              sauce && onSauceClick && /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: onSauceClick,
+                  style: {
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "none",
+                    color: "#fff",
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "10px",
+                    fontWeight: "bold",
+                    transition: "background 0.2s",
+                    lineHeight: "1",
+                    padding: 0
+                  },
+                  onMouseEnter: (e) => {
+                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+                  },
+                  onMouseLeave: (e) => {
+                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                  },
+                  title: "View SAUCE metadata",
+                  children: "S"
+                }
+              ),
+              /* @__PURE__ */ jsxs("div", { style: { position: "relative" }, ref: speedMenuRef, children: [
+                /* @__PURE__ */ jsx(
+                  "button",
+                  {
+                    onClick: () => setIsSpeedMenuOpen(!isSpeedMenuOpen),
+                    style: {
+                      background: "rgba(255, 255, 255, 0.2)",
+                      border: "none",
+                      color: "#fff",
+                      padding: "8px 12px",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      fontFamily: "monospace",
+                      fontSize: "13px",
+                      transition: "background 0.2s",
+                      minWidth: "110px",
+                      textAlign: "left"
+                    },
+                    onMouseEnter: (e) => {
+                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+                    },
+                    onMouseLeave: (e) => {
+                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                    },
+                    children: currentSpeedLabel
+                  }
+                ),
+                isSpeedMenuOpen && /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      position: "absolute",
+                      bottom: "100%",
+                      right: 0,
+                      marginBottom: "8px",
+                      background: "rgba(0, 0, 0, 0.95)",
+                      border: "1px solid rgba(255, 255, 255, 0.3)",
+                      borderRadius: "4px",
+                      overflow: "hidden",
+                      minWidth: "140px",
+                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)"
+                    },
+                    children: SPEED_PRESETS.map((preset) => /* @__PURE__ */ jsx(
+                      "button",
+                      {
+                        onClick: () => handleSpeedSelect(preset.value),
+                        style: {
+                          width: "100%",
+                          background: preset.value === currentSpeed ? "rgba(255, 255, 255, 0.2)" : "transparent",
+                          border: "none",
+                          color: "#fff",
+                          padding: "10px 16px",
+                          textAlign: "left",
+                          cursor: "pointer",
+                          fontFamily: "monospace",
+                          fontSize: "13px",
+                          transition: "background 0.15s"
+                        },
+                        onMouseEnter: (e) => {
+                          if (preset.value !== currentSpeed) {
+                            e.currentTarget.style.background = "rgba(255, 255, 255, 0.1)";
+                          }
+                        },
+                        onMouseLeave: (e) => {
+                          if (preset.value !== currentSpeed) {
+                            e.currentTarget.style.background = "transparent";
+                          }
+                        },
+                        children: preset.label
+                      },
+                      preset.value
+                    ))
+                  }
+                )
+              ] })
+            ]
+          }
+        )
+      ]
+    }
+  );
 }
 
 // src/font/bitmapFont.ts
@@ -1673,1225 +1587,6 @@ function renderText(ctx, font, text, x, y, fgColor, bgColor) {
   return xPos - x;
 }
 
-// src/font/fonExtractor.ts
-async function extractFontFromFON(url) {
-  console.log("[fonExtractor] Extracting from:", url);
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to load FON: ${response.status}`);
-  const buffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  if (bytes[0] !== 77 || bytes[1] !== 90) {
-    return { bitmapData: bytes, width: 8, height: 16 };
-  }
-  const neOffset = bytes[60] | bytes[61] << 8;
-  if (bytes[neOffset] !== 78 || bytes[neOffset + 1] !== 69) {
-    return null;
-  }
-  const resTableOffset = neOffset + (bytes[neOffset + 36] | bytes[neOffset + 37] << 8);
-  const alignShift = bytes[resTableOffset] | bytes[resTableOffset + 1] << 8;
-  let pos = resTableOffset + 2;
-  while (pos < bytes.length - 8) {
-    const typeId = bytes[pos] | bytes[pos + 1] << 8;
-    if (typeId === 0) {
-      break;
-    }
-    const count = bytes[pos + 2] | bytes[pos + 3] << 8;
-    pos += 8;
-    if (typeId === 32776) {
-      console.log("[fonExtractor] Found font resource, count:", count);
-      if (count > 0) {
-        const fontResOffset = (bytes[pos] | bytes[pos + 1] << 8) << alignShift;
-        const fontResLength = (bytes[pos + 2] | bytes[pos + 3] << 8) << alignShift;
-        const fntData = bytes.slice(fontResOffset, fontResOffset + fontResLength);
-        const dfPixWidth = fntData[86] | fntData[87] << 8;
-        const dfPixHeight = fntData[88] | fntData[89] << 8;
-        const dfFirstChar = fntData[95];
-        const dfLastChar = fntData[96];
-        console.log(
-          "[fonExtractor] Font:",
-          dfPixWidth,
-          "x",
-          dfPixHeight,
-          "chars",
-          dfFirstChar,
-          "-",
-          dfLastChar
-        );
-        const charTableStart = 117;
-        const charCount = dfLastChar - dfFirstChar + 1;
-        const charTableSize = charCount * 4;
-        const baseOffset = charTableStart + charTableSize;
-        let bitmapOffset = baseOffset;
-        const bytesPerGlyph = dfPixHeight;
-        let bestOffset = baseOffset;
-        let bestScore = -1;
-        for (let adj = -16; adj <= 16; adj++) {
-          const testOffset = baseOffset + adj;
-          const expectedBitmapSize2 = 256 * bytesPerGlyph;
-          if (testOffset < 0 || fntData.length < testOffset + expectedBitmapSize2) continue;
-          let score = 0;
-          const testChar32 = fntData.slice(
-            testOffset + 32 * bytesPerGlyph,
-            testOffset + 32 * bytesPerGlyph + bytesPerGlyph
-          );
-          const spaceNonZero = testChar32.filter((b) => b !== 0).length;
-          if (spaceNonZero === 0) {
-            score += 20;
-          } else if (spaceNonZero <= 2) {
-            score += 10;
-          } else {
-            continue;
-          }
-          const testChar65 = fntData.slice(
-            testOffset + 65 * bytesPerGlyph,
-            testOffset + 65 * bytesPerGlyph + bytesPerGlyph
-          );
-          const firstNonZero = testChar65.findIndex((b) => b !== 0);
-          if (firstNonZero >= 5 && firstNonZero <= 7) {
-            score += 15 - Math.abs(firstNonZero - 6);
-            if (testChar65[firstNonZero] >= 16 && testChar65[firstNonZero] <= 128) {
-              score += 5;
-            }
-          } else {
-            score -= 10;
-          }
-          const testChar219 = fntData.slice(
-            testOffset + 219 * bytesPerGlyph,
-            testOffset + 219 * bytesPerGlyph + bytesPerGlyph
-          );
-          const allFF = testChar219.every((b) => b === 255);
-          if (allFF) {
-            score += 25;
-          } else {
-            const nonFF = testChar219.filter((b) => b !== 255).length;
-            if (nonFF <= 2) {
-              score += 10;
-            } else {
-              score -= 15;
-            }
-          }
-          if (score > bestScore) {
-            bestScore = score;
-            bestOffset = testOffset;
-          }
-        }
-        bitmapOffset = bestOffset;
-        console.log("[fonExtractor] Bitmap offset:", bitmapOffset, "score:", bestScore);
-        const expectedBitmapSize = 256 * bytesPerGlyph;
-        if (fntData.length >= bitmapOffset + expectedBitmapSize) {
-          console.log("[fonExtractor] Success: extracted bitmap");
-          return {
-            bitmapData: fntData.slice(bitmapOffset, bitmapOffset + expectedBitmapSize),
-            width: dfPixWidth,
-            height: dfPixHeight
-          };
-        }
-        const absoluteBitmapOffset = fontResOffset + bitmapOffset;
-        if (bytes.length >= absoluteBitmapOffset + expectedBitmapSize) {
-          console.log("[fonExtractor] Success: extracted bitmap (absolute offset)");
-          return {
-            bitmapData: bytes.slice(
-              absoluteBitmapOffset,
-              absoluteBitmapOffset + expectedBitmapSize
-            ),
-            width: dfPixWidth,
-            height: dfPixHeight
-          };
-        }
-        console.log("[fonExtractor] Failed: bitmap not found");
-        return null;
-      }
-    }
-    pos += count * 12;
-  }
-  console.log("[fonExtractor] Failed: no font resource found");
-  return null;
-}
-
-// src/AnsiArt.tsx
-import { jsx, jsxs } from "react/jsx-runtime";
-var DOS_COLORS = {
-  0: "#000000",
-  1: "#0000AA",
-  2: "#00AA00",
-  3: "#00AAAA",
-  4: "#AA0000",
-  5: "#AA00AA",
-  6: "#AA5500",
-  7: "#AAAAAA",
-  8: "#555555",
-  9: "#5555FF",
-  10: "#55FF55",
-  11: "#55FFFF",
-  12: "#FF5555",
-  13: "#FF55FF",
-  14: "#FFFF55",
-  15: "#FFFFFF"
-};
-function colorToCss(color, defaultColor = "#AAAAAA") {
-  if (typeof color === "string") {
-    return color;
-  }
-  return DOS_COLORS[color] ?? defaultColor;
-}
-function AnsiArt({
-  src,
-  columns = 80,
-  background = "#000",
-  allowDrop = true,
-  bitmapFontUrl,
-  debugFont = false,
-  animated = false,
-  frameDelay = 2,
-  bytesPerFrame = 500,
-  linesPerFrame = 25,
-  animateBy = "cursor",
-  showControls = false,
-  debugPerformance = false,
-  debugCursorCodes = false
-}) {
-  const [screen, setScreen] = useState(null);
-  const [error, setError] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [fileName, setFileName] = useState(null);
-  const [bitmapFont, setBitmapFont] = useState(null);
-  const [rawFontData, setRawFontData] = useState(null);
-  const [rawAnsiData, setRawAnsiData] = useState(null);
-  const [currentByteIndex, setCurrentByteIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [perfMetrics, setPerfMetrics] = useState({
-    fps: 0,
-    renderTimeMs: 0,
-    cellsUpdated: 0,
-    totalCells: 0,
-    parseTimeMs: 0,
-    bytesPerSecond: 0
-  });
-  const canvasRef = useRef(null);
-  const debugFontCanvasRef = useRef(null);
-  const animationTimeoutRef = useRef(null);
-  const currentByteIndexRef = useRef(0);
-  const rawAnsiDataRef = useRef(null);
-  const isAnimatingRef = useRef(false);
-  const columnsRef = useRef(columns);
-  const frameDelayRef = useRef(frameDelay);
-  const bytesPerFrameRef = useRef(bytesPerFrame);
-  const linesPerFrameRef = useRef(linesPerFrame);
-  const animateByRef = useRef(animateBy);
-  const backgroundRef = useRef(background);
-  const bitmapFontRef = useRef(bitmapFont);
-  const debugCursorCodesRef = useRef(debugCursorCodes);
-  const previousScreenRef = useRef(null);
-  const lastFrameTimeRef = useRef(0);
-  const frameCountRef = useRef(0);
-  const fpsUpdateTimeRef = useRef(0);
-  const lastByteIndexRef = useRef(0);
-  const lastBytesUpdateTimeRef = useRef(0);
-  async function loadFromBytes(bytes, name) {
-    setError(null);
-    try {
-      if (animated) {
-        setRawAnsiData(bytes);
-        currentByteIndexRef.current = 0;
-        setCurrentByteIndex(0);
-        previousScreenRef.current = null;
-        setIsPlaying(true);
-        setScreen(parseAnsi(new Uint8Array(0), columns));
-        if (name) setFileName(name);
-      } else {
-        const parsed = parseAnsi(bytes, columns);
-        setScreen(parsed);
-        if (name) setFileName(name);
-        setRawAnsiData(null);
-        currentByteIndexRef.current = 0;
-        setCurrentByteIndex(0);
-        setIsPlaying(false);
-      }
-    } catch (e) {
-      setError(String(e?.message || e));
-    }
-  }
-  useEffect(() => {
-    if (!bitmapFontUrl) {
-      setBitmapFont(null);
-      return;
-    }
-    let cancelled = false;
-    async function loadFont() {
-      try {
-        const fontResult = await extractFontFromFON(bitmapFontUrl);
-        if (fontResult) {
-          const { bitmapData, width, height } = fontResult;
-          if (!cancelled) setRawFontData(bitmapData);
-          const bytesPerGlyph = height;
-          const glyphs = [];
-          for (let i = 0; i < 256; i++) {
-            glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph));
-          }
-          if (!cancelled) setBitmapFont({ width, height, glyphs, rawBitmapData: bitmapData });
-        } else {
-          const font = await loadRawBitmapFont(bitmapFontUrl, 8, 16);
-          if (!cancelled) setBitmapFont(font);
-        }
-      } catch (e) {
-        console.warn("Failed to load bitmap font:", e);
-        if (!cancelled) setBitmapFont(null);
-      }
-    }
-    loadFont();
-    return () => {
-      cancelled = true;
-    };
-  }, [bitmapFontUrl]);
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setError(null);
-      try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error(`Failed to fetch ${src}: ${res.status}`);
-        const buf = new Uint8Array(await res.arrayBuffer());
-        if (animated) {
-          if (!cancelled) {
-            setRawAnsiData(buf);
-            currentByteIndexRef.current = 0;
-            setCurrentByteIndex(0);
-            previousScreenRef.current = null;
-            setIsPlaying(true);
-            setScreen(parseAnsi(new Uint8Array(0), columns));
-          }
-        } else {
-          const parsed = parseAnsi(buf, columns);
-          if (!cancelled) {
-            setScreen(parsed);
-            setFileName(null);
-            setRawAnsiData(null);
-            currentByteIndexRef.current = 0;
-            setCurrentByteIndex(0);
-            setIsPlaying(false);
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setError(String(e?.message || e));
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [src, columns, animated]);
-  const onDragEnter = (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    setIsDragging(true);
-  };
-  const onDragOver = (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    setIsDragging(true);
-  };
-  const onDragLeave = (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    setIsDragging(false);
-  };
-  const onDrop = async (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    try {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      await loadFromBytes(buf, file.name);
-    } catch (err) {
-      setError(String(err?.message || err));
-    }
-  };
-  const handlePlayPause = () => {
-    if (currentByteIndex >= (rawAnsiData?.length || 0)) {
-      currentByteIndexRef.current = 0;
-      setCurrentByteIndex(0);
-      setIsPlaying(true);
-    } else {
-      setIsPlaying(!isPlaying);
-    }
-  };
-  const handleRestart = () => {
-    currentByteIndexRef.current = 0;
-    setCurrentByteIndex(0);
-    previousScreenRef.current = null;
-    isAnimatingRef.current = false;
-    setIsPlaying(true);
-    if (rawAnsiData) setScreen(parseAnsi(new Uint8Array(0), columns));
-  };
-  const rootStyle = useMemo(
-    () => ({
-      ...isDragging ? { outline: "2px dashed #888", outlineOffset: "-2px" } : {}
-    }),
-    [isDragging]
-  );
-  const renderToCanvas = useCallback(
-    (screenToRender, forceFullRedraw = false) => {
-      const renderStart = performance.now();
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const bitmapFont2 = bitmapFontRef.current;
-      if (!bitmapFont2) return;
-      const rows = screenToRender.lines.length;
-      const cols = screenToRender.columns;
-      const background2 = backgroundRef.current;
-      const charWidth = bitmapFont2.width;
-      const charHeight = bitmapFont2.height;
-      const cssWidth = cols * charWidth;
-      const cssHeight = rows * charHeight;
-      const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
-      const previousScreen = previousScreenRef.current;
-      const needsResize = canvas.width !== Math.floor(cssWidth * dpr) || canvas.height !== Math.floor(cssHeight * dpr);
-      if (needsResize) {
-        canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
-        canvas.height = Math.max(1, Math.floor(cssHeight * dpr));
-        canvas.style.width = `${cssWidth}px`;
-        canvas.style.height = `${cssHeight}px`;
-      }
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      if (!previousScreen || needsResize || forceFullRedraw) {
-        ctx.fillStyle = background2;
-        ctx.fillRect(0, 0, cssWidth, cssHeight);
-      }
-      let cellsUpdated = 0;
-      const totalCells = rows * cols;
-      for (let r = 0; r < rows; r++) {
-        const cells = screenToRender.lines[r];
-        const prevCells = previousScreen?.lines[r];
-        if (!prevCells || forceFullRedraw || needsResize) {
-          for (let c = 0; c < cells.length; c++) {
-            const cell = cells[c];
-            cellsUpdated++;
-            const x = c * charWidth;
-            const y = r * charHeight;
-            const fg = typeof cell.fg === "number" && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg;
-            const fgColor = colorToCss(fg, "#AAAAAA");
-            const bgColor = colorToCss(cell.bg, "#000000");
-            const charCode = charToCp437Byte(cell.ch);
-            renderGlyph(ctx, bitmapFont2, charCode, x, y, fgColor, bgColor);
-          }
-          continue;
-        }
-        for (let c = 0; c < cells.length; c++) {
-          const cell = cells[c];
-          const prevCell = prevCells[c];
-          if (prevCell && prevCell.ch === cell.ch && prevCell.fg === cell.fg && prevCell.bg === cell.bg && prevCell.bold === cell.bold) {
-            continue;
-          }
-          cellsUpdated++;
-          const x = c * charWidth;
-          const y = r * charHeight;
-          const fg = typeof cell.fg === "number" && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg;
-          const fgColor = colorToCss(fg, "#AAAAAA");
-          const bgColor = colorToCss(cell.bg, "#000000");
-          const charCode = charToCp437Byte(cell.ch);
-          renderGlyph(ctx, bitmapFont2, charCode, x, y, fgColor, bgColor);
-        }
-      }
-      previousScreenRef.current = screenToRender;
-      const renderEnd = performance.now();
-      const renderTimeMs = renderEnd - renderStart;
-      if (debugPerformance) {
-        const now = performance.now();
-        frameCountRef.current++;
-        if (now - fpsUpdateTimeRef.current >= 500) {
-          const fps = frameCountRef.current / (now - fpsUpdateTimeRef.current) * 1e3;
-          setPerfMetrics((prev) => ({
-            ...prev,
-            fps: Math.round(fps),
-            renderTimeMs: Math.round(renderTimeMs * 100) / 100,
-            cellsUpdated,
-            totalCells
-          }));
-          frameCountRef.current = 0;
-          fpsUpdateTimeRef.current = now;
-        }
-      }
-    },
-    [debugPerformance]
-  );
-  useEffect(() => {
-    if (!screen) return;
-    renderToCanvas(screen, true);
-  }, [screen, renderToCanvas]);
-  useEffect(() => {
-    rawAnsiDataRef.current = rawAnsiData;
-  }, [rawAnsiData]);
-  useEffect(() => {
-    columnsRef.current = columns;
-    frameDelayRef.current = frameDelay;
-    bytesPerFrameRef.current = bytesPerFrame;
-    linesPerFrameRef.current = linesPerFrame;
-    animateByRef.current = animateBy;
-    backgroundRef.current = background;
-    bitmapFontRef.current = bitmapFont;
-    debugCursorCodesRef.current = debugCursorCodes;
-  }, [
-    columns,
-    frameDelay,
-    bytesPerFrame,
-    linesPerFrame,
-    animateBy,
-    background,
-    bitmapFont,
-    debugCursorCodes
-  ]);
-  const animateRef = useRef(null);
-  animateRef.current = () => {
-    const data = rawAnsiDataRef.current;
-    if (!data) {
-      isAnimatingRef.current = false;
-      return;
-    }
-    if (frameDelayRef.current <= 0) {
-      while (currentByteIndexRef.current < data.length) {
-        const currentIndex2 = currentByteIndexRef.current;
-        const nextByteIndex2 = animateByRef.current === "cursor" ? findNextCursorMove(
-          data,
-          currentIndex2,
-          columnsRef.current * 10,
-          linesPerFrameRef.current
-        ) : findNextRenderPoint(data, currentIndex2, bytesPerFrameRef.current);
-        if (nextByteIndex2 <= currentIndex2 || nextByteIndex2 > data.length) break;
-        const newScreen = parseAnsiIncremental(
-          data,
-          columnsRef.current,
-          nextByteIndex2
-        );
-        renderToCanvas(newScreen);
-        currentByteIndexRef.current = nextByteIndex2;
-      }
-      const finalScreen = parseAnsiIncremental(
-        data,
-        columnsRef.current,
-        data.length
-      );
-      setScreen(finalScreen);
-      setCurrentByteIndex(data.length);
-      setIsPlaying(false);
-      isAnimatingRef.current = false;
-      return;
-    }
-    const currentIndex = currentByteIndexRef.current;
-    const parseStart = performance.now();
-    const nextByteIndex = animateByRef.current === "cursor" ? findNextCursorMove(data, currentIndex, columnsRef.current * 10, linesPerFrameRef.current) : findNextRenderPoint(data, currentIndex, bytesPerFrameRef.current);
-    if (debugPerformance) {
-      console.log(
-        `Animation frame: ${currentIndex} -> ${nextByteIndex} (${nextByteIndex - currentIndex} bytes)`
-      );
-    }
-    if (nextByteIndex > currentIndex && nextByteIndex <= data.length) {
-      const newScreen = parseAnsiIncremental(
-        data,
-        columnsRef.current,
-        nextByteIndex
-      );
-      const parseEnd = performance.now();
-      if (debugPerformance) {
-        const now = performance.now();
-        const bytesDelta = nextByteIndex - lastByteIndexRef.current;
-        const timeDelta = now - lastBytesUpdateTimeRef.current;
-        if (timeDelta >= 500) {
-          const bytesPerSecond = Math.round(bytesDelta / timeDelta * 1e3);
-          setPerfMetrics((prev) => ({
-            ...prev,
-            parseTimeMs: Math.round((parseEnd - parseStart) * 100) / 100,
-            bytesPerSecond
-          }));
-          lastByteIndexRef.current = nextByteIndex;
-          lastBytesUpdateTimeRef.current = now;
-        } else {
-          setPerfMetrics((prev) => ({
-            ...prev,
-            parseTimeMs: Math.round((parseEnd - parseStart) * 100) / 100
-          }));
-        }
-      }
-      renderToCanvas(newScreen);
-      currentByteIndexRef.current = nextByteIndex;
-      if (nextByteIndex >= data.length) {
-        setScreen(newScreen);
-        setCurrentByteIndex(nextByteIndex);
-        setIsPlaying(false);
-        isAnimatingRef.current = false;
-        return;
-      }
-      animationTimeoutRef.current = window.setTimeout(() => {
-        animateRef.current?.();
-      }, frameDelayRef.current);
-    } else {
-      setIsPlaying(false);
-      isAnimatingRef.current = false;
-    }
-  };
-  useEffect(() => {
-    if (!animated || !isPlaying) {
-      isAnimatingRef.current = false;
-      if (animationTimeoutRef.current) {
-        clearTimeout(animationTimeoutRef.current);
-        animationTimeoutRef.current = null;
-      }
-      return;
-    }
-    if (isAnimatingRef.current) {
-      return;
-    }
-    isAnimatingRef.current = true;
-    animateRef.current?.();
-    return () => {
-      isAnimatingRef.current = false;
-      if (animationTimeoutRef.current) {
-        clearTimeout(animationTimeoutRef.current);
-        animationTimeoutRef.current = null;
-      }
-    };
-  }, [animated, isPlaying]);
-  useEffect(() => {
-    if (!debugFont || !rawFontData || !bitmapFont) return;
-    const canvas = debugFontCanvasRef.current;
-    if (!canvas) return;
-    const charWidth = bitmapFont.width;
-    const charHeight = bitmapFont.height;
-    const cols = 16;
-    const rows = 16;
-    const cssWidth = cols * charWidth;
-    const cssHeight = rows * charHeight;
-    const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
-    canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
-    canvas.height = Math.max(1, Math.floor(cssHeight * dpr));
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(0, 0, cssWidth, cssHeight);
-    ctx.fillStyle = "#FFFFFF";
-    const bytesPerGlyph = charHeight;
-    for (let charCode = 0; charCode < 256; charCode++) {
-      const charBase = charCode * bytesPerGlyph;
-      const col = charCode % 16;
-      const row = Math.floor(charCode / 16);
-      const baseX = col * charWidth;
-      const baseY = row * charHeight;
-      for (let rowIdx = 0; rowIdx < charHeight; rowIdx++) {
-        const byte = rawFontData[charBase + rowIdx];
-        const x = baseX;
-        const y = baseY + rowIdx;
-        for (let bit = 0; bit < charWidth; bit++) {
-          const bitValue = charWidth - 1 - bit;
-          if (byte & 1 << bitValue) {
-            ctx.fillRect(x + bit, y, 1, 1);
-          }
-        }
-      }
-    }
-  }, [debugFont, rawFontData, bitmapFont]);
-  if (error)
-    return /* @__PURE__ */ jsx(
-      "div",
-      {
-        style: {
-          ...rootStyle,
-          padding: "16px",
-          color: "#FF5555",
-          background: "#000",
-          fontFamily: "monospace"
-        },
-        onDragEnter,
-        onDragOver,
-        onDragLeave,
-        onDrop,
-        children: error
-      }
-    );
-  if (!screen)
-    return /* @__PURE__ */ jsx(
-      "div",
-      {
-        style: {
-          ...rootStyle,
-          padding: "16px",
-          color: "#AAA",
-          background: "#000",
-          fontFamily: "monospace"
-        },
-        onDragEnter,
-        onDragOver,
-        onDragLeave,
-        onDrop,
-        children: "Loading\u2026"
-      }
-    );
-  return /* @__PURE__ */ jsxs("div", { children: [
-    debugPerformance && /* @__PURE__ */ jsxs(
-      "div",
-      {
-        style: {
-          position: "absolute",
-          top: 0,
-          right: 0,
-          background: "rgba(0, 0, 0, 0.8)",
-          color: "#0f0",
-          padding: "8px 12px",
-          fontFamily: "monospace",
-          fontSize: "11px",
-          border: "1px solid #0f0",
-          zIndex: 1e3,
-          lineHeight: "1.4"
-        },
-        children: [
-          /* @__PURE__ */ jsx("div", { children: /* @__PURE__ */ jsx("strong", { children: "Performance Metrics" }) }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "FPS: ",
-            perfMetrics.fps
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Render: ",
-            perfMetrics.renderTimeMs,
-            "ms"
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Parse: ",
-            perfMetrics.parseTimeMs,
-            "ms"
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Cells: ",
-            perfMetrics.cellsUpdated,
-            "/",
-            perfMetrics.totalCells,
-            " (",
-            perfMetrics.totalCells > 0 ? Math.round(perfMetrics.cellsUpdated / perfMetrics.totalCells * 100) : 0,
-            "%)"
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Bytes: ",
-            currentByteIndex
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Speed: ",
-            perfMetrics.bytesPerSecond,
-            " B/s"
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Mode: ",
-            animateBy
-          ] }),
-          animateBy === "bytes" ? /* @__PURE__ */ jsxs("div", { children: [
-            "BPF: ",
-            bytesPerFrame
-          ] }) : /* @__PURE__ */ jsxs("div", { children: [
-            "LPF: ",
-            linesPerFrame
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            "Playing: ",
-            isPlaying ? "Yes" : "No"
-          ] })
-        ]
-      }
-    ),
-    debugFont && rawFontData && /* @__PURE__ */ jsxs("div", { style: { marginBottom: 16 }, children: [
-      /* @__PURE__ */ jsxs("h3", { style: { color: "#AAA", marginBottom: 8 }, children: [
-        "Font Debug - Raw Bitmap Data (256 glyphs, 16x16 grid, ",
-        rawFontData.length,
-        " bytes)"
-      ] }),
-      /* @__PURE__ */ jsx(
-        "canvas",
-        {
-          ref: debugFontCanvasRef,
-          style: { border: "1px solid #555", display: "block", background: "#000" }
-        }
-      )
-    ] }),
-    showControls && animated && /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: "8px", marginBottom: "8px", alignItems: "center" }, children: [
-      /* @__PURE__ */ jsx(
-        "button",
-        {
-          onClick: handlePlayPause,
-          style: {
-            padding: "6px 12px",
-            background: "#333",
-            color: "#AAA",
-            border: "1px solid #555",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontFamily: "monospace"
-          },
-          onMouseEnter: (e) => e.currentTarget.style.background = "#444",
-          onMouseLeave: (e) => e.currentTarget.style.background = "#333",
-          children: isPlaying ? "\u23F8 Pause" : "\u25B6 Play"
-        }
-      ),
-      /* @__PURE__ */ jsx(
-        "button",
-        {
-          onClick: handleRestart,
-          style: {
-            padding: "6px 12px",
-            background: "#333",
-            color: "#AAA",
-            border: "1px solid #555",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontFamily: "monospace"
-          },
-          onMouseEnter: (e) => e.currentTarget.style.background = "#444",
-          onMouseLeave: (e) => e.currentTarget.style.background = "#333",
-          children: "\u23EE Restart"
-        }
-      )
-    ] }),
-    /* @__PURE__ */ jsx(
-      "canvas",
-      {
-        ref: canvasRef,
-        style: rootStyle,
-        "aria-label": `ANSI Art Canvas${fileName ? ` - ${fileName}` : ""}`,
-        onDragEnter,
-        onDragOver,
-        onDragLeave,
-        onDrop
-      }
-    )
-  ] });
-}
-
-// src/AnsiArtNG.tsx
-import { useCallback as useCallback4, useEffect as useEffect4, useMemo as useMemo3, useRef as useRef4, useState as useState4 } from "react";
-
-// src/AnsiVirtualDisplay.tsx
-import { useCallback as useCallback3, useEffect as useEffect3, useMemo as useMemo2, useRef as useRef3, useState as useState3 } from "react";
-
-// src/AnsiPlayerOverlay.tsx
-import { useCallback as useCallback2, useEffect as useEffect2, useRef as useRef2, useState as useState2 } from "react";
-import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
-var SPEED_PRESETS = [
-  { label: "300 baud", value: Math.floor(300 / 10) },
-  // 30 bytes/sec
-  { label: "1200 baud", value: Math.floor(1200 / 10) },
-  // 120 bytes/sec
-  { label: "2400 baud", value: Math.floor(2400 / 10) },
-  // 240 bytes/sec
-  { label: "9600 baud", value: Math.floor(9600 / 10) },
-  // 960 bytes/sec
-  { label: "14.4k baud", value: Math.floor(14400 / 10) },
-  // 1440 bytes/sec
-  { label: "28.8k baud", value: Math.floor(28800 / 10) },
-  // 2880 bytes/sec
-  { label: "33.6k baud", value: Math.floor(33600 / 10) },
-  // 3360 bytes/sec
-  { label: "56k baud", value: Math.floor(56e3 / 10) }
-  // 5600 bytes/sec
-];
-function formatTime(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-}
-function AnsiPlayerOverlay({
-  isPlaying,
-  currentBytes,
-  totalBytes,
-  currentSpeed,
-  isVisible,
-  onPlayPause,
-  onRestart,
-  onSeek,
-  onSpeedChange,
-  onAdvanceByte,
-  onRewindByte,
-  onMouseMove
-}) {
-  const [isScrubbing, setIsScrubbing] = useState2(false);
-  const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState2(false);
-  const [scrubValue, setScrubValue] = useState2(currentBytes);
-  const progressBarRef = useRef2(null);
-  const speedMenuRef = useRef2(null);
-  useEffect2(() => {
-    if (!isScrubbing) {
-      setScrubValue(currentBytes);
-    }
-  }, [currentBytes, isScrubbing]);
-  useEffect2(() => {
-    function handleClickOutside(event) {
-      if (speedMenuRef.current && !speedMenuRef.current.contains(event.target)) {
-        setIsSpeedMenuOpen(false);
-      }
-    }
-    if (isSpeedMenuOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => {
-        document.removeEventListener("mousedown", handleClickOutside);
-      };
-    }
-  }, [isSpeedMenuOpen]);
-  const handleProgressBarClick = useCallback2(
-    (e) => {
-      if (!progressBarRef.current || totalBytes === 0) return;
-      const rect = progressBarRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const percentage = Math.max(0, Math.min(1, x / rect.width));
-      const targetBytes = Math.floor(percentage * totalBytes);
-      onSeek(targetBytes);
-    },
-    [totalBytes, onSeek]
-  );
-  const handleProgressBarMouseDown = useCallback2(
-    (e) => {
-      if (!progressBarRef.current || totalBytes === 0) return;
-      setIsScrubbing(true);
-      const rect = progressBarRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const percentage = Math.max(0, Math.min(1, x / rect.width));
-      const targetBytes = Math.floor(percentage * totalBytes);
-      setScrubValue(targetBytes);
-      let finalBytes = targetBytes;
-      function handleMouseMove(moveEvent) {
-        if (!progressBarRef.current) return;
-        const rect2 = progressBarRef.current.getBoundingClientRect();
-        const x2 = moveEvent.clientX - rect2.left;
-        const percentage2 = Math.max(0, Math.min(1, x2 / rect2.width));
-        const targetBytes2 = Math.floor(percentage2 * totalBytes);
-        finalBytes = targetBytes2;
-        setScrubValue(targetBytes2);
-      }
-      function handleMouseUp() {
-        setIsScrubbing(false);
-        onSeek(finalBytes);
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
-      }
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-    },
-    [totalBytes, onSeek]
-  );
-  const handleSpeedSelect = useCallback2(
-    (speed) => {
-      onSpeedChange(speed);
-      setIsSpeedMenuOpen(false);
-    },
-    [onSpeedChange]
-  );
-  const progressPercent = totalBytes > 0 ? scrubValue / totalBytes * 100 : 0;
-  const currentTime = currentSpeed > 0 ? currentBytes / currentSpeed : 0;
-  const totalTime = currentSpeed > 0 ? totalBytes / currentSpeed : 0;
-  const currentSpeedLabel = SPEED_PRESETS.find((preset) => preset.value === currentSpeed)?.label || `${currentSpeed} bps`;
-  const isAtEnd = totalBytes > 0 && currentBytes >= totalBytes;
-  const hasStarted = currentBytes > 0;
-  const shouldShow = isVisible || isScrubbing || isSpeedMenuOpen || isAtEnd || !isPlaying;
-  return /* @__PURE__ */ jsxs2(
-    "div",
-    {
-      style: {
-        position: "absolute",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        background: "linear-gradient(to top, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0))",
-        padding: "40px 16px 16px",
-        transition: "opacity 0.3s ease",
-        opacity: shouldShow ? 1 : 0,
-        pointerEvents: shouldShow ? "auto" : "none"
-      },
-      onMouseMove,
-      children: [
-        /* @__PURE__ */ jsxs2(
-          "div",
-          {
-            ref: progressBarRef,
-            onMouseDown: handleProgressBarMouseDown,
-            onClick: handleProgressBarClick,
-            style: {
-              width: "100%",
-              height: "8px",
-              background: "rgba(255, 255, 255, 0.3)",
-              borderRadius: "4px",
-              cursor: "pointer",
-              marginBottom: "12px",
-              position: "relative"
-            },
-            children: [
-              /* @__PURE__ */ jsx2(
-                "div",
-                {
-                  style: {
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    height: "100%",
-                    width: `${progressPercent}%`,
-                    background: "#ff0000",
-                    borderRadius: "4px",
-                    transition: isScrubbing ? "none" : "width 0.1s linear"
-                  }
-                }
-              ),
-              /* @__PURE__ */ jsx2(
-                "div",
-                {
-                  style: {
-                    position: "absolute",
-                    top: "50%",
-                    left: `${progressPercent}%`,
-                    width: "14px",
-                    height: "14px",
-                    borderRadius: "50%",
-                    background: "#ff0000",
-                    transform: "translate(-50%, -50%)",
-                    transition: isScrubbing ? "none" : "left 0.1s linear"
-                  }
-                }
-              )
-            ]
-          }
-        ),
-        /* @__PURE__ */ jsxs2(
-          "div",
-          {
-            style: {
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              color: "#fff",
-              fontFamily: "monospace",
-              fontSize: "14px"
-            },
-            children: [
-              /* @__PURE__ */ jsx2(
-                "button",
-                {
-                  onClick: onPlayPause,
-                  style: {
-                    background: "rgba(255, 255, 255, 0.2)",
-                    border: "none",
-                    color: "#fff",
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "16px",
-                    transition: "background 0.2s"
-                  },
-                  onMouseEnter: (e) => {
-                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
-                  },
-                  onMouseLeave: (e) => {
-                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
-                  },
-                  title: isAtEnd ? "Restart" : isPlaying ? "Pause" : "Play",
-                  children: isAtEnd ? "\u21BB" : isPlaying ? "\u23F8" : "\u25B6"
-                }
-              ),
-              hasStarted && !isAtEnd && /* @__PURE__ */ jsx2(
-                "button",
-                {
-                  onClick: onRestart,
-                  style: {
-                    background: "rgba(255, 255, 255, 0.2)",
-                    border: "none",
-                    color: "#fff",
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "16px",
-                    transition: "background 0.2s"
-                  },
-                  onMouseEnter: (e) => {
-                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
-                  },
-                  onMouseLeave: (e) => {
-                    e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
-                  },
-                  title: "Return to beginning",
-                  children: "\u23EE"
-                }
-              ),
-              /* @__PURE__ */ jsx2(
-                "button",
-                {
-                  onClick: onRewindByte,
-                  disabled: currentBytes <= 0,
-                  style: {
-                    background: "rgba(255, 255, 255, 0.2)",
-                    border: "none",
-                    color: currentBytes <= 0 ? "rgba(255, 255, 255, 0.5)" : "#fff",
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    cursor: currentBytes <= 0 ? "not-allowed" : "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "16px",
-                    transition: "background 0.2s"
-                  },
-                  onMouseEnter: (e) => {
-                    if (currentBytes > 0) {
-                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
-                    }
-                  },
-                  onMouseLeave: (e) => {
-                    if (currentBytes > 0) {
-                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
-                    }
-                  },
-                  title: "Rewind one byte",
-                  children: "\u2039\u2039"
-                }
-              ),
-              /* @__PURE__ */ jsx2(
-                "button",
-                {
-                  onClick: onAdvanceByte,
-                  disabled: currentBytes >= totalBytes,
-                  style: {
-                    background: "rgba(255, 255, 255, 0.2)",
-                    border: "none",
-                    color: currentBytes >= totalBytes ? "rgba(255, 255, 255, 0.5)" : "#fff",
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    cursor: currentBytes >= totalBytes ? "not-allowed" : "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "16px",
-                    transition: "background 0.2s"
-                  },
-                  onMouseEnter: (e) => {
-                    if (currentBytes < totalBytes) {
-                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
-                    }
-                  },
-                  onMouseLeave: (e) => {
-                    if (currentBytes < totalBytes) {
-                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
-                    }
-                  },
-                  title: "Advance one byte",
-                  children: "\u203A\u203A"
-                }
-              ),
-              /* @__PURE__ */ jsxs2(
-                "div",
-                {
-                  style: {
-                    minWidth: "120px",
-                    textAlign: "left"
-                  },
-                  children: [
-                    formatTime(currentTime),
-                    " / ",
-                    formatTime(totalTime)
-                  ]
-                }
-              ),
-              /* @__PURE__ */ jsx2("div", { style: { flex: 1 } }),
-              /* @__PURE__ */ jsxs2("div", { style: { position: "relative" }, ref: speedMenuRef, children: [
-                /* @__PURE__ */ jsx2(
-                  "button",
-                  {
-                    onClick: () => setIsSpeedMenuOpen(!isSpeedMenuOpen),
-                    style: {
-                      background: "rgba(255, 255, 255, 0.2)",
-                      border: "none",
-                      color: "#fff",
-                      padding: "8px 12px",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                      fontFamily: "monospace",
-                      fontSize: "13px",
-                      transition: "background 0.2s",
-                      minWidth: "110px",
-                      textAlign: "left"
-                    },
-                    onMouseEnter: (e) => {
-                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
-                    },
-                    onMouseLeave: (e) => {
-                      e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
-                    },
-                    children: currentSpeedLabel
-                  }
-                ),
-                isSpeedMenuOpen && /* @__PURE__ */ jsx2(
-                  "div",
-                  {
-                    style: {
-                      position: "absolute",
-                      bottom: "100%",
-                      right: 0,
-                      marginBottom: "8px",
-                      background: "rgba(0, 0, 0, 0.95)",
-                      border: "1px solid rgba(255, 255, 255, 0.3)",
-                      borderRadius: "4px",
-                      overflow: "hidden",
-                      minWidth: "140px",
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)"
-                    },
-                    children: SPEED_PRESETS.map((preset) => /* @__PURE__ */ jsx2(
-                      "button",
-                      {
-                        onClick: () => handleSpeedSelect(preset.value),
-                        style: {
-                          width: "100%",
-                          background: preset.value === currentSpeed ? "rgba(255, 255, 255, 0.2)" : "transparent",
-                          border: "none",
-                          color: "#fff",
-                          padding: "10px 16px",
-                          textAlign: "left",
-                          cursor: "pointer",
-                          fontFamily: "monospace",
-                          fontSize: "13px",
-                          transition: "background 0.15s"
-                        },
-                        onMouseEnter: (e) => {
-                          if (preset.value !== currentSpeed) {
-                            e.currentTarget.style.background = "rgba(255, 255, 255, 0.1)";
-                          }
-                        },
-                        onMouseLeave: (e) => {
-                          if (preset.value !== currentSpeed) {
-                            e.currentTarget.style.background = "transparent";
-                          }
-                        },
-                        children: preset.label
-                      },
-                      preset.value
-                    ))
-                  }
-                )
-              ] })
-            ]
-          }
-        )
-      ]
-    }
-  );
-}
-
 // src/utils/performanceOverlay.ts
 function drawPerformanceOverlay(ctx, stats, font) {
   const {
@@ -2936,8 +1631,8 @@ function drawPerformanceOverlay(ctx, stats, font) {
   });
 }
 
-// src/AnsiVirtualDisplayEngine.ts
-var DOS_COLORS2 = {
+// src/engines/AnsiVirtualDisplayEngine.ts
+var DOS_COLORS = {
   0: "#000000",
   1: "#0000AA",
   2: "#00AA00",
@@ -2955,11 +1650,11 @@ var DOS_COLORS2 = {
   14: "#FFFF55",
   15: "#FFFFFF"
 };
-function colorToCss2(color, defaultColor = "#AAAAAA") {
+function colorToCss(color, defaultColor = "#AAAAAA") {
   if (typeof color === "string") {
     return color;
   }
-  return DOS_COLORS2[color] ?? defaultColor;
+  return DOS_COLORS[color] ?? defaultColor;
 }
 var AnsiVirtualDisplayEngine = class {
   constructor(canvas, config) {
@@ -3185,6 +1880,10 @@ var AnsiVirtualDisplayEngine = class {
       }
     }
   }
+  _isFinalMode() {
+    const generator = this.config.frameGenerator;
+    return generator && generator.capabilities && generator.capabilities.supportsSeek === false;
+  }
   _generateAndRender() {
     const renderStart = performance.now();
     const generator = this.config.frameGenerator;
@@ -3198,6 +1897,10 @@ var AnsiVirtualDisplayEngine = class {
     } else {
       const charGen = generator;
       this.screen = charGen(this.currentFrame, this.config.columns, requestedRows);
+    }
+    if (this._isFinalMode() && this.screen && this.screen.lines.length !== this.config.rows) {
+      this.config.rows = this.screen.lines.length;
+      this._setupCanvas();
     }
     this.lastRenderedViewY = cellViewY;
     this.renderTime = performance.now() - renderStart;
@@ -3252,14 +1955,15 @@ var AnsiVirtualDisplayEngine = class {
         const x = c * charWidth;
         const y = r * charHeight;
         const fg = typeof cell.fg === "number" && cell.bold && cell.fg < 8 ? cell.fg + 8 : cell.fg;
-        const fgColor = colorToCss2(fg, "#AAAAAA");
-        const bgColor = colorToCss2(cell.bg, "#000000");
+        const fgColor = colorToCss(fg, "#AAAAAA");
+        const bgColor = colorToCss(cell.bg, "#000000");
         const charCode = charToCp437Byte(cell.ch);
         renderGlyph(offCtx, this.bitmapFont, charCode, x, y, fgColor, bgColor);
       }
     }
     const pixelOffsetY = this.config.pixelOffsetY ?? 0;
-    const visibleHeight = this.config.rows * charHeight;
+    const isFinalMode = this._isFinalMode();
+    const visibleHeight = isFinalMode ? screenRows * charHeight : this.config.rows * charHeight;
     ctx.fillStyle = this.config.background;
     ctx.fillRect(0, 0, cssWidth, visibleHeight);
     ctx.drawImage(
@@ -3297,8 +2001,248 @@ var AnsiVirtualDisplayEngine = class {
   }
 };
 
+// src/font/fonExtractor.ts
+async function extractFontFromFON(url) {
+  console.log("[fonExtractor] Extracting from:", url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to load FON: ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if (bytes[0] !== 77 || bytes[1] !== 90) {
+    return { bitmapData: bytes, width: 8, height: 16 };
+  }
+  const neOffset = bytes[60] | bytes[61] << 8;
+  if (bytes[neOffset] !== 78 || bytes[neOffset + 1] !== 69) {
+    return null;
+  }
+  const resTableOffset = neOffset + (bytes[neOffset + 36] | bytes[neOffset + 37] << 8);
+  const alignShift = bytes[resTableOffset] | bytes[resTableOffset + 1] << 8;
+  let pos = resTableOffset + 2;
+  while (pos < bytes.length - 8) {
+    const typeId = bytes[pos] | bytes[pos + 1] << 8;
+    if (typeId === 0) {
+      break;
+    }
+    const count = bytes[pos + 2] | bytes[pos + 3] << 8;
+    pos += 8;
+    if (typeId === 32776) {
+      console.log("[fonExtractor] Found font resource, count:", count);
+      if (count > 0) {
+        const fontResOffset = (bytes[pos] | bytes[pos + 1] << 8) << alignShift;
+        const fontResLength = (bytes[pos + 2] | bytes[pos + 3] << 8) << alignShift;
+        const fntData = bytes.slice(fontResOffset, fontResOffset + fontResLength);
+        const dfPixWidth = fntData[86] | fntData[87] << 8;
+        const dfPixHeight = fntData[88] | fntData[89] << 8;
+        const dfFirstChar = fntData[95];
+        const dfLastChar = fntData[96];
+        console.log(
+          "[fonExtractor] Font:",
+          dfPixWidth,
+          "x",
+          dfPixHeight,
+          "chars",
+          dfFirstChar,
+          "-",
+          dfLastChar
+        );
+        const charTableStart = 117;
+        const charCount = dfLastChar - dfFirstChar + 1;
+        const charTableSize = charCount * 4;
+        const baseOffset = charTableStart + charTableSize;
+        let bitmapOffset = baseOffset;
+        const bytesPerGlyph = dfPixHeight;
+        let bestOffset = baseOffset;
+        let bestScore = -1;
+        for (let adj = -16; adj <= 16; adj++) {
+          const testOffset = baseOffset + adj;
+          const expectedBitmapSize2 = 256 * bytesPerGlyph;
+          if (testOffset < 0 || fntData.length < testOffset + expectedBitmapSize2) continue;
+          let score = 0;
+          const testChar32 = fntData.slice(
+            testOffset + 32 * bytesPerGlyph,
+            testOffset + 32 * bytesPerGlyph + bytesPerGlyph
+          );
+          const spaceNonZero = testChar32.filter((b) => b !== 0).length;
+          if (spaceNonZero === 0) {
+            score += 20;
+          } else if (spaceNonZero <= 2) {
+            score += 10;
+          } else {
+            continue;
+          }
+          const testChar65 = fntData.slice(
+            testOffset + 65 * bytesPerGlyph,
+            testOffset + 65 * bytesPerGlyph + bytesPerGlyph
+          );
+          const firstNonZero = testChar65.findIndex((b) => b !== 0);
+          if (firstNonZero >= 5 && firstNonZero <= 7) {
+            score += 15 - Math.abs(firstNonZero - 6);
+            if (testChar65[firstNonZero] >= 16 && testChar65[firstNonZero] <= 128) {
+              score += 5;
+            }
+          } else {
+            score -= 10;
+          }
+          const testChar219 = fntData.slice(
+            testOffset + 219 * bytesPerGlyph,
+            testOffset + 219 * bytesPerGlyph + bytesPerGlyph
+          );
+          const allFF = testChar219.every((b) => b === 255);
+          if (allFF) {
+            score += 25;
+          } else {
+            const nonFF = testChar219.filter((b) => b !== 255).length;
+            if (nonFF <= 2) {
+              score += 10;
+            } else {
+              score -= 15;
+            }
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestOffset = testOffset;
+          }
+        }
+        bitmapOffset = bestOffset;
+        console.log("[fonExtractor] Bitmap offset:", bitmapOffset, "score:", bestScore);
+        const expectedBitmapSize = 256 * bytesPerGlyph;
+        if (fntData.length >= bitmapOffset + expectedBitmapSize) {
+          console.log("[fonExtractor] Success: extracted bitmap");
+          return {
+            bitmapData: fntData.slice(bitmapOffset, bitmapOffset + expectedBitmapSize),
+            width: dfPixWidth,
+            height: dfPixHeight
+          };
+        }
+        const absoluteBitmapOffset = fontResOffset + bitmapOffset;
+        if (bytes.length >= absoluteBitmapOffset + expectedBitmapSize) {
+          console.log("[fonExtractor] Success: extracted bitmap (absolute offset)");
+          return {
+            bitmapData: bytes.slice(
+              absoluteBitmapOffset,
+              absoluteBitmapOffset + expectedBitmapSize
+            ),
+            width: dfPixWidth,
+            height: dfPixHeight
+          };
+        }
+        console.log("[fonExtractor] Failed: bitmap not found");
+        return null;
+      }
+    }
+    pos += count * 12;
+  }
+  console.log("[fonExtractor] Failed: no font resource found");
+  return null;
+}
+
+// src/font/fontCache.ts
+var CACHE_PREFIX = "react-ansiart:font:";
+var CACHE_VERSION = "1";
+function getCachedFont(url) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
+  try {
+    const cacheKey = `${CACHE_PREFIX}${encodeURIComponent(url)}`;
+    const cached = window.localStorage.getItem(cacheKey);
+    if (!cached) {
+      return null;
+    }
+    const data = JSON.parse(cached);
+    if (data.version !== CACHE_VERSION) {
+      window.localStorage.removeItem(cacheKey);
+      return null;
+    }
+    const glyphs = data.glyphs.map((base64) => base64ToUint8Array(base64));
+    const rawBitmapData = data.rawBitmapData ? base64ToUint8Array(data.rawBitmapData) : void 0;
+    return {
+      width: data.width,
+      height: data.height,
+      glyphs,
+      rawBitmapData
+      // Don't restore glyphCache - it's runtime-only
+    };
+  } catch (e) {
+    console.warn("[fontCache] Failed to read cached font:", e);
+    return null;
+  }
+}
+function setCachedFont(url, font) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  try {
+    const cacheKey = `${CACHE_PREFIX}${encodeURIComponent(url)}`;
+    const glyphsBase64 = font.glyphs.map((glyph) => uint8ArrayToBase64(glyph));
+    const rawBitmapDataBase64 = font.rawBitmapData ? uint8ArrayToBase64(font.rawBitmapData) : void 0;
+    const data = {
+      glyphs: glyphsBase64,
+      rawBitmapData: rawBitmapDataBase64,
+      width: font.width,
+      height: font.height,
+      version: CACHE_VERSION
+    };
+    window.localStorage.setItem(cacheKey, JSON.stringify(data));
+  } catch (e) {
+    if (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED") {
+      console.warn("[fontCache] localStorage quota exceeded, cannot cache font");
+    } else {
+      console.warn("[fontCache] Failed to cache font:", e);
+    }
+  }
+}
+function clearFontCache(url) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  try {
+    if (url) {
+      const cacheKey = `${CACHE_PREFIX}${encodeURIComponent(url)}`;
+      window.localStorage.removeItem(cacheKey);
+    } else {
+      const keysToRemove = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX)) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => window.localStorage.removeItem(key));
+    }
+  } catch (e) {
+    console.warn("[fontCache] Failed to clear cache:", e);
+  }
+}
+function uint8ArrayToBase64(bytes) {
+  if (typeof btoa !== "undefined") {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+  throw new Error("btoa not available - cannot serialize font data");
+}
+function base64ToUint8Array(base64) {
+  if (typeof atob !== "undefined") {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+  throw new Error("atob not available - cannot deserialize font data");
+}
+
 // src/font/bitmapFontLoader.ts
 async function loadBitmapFontFromUrl(bitmapFontUrl) {
+  const cached = getCachedFont(bitmapFontUrl);
+  if (cached) {
+    console.log("[bitmapFontLoader] Using cached font for:", bitmapFontUrl);
+    return cached;
+  }
   try {
     const fontResult = await extractFontFromFON(bitmapFontUrl);
     if (fontResult) {
@@ -3308,9 +2252,14 @@ async function loadBitmapFontFromUrl(bitmapFontUrl) {
       for (let i = 0; i < 256; i++) {
         glyphs.push(bitmapData.slice(i * bytesPerGlyph, (i + 1) * bytesPerGlyph));
       }
-      return { width, height, glyphs, rawBitmapData: bitmapData };
+      const font = { width, height, glyphs, rawBitmapData: bitmapData };
+      setCachedFont(bitmapFontUrl, font);
+      return font;
     } else {
       const font = await loadRawBitmapFont(bitmapFontUrl, 8, 16);
+      if (font) {
+        setCachedFont(bitmapFontUrl, font);
+      }
       return font;
     }
   } catch (e) {
@@ -3319,8 +2268,8 @@ async function loadBitmapFontFromUrl(bitmapFontUrl) {
   }
 }
 
-// src/AnsiVirtualDisplay.tsx
-import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+// src/components/AnsiVirtualDisplay.tsx
+import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 function AnsiVirtualDisplay({
   columns = 80,
   rows = 25,
@@ -3339,32 +2288,36 @@ function AnsiVirtualDisplay({
   viewY = 0,
   pixelOffsetX = 0,
   pixelOffsetY = 0,
-  onViewChange
+  onViewChange,
+  sauce,
+  onSauceClick,
+  autoStart
 }) {
-  const canvasRef = useRef3(null);
-  const engineRef = useRef3(null);
-  const [bitmapFont, setBitmapFont] = useState3(providedBitmapFont || null);
-  const [isPlaying, setIsPlaying] = useState3(false);
-  const [isOverlayVisible, setIsOverlayVisible] = useState3(false);
-  const [currentBytes, setCurrentBytes] = useState3(0);
-  const [totalBytes, setTotalBytes] = useState3(0);
-  const [currentSpeed, setCurrentSpeed] = useState3(960);
-  const hideTimeoutRef = useRef3(null);
-  const effectiveFrameGenerator = useMemo2(() => {
+  const canvasRef = useRef2(null);
+  const engineRef = useRef2(null);
+  const previousFrameGeneratorRef = useRef2(null);
+  const [bitmapFont, setBitmapFont] = useState2(providedBitmapFont || null);
+  const [isPlaying, setIsPlaying] = useState2(false);
+  const [isOverlayVisible, setIsOverlayVisible] = useState2(false);
+  const [currentBytes, setCurrentBytes] = useState2(0);
+  const [totalBytes, setTotalBytes] = useState2(0);
+  const [currentSpeed, setCurrentSpeed] = useState2(960);
+  const hideTimeoutRef = useRef2(null);
+  const effectiveFrameGenerator = useMemo(() => {
     return frameGenerator;
   }, [frameGenerator]);
-  const generatorCapabilities = useMemo2(() => {
+  const generatorCapabilities = useMemo(() => {
     if ("capabilities" in frameGenerator && frameGenerator.capabilities) {
       return frameGenerator.capabilities;
     }
     return null;
   }, [frameGenerator]);
   const supportsOverlayControls = showOverlayControls && generatorCapabilities !== null && (generatorCapabilities.supportsSeek || generatorCapabilities.supportsSpeedControl);
-  useEffect3(() => {
+  useEffect2(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     if (!engineRef.current) {
-      const shouldStartPaused = supportsOverlayControls;
+      const shouldStartPaused = autoStart === false ? true : autoStart === true ? false : supportsOverlayControls;
       engineRef.current = new AnsiVirtualDisplayEngine(canvas, {
         columns,
         rows,
@@ -3379,8 +2332,8 @@ function AnsiVirtualDisplay({
         pixelOffsetX,
         pixelOffsetY,
         startPaused: shouldStartPaused
-        // Start paused if overlay controls enabled
       });
+      previousFrameGeneratorRef.current = effectiveFrameGenerator;
       setIsPlaying(!shouldStartPaused);
       if (shouldStartPaused) {
         setIsOverlayVisible(true);
@@ -3393,8 +2346,10 @@ function AnsiVirtualDisplay({
       }
     };
   }, []);
-  useEffect3(() => {
+  useEffect2(() => {
     if (!engineRef.current) return;
+    const previousFrameGenerator = previousFrameGeneratorRef.current;
+    const frameGeneratorChanged = effectiveFrameGenerator !== previousFrameGenerator;
     engineRef.current.updateConfig({
       columns,
       rows,
@@ -3409,6 +2364,14 @@ function AnsiVirtualDisplay({
       pixelOffsetX,
       pixelOffsetY
     });
+    if (frameGeneratorChanged && previousFrameGenerator !== null && autoStart !== false) {
+      engineRef.current.restart();
+      if (!engineRef.current.getPlayingState()) {
+        engineRef.current.play();
+        setIsPlaying(true);
+      }
+    }
+    previousFrameGeneratorRef.current = effectiveFrameGenerator;
     if (supportsOverlayControls) {
       const bytes = engineRef.current.getTotalBytes();
       if (bytes) setTotalBytes(bytes);
@@ -3428,13 +2391,14 @@ function AnsiVirtualDisplay({
     viewY,
     pixelOffsetX,
     pixelOffsetY,
-    supportsOverlayControls
+    supportsOverlayControls,
+    autoStart
   ]);
-  useEffect3(() => {
+  useEffect2(() => {
     if (!engineRef.current) return;
     engineRef.current.setBitmapFont(bitmapFont);
   }, [bitmapFont]);
-  useEffect3(() => {
+  useEffect2(() => {
     if (providedBitmapFont) {
       setBitmapFont(providedBitmapFont);
       return;
@@ -3475,7 +2439,7 @@ function AnsiVirtualDisplay({
     setCurrentBytes(0);
     setIsPlaying(true);
   };
-  const handleMouseMove = useCallback3(() => {
+  const handleMouseMove = useCallback2(() => {
     if (!showOverlayControls) return;
     setIsOverlayVisible(true);
     if (hideTimeoutRef.current) {
@@ -3487,7 +2451,7 @@ function AnsiVirtualDisplay({
       }, 3e3);
     }
   }, [showOverlayControls, isPlaying]);
-  const handleMouseLeave = useCallback3(() => {
+  const handleMouseLeave = useCallback2(() => {
     if (!showOverlayControls) return;
     if (hideTimeoutRef.current) {
       clearTimeout(hideTimeoutRef.current);
@@ -3496,27 +2460,27 @@ function AnsiVirtualDisplay({
       setIsOverlayVisible(false);
     }
   }, [showOverlayControls, isPlaying]);
-  const handleSeek = useCallback3((bytePosition) => {
+  const handleSeek = useCallback2((bytePosition) => {
     if (!engineRef.current) return;
     engineRef.current.seekToBytePosition(bytePosition);
     setCurrentBytes(bytePosition);
   }, []);
-  const handleSpeedChange = useCallback3((bytesPerSecond) => {
+  const handleSpeedChange = useCallback2((bytesPerSecond) => {
     if (!engineRef.current) return;
     engineRef.current.setSpeed(bytesPerSecond);
     setCurrentSpeed(bytesPerSecond);
   }, []);
-  const handleAdvanceByte = useCallback3(() => {
+  const handleAdvanceByte = useCallback2(() => {
     if (!engineRef.current) return;
     engineRef.current.advanceByte();
     setCurrentBytes(engineRef.current.getCurrentBytePosition());
   }, []);
-  const handleRewindByte = useCallback3(() => {
+  const handleRewindByte = useCallback2(() => {
     if (!engineRef.current) return;
     engineRef.current.rewindByte();
     setCurrentBytes(engineRef.current.getCurrentBytePosition());
   }, []);
-  useEffect3(() => {
+  useEffect2(() => {
     if (!supportsOverlayControls || !isPlaying) return;
     const intervalId = setInterval(() => {
       if (engineRef.current) {
@@ -3533,14 +2497,14 @@ function AnsiVirtualDisplay({
     }, 100);
     return () => clearInterval(intervalId);
   }, [supportsOverlayControls, isPlaying]);
-  useEffect3(() => {
+  useEffect2(() => {
     if (engineRef.current) {
       setCurrentBytes(engineRef.current.getCurrentBytePosition());
       const speed = engineRef.current.getCurrentBytesPerSecond();
       if (speed) setCurrentSpeed(speed);
     }
   }, [isPlaying]);
-  useEffect3(() => {
+  useEffect2(() => {
     if (engineRef.current && supportsOverlayControls) {
       const speed = engineRef.current.getCurrentBytesPerSecond();
       if (speed) setCurrentSpeed(speed);
@@ -3548,22 +2512,22 @@ function AnsiVirtualDisplay({
       if (bytes) setTotalBytes(bytes);
     }
   }, [supportsOverlayControls, frameGenerator]);
-  useEffect3(() => {
+  useEffect2(() => {
     return () => {
       if (hideTimeoutRef.current) {
         clearTimeout(hideTimeoutRef.current);
       }
     };
   }, []);
-  const rootStyle = useMemo2(() => {
+  const rootStyle = useMemo(() => {
     return {
       display: "block",
       width: fillContainer ? "100%" : "fit-content",
       background
     };
   }, [fillContainer, background]);
-  return /* @__PURE__ */ jsxs3("div", { children: [
-    showControls && !supportsOverlayControls && /* @__PURE__ */ jsxs3(
+  return /* @__PURE__ */ jsxs2("div", { children: [
+    showControls && !supportsOverlayControls && /* @__PURE__ */ jsxs2(
       "div",
       {
         style: {
@@ -3573,7 +2537,7 @@ function AnsiVirtualDisplay({
           alignItems: "center"
         },
         children: [
-          /* @__PURE__ */ jsx3(
+          /* @__PURE__ */ jsx2(
             "button",
             {
               onClick: handlePlayPause,
@@ -3595,7 +2559,7 @@ function AnsiVirtualDisplay({
               children: isPlaying ? "\u23F8 Pause" : "\u25B6 Play"
             }
           ),
-          /* @__PURE__ */ jsx3(
+          /* @__PURE__ */ jsx2(
             "button",
             {
               onClick: handleRestart,
@@ -3620,7 +2584,7 @@ function AnsiVirtualDisplay({
         ]
       }
     ),
-    /* @__PURE__ */ jsxs3(
+    /* @__PURE__ */ jsxs2(
       "div",
       {
         style: {
@@ -3631,8 +2595,8 @@ function AnsiVirtualDisplay({
         onMouseMove: handleMouseMove,
         onMouseLeave: handleMouseLeave,
         children: [
-          /* @__PURE__ */ jsx3("canvas", { ref: canvasRef, style: rootStyle, "aria-label": "ANSI Virtual Display" }),
-          supportsOverlayControls && /* @__PURE__ */ jsx3(
+          /* @__PURE__ */ jsx2("canvas", { ref: canvasRef, style: rootStyle, "aria-label": "ANSI Virtual Display" }),
+          supportsOverlayControls && /* @__PURE__ */ jsx2(
             AnsiPlayerOverlay,
             {
               isPlaying,
@@ -3646,10 +2610,12 @@ function AnsiVirtualDisplay({
               onSpeedChange: handleSpeedChange,
               onAdvanceByte: handleAdvanceByte,
               onRewindByte: handleRewindByte,
-              onMouseMove: handleMouseMove
+              onMouseMove: handleMouseMove,
+              sauce,
+              onSauceClick
             }
           ),
-          supportsOverlayControls && isOverlayVisible && typeof window !== "undefined" && /* @__PURE__ */ jsxs3(
+          supportsOverlayControls && isOverlayVisible && typeof window !== "undefined" && /* @__PURE__ */ jsxs2(
             "div",
             {
               style: {
@@ -3695,6 +2661,7 @@ function createAnsiFrameGenerator(options) {
     mode,
     columns,
     rows: displayRows,
+    finalHeightForCanvas,
     bytesPerSecond: initialBytesPerSecond = 960,
     // Default: 9600 baud = 960 bytes/sec (baud/10 conversion)
     fps = 30,
@@ -3707,9 +2674,9 @@ function createAnsiFrameGenerator(options) {
   if (mode === "final") {
     let cachedScreen = null;
     if (columns !== void 0) {
-      cachedScreen = parseAnsi(ansiData, columns);
+      cachedScreen = parseAnsiCore(ansiData, { columns });
     } else {
-      cachedScreen = parseAnsiDynamic(ansiData);
+      cachedScreen = parseAnsiCore(ansiData);
       if (onDimensionsChange) {
         onDimensionsChange({
           columns: cachedScreen.columns,
@@ -3758,7 +2725,7 @@ function createAnsiFrameGenerator(options) {
     );
     let screen;
     if (columns !== void 0) {
-      screen = parseAnsiIncremental(ansiData, columns, targetByteIndex);
+      screen = parseAnsiCore(ansiData, { columns, maxByteIndex: targetByteIndex });
       if (displayRows !== void 0) {
         const contentRows = screen.lines.length;
         const viewY = Math.max(0, contentRows - displayRows);
@@ -3773,12 +2740,16 @@ function createAnsiFrameGenerator(options) {
         const windowEnd = Math.min(windowStart + displayRows, contentRows);
         const windowedLines = screen.lines.slice(windowStart, windowEnd);
         screen.lines = [...windowedLines];
-        while (screen.lines.length < rows) {
+        while (screen.lines.length < displayRows) {
+          screen.lines.push(createEmptyRow(columns));
+        }
+      } else if (displayRows === void 0 && finalHeightForCanvas !== void 0) {
+        while (screen.lines.length < finalHeightForCanvas) {
           screen.lines.push(createEmptyRow(columns));
         }
       }
     } else {
-      screen = parseAnsiIncrementalDynamic(ansiData, targetByteIndex);
+      screen = parseAnsiCore(ansiData, { maxByteIndex: targetByteIndex });
       if (onDimensionsChange) {
         const currentColumns = screen.columns;
         const currentRows = screen.lines.length;
@@ -3812,10 +2783,9 @@ function createAnsiArtFrameGenerator(options) {
   const {
     ansiData,
     mode,
-    viewscreen,
     columns,
     rows,
-    dynamicColumns,
+    finalHeightForAnimated,
     bytesPerSecond = 960,
     // Default: 9600 baud = 960 bytes/sec
     fps = 30,
@@ -3823,15 +2793,12 @@ function createAnsiArtFrameGenerator(options) {
     onScrollChange,
     debugCursorCodes = false
   } = options;
-  if (viewscreen === "fixed" && !columns) {
-    return null;
-  }
-  const effectiveColumns = viewscreen === "fixed" ? columns : viewscreen === "dynamic" && mode === "final" ? dynamicColumns : void 0;
   return createAnsiFrameGenerator({
     ansiData,
     mode,
-    columns: effectiveColumns,
+    columns,
     rows,
+    finalHeightForCanvas: finalHeightForAnimated,
     bytesPerSecond,
     fps,
     onDimensionsChange,
@@ -3840,40 +2807,427 @@ function createAnsiArtFrameGenerator(options) {
   });
 }
 
-// src/AnsiArtNG.tsx
+// src/components/SauceMetadataModal.tsx
+import { useEffect as useEffect3, useRef as useRef3 } from "react";
+import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+function SauceMetadataModal({ sauce, isOpen, onClose }) {
+  const modalRef = useRef3(null);
+  useEffect3(() => {
+    if (!isOpen) return;
+    function handleEscape(e) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isOpen, onClose]);
+  useEffect3(() => {
+    if (!isOpen) return;
+    function handleClickOutside(e) {
+      if (modalRef.current && !modalRef.current.contains(e.target)) {
+        onClose();
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen, onClose]);
+  if (!isOpen) return null;
+  const sauceInfo = getSauceInfo(sauce);
+  return /* @__PURE__ */ jsx3(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: "rgba(0, 0, 0, 0.8)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1e4
+      },
+      children: /* @__PURE__ */ jsxs3(
+        "div",
+        {
+          ref: modalRef,
+          style: {
+            background: "#1a1a1a",
+            border: "1px solid #444",
+            borderRadius: "8px",
+            padding: "24px",
+            maxWidth: "600px",
+            maxHeight: "80vh",
+            overflow: "auto",
+            color: "#fff",
+            fontFamily: "monospace",
+            fontSize: "13px",
+            lineHeight: "1.6",
+            boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)"
+          },
+          children: [
+            /* @__PURE__ */ jsxs3(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "20px",
+                  paddingBottom: "12px",
+                  borderBottom: "1px solid #444"
+                },
+                children: [
+                  /* @__PURE__ */ jsx3(
+                    "h2",
+                    {
+                      style: {
+                        margin: 0,
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                        color: "#fff"
+                      },
+                      children: "SAUCE Metadata"
+                    }
+                  ),
+                  /* @__PURE__ */ jsx3(
+                    "button",
+                    {
+                      onClick: onClose,
+                      style: {
+                        background: "rgba(255, 255, 255, 0.1)",
+                        border: "1px solid #555",
+                        color: "#fff",
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "18px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "background 0.2s"
+                      },
+                      onMouseEnter: (e) => {
+                        e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+                      },
+                      onMouseLeave: (e) => {
+                        e.currentTarget.style.background = "rgba(255, 255, 255, 0.1)";
+                      },
+                      title: "Close",
+                      children: "\xD7"
+                    }
+                  )
+                ]
+              }
+            ),
+            /* @__PURE__ */ jsxs3("div", { style: { display: "flex", flexDirection: "column", gap: "16px" }, children: [
+              sauce.title && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Title:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauce.title })
+              ] }),
+              sauce.author && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Author:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauce.author })
+              ] }),
+              sauce.group && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Group:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauce.group })
+              ] }),
+              sauce.date && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Date:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauce.date.length === 8 ? `${sauce.date.slice(0, 4)}-${sauce.date.slice(4, 6)}-${sauce.date.slice(6, 8)}` : sauce.date })
+              ] }),
+              sauceInfo && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "File Type:" }),
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#fff" }, children: [
+                  sauceInfo.fileTypeDescription,
+                  " (DataType: ",
+                  sauce.dataType,
+                  ", FileType: ",
+                  sauce.fileType,
+                  ")"
+                ] })
+              ] }),
+              sauceInfo?.hasDimensions ? /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Dimensions:" }),
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#fff" }, children: [
+                  sauceInfo.width,
+                  " \xD7 ",
+                  sauceInfo.height,
+                  " characters"
+                ] })
+              ] }) : /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Dimensions:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#666" }, children: "Not specified" })
+              ] }),
+              /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Type Info Fields:" }),
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#fff", fontSize: "12px", fontFamily: "monospace" }, children: [
+                  "TInfo1: ",
+                  sauce.tInfo1,
+                  " | TInfo2: ",
+                  sauce.tInfo2,
+                  " | TInfo3: ",
+                  sauce.tInfo3,
+                  " | TInfo4: ",
+                  sauce.tInfo4
+                ] })
+              ] }),
+              sauce.tInfoS && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "TInfoS:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauce.tInfoS })
+              ] }),
+              sauceInfo?.fontName && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Font:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauceInfo.fontName })
+              ] }),
+              /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Flags:" }),
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#fff", display: "flex", flexDirection: "column", gap: "4px" }, children: [
+                  sauceInfo?.iceColors && /* @__PURE__ */ jsx3("div", { children: "\u2022 ICE Colors enabled" }),
+                  sauceInfo?.letterSpacing && /* @__PURE__ */ jsx3("div", { children: "\u2022 Letter spacing enabled" }),
+                  !sauceInfo?.iceColors && !sauceInfo?.letterSpacing && /* @__PURE__ */ jsx3("div", { style: { color: "#666" }, children: "None" })
+                ] })
+              ] }),
+              sauceInfo?.aspectRatio && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "Aspect Ratio:" }),
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#fff" }, children: [
+                  sauceInfo.aspectRatio.width,
+                  ":",
+                  sauceInfo.aspectRatio.height
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "File Size:" }),
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#fff" }, children: [
+                  sauce.fileSize.toLocaleString(),
+                  " bytes"
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "4px" }, children: "SAUCE Version:" }),
+                /* @__PURE__ */ jsx3("div", { style: { color: "#fff" }, children: sauce.version })
+              ] }),
+              /* @__PURE__ */ jsxs3(
+                "div",
+                {
+                  style: {
+                    marginTop: "8px",
+                    paddingTop: "16px",
+                    borderTop: "1px solid #333"
+                  },
+                  children: [
+                    /* @__PURE__ */ jsx3("div", { style: { color: "#888", marginBottom: "12px", fontSize: "12px", fontWeight: "bold" }, children: "Technical Details" }),
+                    /* @__PURE__ */ jsxs3("div", { style: { display: "flex", flexDirection: "column", gap: "8px", fontSize: "11px", color: "#aaa" }, children: [
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "ID: ",
+                        sauce.id
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "Version: ",
+                        sauce.version
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "DataType: ",
+                        sauce.dataType
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "FileType: ",
+                        sauce.fileType
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "TInfo1: ",
+                        sauce.tInfo1,
+                        " | TInfo2: ",
+                        sauce.tInfo2,
+                        " | TInfo3: ",
+                        sauce.tInfo3,
+                        " | TInfo4: ",
+                        sauce.tInfo4
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "tFlags: 0x",
+                        sauce.tFlags.toString(16).toUpperCase().padStart(2, "0"),
+                        " (",
+                        sauce.tFlags,
+                        ")"
+                      ] }),
+                      sauce.tInfoS && /* @__PURE__ */ jsxs3("div", { children: [
+                        "TInfoS: ",
+                        sauce.tInfoS
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "Comments: ",
+                        sauce.comments
+                      ] }),
+                      /* @__PURE__ */ jsxs3("div", { children: [
+                        "FileSize: ",
+                        sauce.fileSize,
+                        " bytes"
+                      ] })
+                    ] })
+                  ]
+                }
+              ),
+              sauce.comments > 0 && sauce.commentLines.length > 0 && /* @__PURE__ */ jsxs3("div", { children: [
+                /* @__PURE__ */ jsxs3("div", { style: { color: "#888", marginBottom: "8px" }, children: [
+                  "Comments (",
+                  sauce.comments,
+                  "):"
+                ] }),
+                /* @__PURE__ */ jsx3(
+                  "div",
+                  {
+                    style: {
+                      color: "#fff",
+                      background: "rgba(0, 0, 0, 0.3)",
+                      padding: "12px",
+                      borderRadius: "4px",
+                      border: "1px solid #333",
+                      maxHeight: "200px",
+                      overflow: "auto"
+                    },
+                    children: sauce.commentLines.map((comment, idx) => /* @__PURE__ */ jsx3("div", { style: { marginBottom: idx < sauce.commentLines.length - 1 ? "8px" : "0" }, children: comment }, idx))
+                  }
+                )
+              ] })
+            ] })
+          ]
+        }
+      )
+    }
+  );
+}
+
+// src/components/SauceOverlay.tsx
 import { jsx as jsx4 } from "react/jsx-runtime";
-function AnsiArtNG({
+function SauceOverlay({ isVisible, onClick }) {
+  if (!isVisible) return null;
+  return /* @__PURE__ */ jsx4(
+    "button",
+    {
+      onClick,
+      style: {
+        position: "absolute",
+        top: "16px",
+        right: "16px",
+        background: "rgba(255, 255, 255, 0.2)",
+        border: "none",
+        color: "#fff",
+        width: "36px",
+        height: "36px",
+        borderRadius: "50%",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: "10px",
+        fontWeight: "bold",
+        transition: "background 0.2s, opacity 0.3s",
+        opacity: isVisible ? 1 : 0,
+        pointerEvents: isVisible ? "auto" : "none",
+        zIndex: 1e3,
+        lineHeight: "1",
+        padding: 0
+      },
+      onMouseEnter: (e) => {
+        e.currentTarget.style.background = "rgba(255, 255, 255, 0.3)";
+      },
+      onMouseLeave: (e) => {
+        e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)";
+      },
+      title: "View SAUCE metadata",
+      children: "S"
+    }
+  );
+}
+
+// src/components/AnsiArt.tsx
+import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+function AnsiArt({
   src,
   mode = "final",
-  viewscreen = "fixed",
-  columns,
-  rows = 25,
+  columns = 80,
+  rows = "auto",
   background = "#000",
   bitmapFontUrl,
   showControls = false,
   showOverlayControls = false,
   showPerformanceOverlay = false,
+  sauceOverlay = false,
   fps = 30,
   bytesPerSecond = 960,
   // Default: 9600 baud (960 bytes/sec after conversion from baud/10)
+  autoStart = true,
   allowDrop = true,
   debugCursorCodes = false
 }) {
-  const [ansiData, setAnsiData] = useState4(null);
-  const [error, setError] = useState4(null);
-  const [isDragging, setIsDragging] = useState4(false);
-  const [fileName, setFileName] = useState4(null);
-  const [dynamicColumns, setDynamicColumns] = useState4(80);
-  const [dynamicRows, setDynamicRows] = useState4(25);
-  const [scrollViewY, setScrollViewY] = useState4(0);
-  const [virtualRows, setVirtualRows] = useState4(25);
+  const [ansiData, setAnsiData] = useState3(null);
+  const [error, setError] = useState3(null);
+  const [isDragging, setIsDragging] = useState3(false);
+  const [fileName, setFileName] = useState3(null);
+  const [dynamicColumns, setDynamicColumns] = useState3(80);
+  const [dynamicRows, setDynamicRows] = useState3(25);
+  const [detectedFinalRows, setDetectedFinalRows] = useState3(null);
+  const [finalHeightForAnimated, setFinalHeightForAnimated] = useState3(null);
+  const [scrollViewY, setScrollViewY] = useState3(0);
+  const [virtualRows, setVirtualRows] = useState3(25);
+  const [sauce, setSauce] = useState3(void 0);
+  const [isSauceModalOpen, setIsSauceModalOpen] = useState3(false);
+  const [isSauceOverlayVisible, setIsSauceOverlayVisible] = useState3(false);
+  const [detectedMode, setDetectedMode] = useState3("final");
+  const sauceOverlayTimeoutRef = useRef4(null);
   const frameGeneratorRef = useRef4(null);
+  useEffect4(() => {
+    if (mode === "auto" && ansiData) {
+      const isAnimated = detectAnimation(ansiData);
+      setDetectedMode(isAnimated ? "animated" : "final");
+    } else if (mode !== "auto") {
+      setDetectedMode("final");
+    }
+  }, [mode, ansiData]);
+  const effectiveMode = useMemo2(() => {
+    if (mode === "auto") {
+      return detectedMode;
+    }
+    return mode;
+  }, [mode, detectedMode]);
+  useEffect4(() => {
+    if (ansiData && sauceOverlay) {
+      const parsedSauce = parseSauce(ansiData);
+      if (parsedSauce) {
+        console.log("[SAUCE] Metadata detected:", {
+          title: parsedSauce.title || "(no title)",
+          author: parsedSauce.author || "(no author)",
+          group: parsedSauce.group || "(no group)",
+          date: parsedSauce.date || "(no date)",
+          fileType: `${parsedSauce.dataType}:${parsedSauce.fileType}`,
+          dimensions: parsedSauce.tInfo1 > 0 && parsedSauce.tInfo2 > 0 ? `${parsedSauce.tInfo1}\xD7${parsedSauce.tInfo2}` : "N/A",
+          comments: parsedSauce.comments
+        });
+        setSauce(parsedSauce);
+      } else {
+        console.log("[SAUCE] No SAUCE metadata found in file");
+      }
+    } else if (!sauceOverlay) {
+      setSauce(void 0);
+    }
+  }, [ansiData, sauceOverlay]);
   useEffect4(() => {
     let cancelled = false;
     async function load() {
       setError(null);
       setScrollViewY(0);
-      setVirtualRows(rows);
+      setVirtualRows(typeof rows === "number" ? rows : 25);
+      setDetectedFinalRows(null);
+      setFinalHeightForAnimated(null);
       try {
         const res = await fetch(src);
         if (!res.ok) throw new Error(`Failed to fetch ${src}: ${res.status}`);
@@ -3915,6 +3269,8 @@ function AnsiArtNG({
     if (!file) return;
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
+      setDetectedFinalRows(null);
+      setFinalHeightForAnimated(null);
       setAnsiData(buf);
       setFileName(file.name);
     } catch (err) {
@@ -3922,51 +3278,80 @@ function AnsiArtNG({
     }
   };
   useEffect4(() => {
-    if (viewscreen === "dynamic" && mode === "final" && ansiData) {
-      try {
-        const screen = parseAnsiDynamic(ansiData);
-        setDynamicColumns(screen.columns);
-        setDynamicRows(screen.lines.length);
-      } catch (e) {
-        setError(String(e?.message || e));
+    if (!ansiData) return;
+    try {
+      if (effectiveMode === "final") {
+        if (columns === "auto" || rows === "auto") {
+          const effectiveColumns = columns === "auto" ? void 0 : columns;
+          const screen = parseAnsiCore(
+            ansiData,
+            effectiveColumns !== void 0 ? { columns: effectiveColumns } : {}
+          );
+          if (columns === "auto") {
+            setDynamicColumns(screen.columns);
+          }
+          if (rows === "auto") {
+            setDetectedFinalRows(screen.lines.length);
+          } else if (typeof rows === "number") {
+            setDetectedFinalRows(rows);
+          }
+        } else {
+          setDetectedFinalRows(rows);
+        }
+      } else if (effectiveMode === "animated" && rows === "auto") {
+        const effectiveColumns = columns === "auto" ? void 0 : columns;
+        const screen = parseAnsiCore(
+          ansiData,
+          effectiveColumns !== void 0 ? { columns: effectiveColumns } : {}
+        );
+        setFinalHeightForAnimated(screen.lines.length);
+        if (columns === "auto") {
+          setDynamicColumns(screen.columns);
+        }
+      } else if (effectiveMode === "animated" && columns === "auto") {
+        setDynamicColumns(80);
+        setDynamicRows(typeof rows === "number" ? rows : 25);
+      } else {
+        setDynamicColumns(80);
+        setDynamicRows(typeof rows === "number" ? rows : 25);
       }
-    } else if (viewscreen === "dynamic" && mode === "animated") {
-      setDynamicColumns(80);
-      setDynamicRows(25);
+    } catch (e) {
+      setError(String(e?.message || e));
     }
-  }, [viewscreen, mode, ansiData]);
-  const handleDimensionsChange = useCallback4(
+  }, [effectiveMode, ansiData, columns, rows]);
+  const handleDimensionsChange = useCallback3(
     (dimensions) => {
-      if (viewscreen === "dynamic" && mode === "animated") {
-        setDynamicColumns(dimensions.columns);
-        setDynamicRows(dimensions.rows);
+      if (effectiveMode === "animated" && (columns === "auto" || rows === "auto")) {
+        if (columns === "auto") {
+          setDynamicColumns(dimensions.columns);
+        }
+        if (rows === "auto") {
+          setDynamicRows(dimensions.rows);
+        }
       }
     },
-    [viewscreen, mode]
+    [effectiveMode, columns, rows]
   );
-  const handleScrollChange = useCallback4(
+  const handleScrollChange = useCallback3(
     (scroll) => {
-      if (viewscreen === "fixed" && mode === "animated") {
+      if (effectiveMode === "animated" && typeof columns === "number" && typeof rows === "number") {
         const newVirtualRows = Math.max(rows, scroll.contentRows);
         setScrollViewY(scroll.viewY);
         setVirtualRows(newVirtualRows);
       }
     },
-    [viewscreen, mode, rows]
+    [effectiveMode, columns, rows]
   );
-  const frameGenerator = useMemo3(() => {
+  const frameGenerator = useMemo2(() => {
     if (!ansiData) return null;
-    if (viewscreen === "fixed" && !columns) {
-      setError('columns is required when viewscreen is "fixed"');
-      return null;
-    }
+    const effectiveColumns = columns === "auto" ? void 0 : columns;
+    const effectiveRows = rows === "auto" && effectiveMode === "animated" ? void 0 : typeof rows === "number" ? rows : void 0;
     const generator = createAnsiArtFrameGenerator({
       ansiData,
-      mode,
-      viewscreen,
-      columns,
-      rows,
-      dynamicColumns,
+      mode: effectiveMode,
+      columns: effectiveColumns,
+      rows: effectiveRows,
+      finalHeightForAnimated: effectiveMode === "animated" && rows === "auto" ? finalHeightForAnimated ?? void 0 : void 0,
       bytesPerSecond,
       fps,
       onDimensionsChange: handleDimensionsChange,
@@ -3977,47 +3362,77 @@ function AnsiArtNG({
     return generator;
   }, [
     ansiData,
-    mode,
-    viewscreen,
+    effectiveMode,
     columns,
     rows,
-    dynamicColumns,
+    finalHeightForAnimated,
     bytesPerSecond,
     fps,
     handleDimensionsChange,
     handleScrollChange,
     debugCursorCodes
   ]);
-  const displayColumns = useMemo3(() => {
-    if (viewscreen === "fixed") {
+  const displayColumns = useMemo2(() => {
+    if (columns === "auto") {
+      return dynamicColumns;
+    } else {
       return columns;
-    } else {
-      if (mode === "final") {
-        return dynamicColumns;
+    }
+  }, [columns, dynamicColumns]);
+  const displayRows = useMemo2(() => {
+    if (effectiveMode === "final") {
+      if (rows === "auto") {
+        return detectedFinalRows ?? 25;
       } else {
-        return dynamicColumns;
+        return rows;
+      }
+    } else {
+      if (rows === "auto") {
+        return finalHeightForAnimated ?? dynamicRows;
+      } else {
+        return rows;
       }
     }
-  }, [viewscreen, mode, columns, dynamicColumns]);
-  const displayRows = useMemo3(() => {
-    if (viewscreen === "fixed") {
-      return rows;
-    } else {
-      if (mode === "final") {
-        return dynamicRows;
-      } else {
-        return dynamicRows;
-      }
-    }
-  }, [viewscreen, mode, rows, dynamicRows]);
-  const rootStyle = useMemo3(
+  }, [effectiveMode, rows, detectedFinalRows, finalHeightForAnimated, dynamicRows]);
+  const rootStyle = useMemo2(
     () => ({
       ...isDragging ? { outline: "2px dashed #888", outlineOffset: "-2px" } : {}
     }),
     [isDragging]
   );
+  const handleSauceClick = useCallback3(() => {
+    if (sauce) {
+      setIsSauceModalOpen(true);
+    }
+  }, [sauce]);
+  const handleSauceMouseMove = useCallback3(() => {
+    if (!showOverlayControls && sauceOverlay && sauce) {
+      setIsSauceOverlayVisible(true);
+      if (sauceOverlayTimeoutRef.current) {
+        clearTimeout(sauceOverlayTimeoutRef.current);
+      }
+      sauceOverlayTimeoutRef.current = setTimeout(() => {
+        setIsSauceOverlayVisible(false);
+      }, 3e3);
+    }
+  }, [showOverlayControls, sauceOverlay, sauce]);
+  const handleSauceMouseLeave = useCallback3(() => {
+    if (!showOverlayControls && sauceOverlay && sauce) {
+      if (sauceOverlayTimeoutRef.current) {
+        clearTimeout(sauceOverlayTimeoutRef.current);
+      }
+      setIsSauceOverlayVisible(false);
+    }
+  }, [showOverlayControls, sauceOverlay, sauce]);
+  useEffect4(() => {
+    return () => {
+      if (sauceOverlayTimeoutRef.current) {
+        clearTimeout(sauceOverlayTimeoutRef.current);
+      }
+    };
+  }, []);
   if (error) {
-    return /* @__PURE__ */ jsx4(
+    return /* @__PURE__ */ jsx5(
       "div",
       {
         style: {
@@ -4036,7 +3451,7 @@ function AnsiArtNG({
     );
   }
   if (!ansiData || !frameGenerator) {
-    return /* @__PURE__ */ jsx4(
+    return /* @__PURE__ */ jsx5(
       "div",
       {
         style: {
@@ -4054,34 +3469,1250 @@ function AnsiArtNG({
       }
     );
   }
-  return /* @__PURE__ */ jsx4(
+  return /* @__PURE__ */ jsxs4(
     "div",
     {
-      style: rootStyle,
+      style: {
+        ...rootStyle,
+        position: "relative"
+      },
       onDragEnter,
       onDragOver,
       onDragLeave,
       onDrop,
-      children: /* @__PURE__ */ jsx4(
-        AnsiVirtualDisplay,
-        {
-          columns: displayColumns,
-          rows: displayRows,
-          frameGenerator,
-          fps,
-          background,
-          bitmapFontUrl,
-          showControls,
-          showOverlayControls,
-          showPerformanceOverlay
-        }
-      )
+      onMouseMove: handleSauceMouseMove,
+      onMouseLeave: handleSauceMouseLeave,
+      children: [
+        /* @__PURE__ */ jsx5(
+          AnsiVirtualDisplay,
+          {
+            columns: displayColumns,
+            rows: displayRows,
+            frameGenerator,
+            fps,
+            background,
+            bitmapFontUrl,
+            showControls,
+            showOverlayControls,
+            showPerformanceOverlay,
+            autoStart: effectiveMode === "animated" ? autoStart : void 0,
+            sauce: showOverlayControls && sauceOverlay ? sauce : void 0,
+            onSauceClick: showOverlayControls && sauceOverlay ? handleSauceClick : void 0
+          }
+        ),
+        !showOverlayControls && sauceOverlay && sauce && /* @__PURE__ */ jsx5(SauceOverlay, { isVisible: isSauceOverlayVisible, onClick: handleSauceClick }),
+        sauce && /* @__PURE__ */ jsx5(
+          SauceMetadataModal,
+          {
+            sauce,
+            isOpen: isSauceModalOpen,
+            onClose: () => setIsSauceModalOpen(false)
+          }
+        )
+      ]
     }
   );
 }
 
-// src/PlasmaBackgroundLayout.tsx
-import { useCallback as useCallback5, useEffect as useEffect5, useMemo as useMemo4, useRef as useRef5, useState as useState5 } from "react";
+// src/components/RipArt.tsx
+import { useCallback as useCallback4, useEffect as useEffect5, useMemo as useMemo3, useRef as useRef5, useState as useState4 } from "react";
+
+// src/rip/parser.ts
+var EGA_PALETTE = [
+  [0, 0, 0],
+  // 0: Black
+  [0, 0, 170],
+  // 1: Blue
+  [0, 170, 0],
+  // 2: Green
+  [0, 170, 170],
+  // 3: Cyan
+  [170, 0, 0],
+  // 4: Red
+  [170, 0, 170],
+  // 5: Magenta
+  [170, 85, 0],
+  // 6: Brown
+  [170, 170, 170],
+  // 7: Light Gray
+  [85, 85, 85],
+  // 8: Dark Gray
+  [85, 85, 255],
+  // 9: Bright Blue
+  [85, 255, 85],
+  // 10: Bright Green
+  [85, 255, 255],
+  // 11: Bright Cyan
+  [255, 85, 85],
+  // 12: Bright Red
+  [255, 85, 255],
+  // 13: Bright Magenta
+  [255, 255, 85],
+  // 14: Yellow
+  [255, 255, 255]
+  // 15: White
+];
+function createInitialState() {
+  return {
+    color: 7,
+    // Light Gray (default)
+    fillColor: 0,
+    // Black (default)
+    fillStyle: 1 /* Solid */,
+    lineStyle: 0 /* Solid */,
+    fontStyle: 0 /* Default */,
+    viewport: null,
+    cursor: { x: 0, y: 0 },
+    writeMode: 0 /* CopyPut */,
+    palette: EGA_PALETTE.map((rgb) => rgb[0] << 16 | rgb[1] << 8 | rgb[2]),
+    textWindow: null
+  };
+}
+var RipReader = class {
+  constructor(data) {
+    this.data = data;
+    this.position = 0;
+  }
+  isEOF() {
+    return this.position >= this.data.length;
+  }
+  peek() {
+    if (this.isEOF()) return -1;
+    return this.data[this.position];
+  }
+  readByte() {
+    if (this.isEOF()) throw new Error("Unexpected end of file");
+    return this.data[this.position++];
+  }
+  // Read RIP byte with backslash line continuation handling
+  readRipByte() {
+    let b = this.readByte();
+    if (b === 92) {
+      b = this.readByte();
+      while (b === 10 || b === 13) {
+        if (this.isEOF()) break;
+        b = this.readByte();
+      }
+    }
+    return b;
+  }
+  // Read base-36 number (0-9, A-Z)
+  readRipNumber() {
+    const b = this.readRipByte();
+    if (b >= 48 && b <= 57) {
+      return b - 48;
+    }
+    if (b >= 65 && b <= 90) {
+      return b - 55;
+    }
+    return 0;
+  }
+  // Read RIP word (2 base-36 digits: 0-1295)
+  readRipWord() {
+    return this.readRipNumber() * 36 + this.readRipNumber();
+  }
+  // Read RIP int (4 base-36 digits: 0-1679615)
+  readRipInt() {
+    return this.readRipWord() * 1296 + this.readRipWord();
+  }
+  // Read RIP point (2 words: x, y)
+  readRipPoint() {
+    return {
+      x: this.readRipWord(),
+      y: this.readRipWord()
+    };
+  }
+  // Read RIP size (2 words: width, height)
+  readRipSize() {
+    return {
+      width: this.readRipWord(),
+      height: this.readRipWord()
+    };
+  }
+  // Read RIP rectangle (2 points: start, end)
+  readRipRectangle() {
+    const start = this.readRipPoint();
+    const end = this.readRipPoint();
+    return {
+      x: Math.min(start.x, end.x),
+      y: Math.min(start.y, end.y),
+      width: Math.abs(end.x - start.x),
+      height: Math.abs(end.y - start.y)
+    };
+  }
+  // Read RIP string (until |, CR, LF, or EOF)
+  readRipString() {
+    const bytes = [];
+    while (!this.isEOF()) {
+      const next = this.peek();
+      if (next === -1 || next === 13 || next === 10 || next === 124) {
+        break;
+      }
+      bytes.push(this.readRipByte());
+    }
+    while (!this.isEOF()) {
+      const b = this.peek();
+      if (b === 13 || b === 10) {
+        this.readByte();
+      } else {
+        break;
+      }
+    }
+    return decodeCp437(new Uint8Array(bytes));
+  }
+  getPosition() {
+    return this.position;
+  }
+  setPosition(pos) {
+    this.position = pos;
+  }
+};
+function parseCommand(reader, state, debug = false) {
+  if (reader.isEOF()) {
+    if (debug) console.log("[RIP] End of file reached");
+    return null;
+  }
+  const startPos = reader.getPosition();
+  const b = reader.readRipByte();
+  if (b !== 124) {
+    if (debug) console.log(`[RIP] Skipping non-command byte: 0x${b.toString(16)} (${String.fromCharCode(b)}) at position ${startPos}`);
+    return null;
+  }
+  let opcode = String.fromCharCode(reader.readRipByte());
+  if (opcode === "1") {
+    opcode += String.fromCharCode(reader.readRipByte());
+  } else if (opcode === "#") {
+    if (debug) console.log("[RIP] End marker (#) found");
+    return null;
+  }
+  if (debug) console.log(`[RIP] Parsing command: |${opcode} at position ${startPos}`);
+  switch (opcode) {
+    // Drawing commands
+    case "L": {
+      const start = reader.readRipPoint();
+      const end = reader.readRipPoint();
+      return { type: "Line", opcode: "L", start, end };
+    }
+    case "C": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipWord();
+      return { type: "Circle", opcode: "C", center, radius };
+    }
+    case "O": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipSize();
+      const startAngle = reader.readRipWord();
+      const endAngle = reader.readRipWord();
+      return { type: "Oval", opcode: "O", center, radius, startAngle, endAngle };
+    }
+    case "A": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipWord();
+      const startAngle = reader.readRipWord();
+      const endAngle = reader.readRipWord();
+      return { type: "Arc", opcode: "A", center, radius, startAngle, endAngle };
+    }
+    case "P": {
+      const count = reader.readRipWord();
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        points.push(reader.readRipPoint());
+      }
+      return { type: "Polygon", opcode: "P", points };
+    }
+    case "PL": {
+      const count = reader.readRipWord();
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        points.push(reader.readRipPoint());
+      }
+      return { type: "PolyLine", opcode: "PL", points };
+    }
+    case "B": {
+      const rect = reader.readRipRectangle();
+      return { type: "Bar", opcode: "B", rect };
+    }
+    case "DR": {
+      const rect = reader.readRipRectangle();
+      return { type: "DrawRectangle", opcode: "DR", rect };
+    }
+    case "BE": {
+      const count = reader.readRipWord();
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        points.push(reader.readRipPoint());
+      }
+      const segments = reader.readRipWord();
+      return { type: "Bezier", opcode: "BE", points, segments };
+    }
+    case "X":
+    case "PX": {
+      const point = reader.readRipPoint();
+      return { type: "Pixel", opcode: opcode === "X" ? "X" : "PX", point };
+    }
+    case "F": {
+      const point = reader.readRipPoint();
+      const border = reader.readRipWord();
+      return { type: "Fill", opcode: "F", point, border };
+    }
+    case "FP": {
+      const count = reader.readRipWord();
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        points.push(reader.readRipPoint());
+      }
+      return { type: "FilledPolygon", opcode: "FP", points };
+    }
+    case "FO": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipSize();
+      return { type: "FilledOval", opcode: "FO", center, radius };
+    }
+    case "PS": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipWord();
+      const startAngle = reader.readRipWord();
+      const endAngle = reader.readRipWord();
+      return { type: "PieSlice", opcode: "PS", center, radius, startAngle, endAngle };
+    }
+    case "OPS": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipSize();
+      const startAngle = reader.readRipWord();
+      const endAngle = reader.readRipWord();
+      return { type: "OvalPieSlice", opcode: "OPS", center, radius, startAngle, endAngle };
+    }
+    case "OA": {
+      const center = reader.readRipPoint();
+      const radius = reader.readRipSize();
+      const startAngle = reader.readRipWord();
+      const endAngle = reader.readRipWord();
+      return { type: "OvalArc", opcode: "OA", center, radius, startAngle, endAngle };
+    }
+    // State commands
+    case "c": {
+      const value = reader.readRipWord();
+      state.color = value;
+      return { type: "Color", opcode: "c", value };
+    }
+    case "S":
+    case "FS": {
+      const style = reader.readRipWord();
+      const color = reader.readRipWord();
+      state.fillStyle = style;
+      state.fillColor = color;
+      return { type: "FillStyle", opcode: opcode === "S" ? "S" : "FS", style, color };
+    }
+    case "=":
+    case "LS": {
+      const style = reader.readRipWord();
+      const pattern = reader.readRipInt();
+      const thickness = reader.readRipWord();
+      state.lineStyle = style;
+      return { type: "LineStyle", opcode: opcode === "=" ? "=" : "LS", style, pattern, thickness };
+    }
+    case "FT": {
+      const font = reader.readRipWord();
+      const direction = reader.readRipWord();
+      const characterSize = reader.readRipWord();
+      reader.readRipWord();
+      state.fontStyle = font;
+      return { type: "FontStyle", opcode: "FT", font, direction, characterSize };
+    }
+    case "V":
+    case "v": {
+      const rect = reader.readRipRectangle();
+      state.viewport = rect;
+      return { type: "ViewPort", opcode: "V", rect };
+    }
+    case "G": {
+      const point = reader.readRipPoint();
+      state.cursor = point;
+      return { type: "GotoXY", opcode: "G", point };
+    }
+    case "M": {
+      const point = reader.readRipPoint();
+      state.cursor = point;
+      return { type: "Move", opcode: "M", point };
+    }
+    case "H": {
+      state.cursor = { x: 0, y: 0 };
+      return { type: "Home", opcode: "H" };
+    }
+    case "WM": {
+      const mode = reader.readRipWord();
+      state.writeMode = mode;
+      return { type: "WriteMode", opcode: "WM", mode };
+    }
+    case "Q":
+    case "SP": {
+      const palette = [];
+      for (let i = 0; i < 16; i++) {
+        palette.push(reader.readRipWord());
+      }
+      state.palette = palette;
+      return { type: "SetPalette", opcode: opcode === "Q" ? "Q" : "SP", palette };
+    }
+    case "OP": {
+      const color = reader.readRipWord();
+      const palette = reader.readRipWord();
+      return { type: "OnePalette", opcode: "OP", color, palette };
+    }
+    case "FPAT": {
+      const pattern = [];
+      for (let i = 0; i < 8; i++) {
+        pattern.push(reader.readRipWord());
+      }
+      const color = reader.readRipWord();
+      return { type: "FillPattern", opcode: "FPAT", pattern, color };
+    }
+    // Text commands
+    case "BT": {
+      const rect = reader.readRipRectangle();
+      const flags = reader.readRipWord();
+      return { type: "BeginText", opcode: "BT", rect, flags };
+    }
+    case "ET": {
+      return { type: "EndText", opcode: "ET" };
+    }
+    case "OT": {
+      const text = reader.readRipString();
+      return { type: "OutText", opcode: "OT", text };
+    }
+    case "OTX": {
+      const point = reader.readRipPoint();
+      const text = reader.readRipString();
+      return { type: "OutTextXY", opcode: "OTX", point, text };
+    }
+    case "RT": {
+      const rect = reader.readRipRectangle();
+      const text = reader.readRipString();
+      return { type: "RegionText", opcode: "RT", rect, text };
+    }
+    case "TW": {
+      const rect = reader.readRipRectangle();
+      state.textWindow = rect;
+      return { type: "TextWindow", opcode: "TW", rect };
+    }
+    // Interactive commands
+    case "BU": {
+      const rect = reader.readRipRectangle();
+      const hotKey = reader.readRipWord();
+      const flags = reader.readRipNumber();
+      reader.readRipNumber();
+      const text = reader.readRipString();
+      return { type: "Button", opcode: "BU", rect, hotKey, flags, text };
+    }
+    case "BS": {
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipInt();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      reader.readRipWord();
+      return { type: "ButtonStyle", opcode: "BS" };
+    }
+    case "MO": {
+      const enabled = reader.readRipWord() !== 0;
+      return { type: "Mouse", opcode: "MO", enabled };
+    }
+    case "KM": {
+      return { type: "KillMouseFields", opcode: "KM" };
+    }
+    // Erase commands
+    case "EE": {
+      return { type: "EraseEOL", opcode: "EE" };
+    }
+    case "EV": {
+      return { type: "EraseView", opcode: "EV" };
+    }
+    case "EW": {
+      const rect = reader.readRipRectangle();
+      return { type: "EraseWindow", opcode: "EW", rect };
+    }
+    case "RW": {
+      return { type: "ResetWindows", opcode: "RW" };
+    }
+    // Image commands
+    case "GI": {
+      const rect = reader.readRipRectangle();
+      const id = reader.readRipNumber();
+      return { type: "GetImage", opcode: "GI", rect, id };
+    }
+    case "PI": {
+      const point = reader.readRipPoint();
+      const writeMode = reader.readRipWord();
+      const id = reader.readRipNumber();
+      return { type: "PutImage", opcode: "PI", point, writeMode, id };
+    }
+    case "LI": {
+      const point = reader.readRipPoint();
+      const id = reader.readRipWord();
+      const flags = reader.readRipNumber();
+      const filename = reader.readRipString();
+      return { type: "LoadIcon", opcode: "LI", point, id, flags, filename };
+    }
+    case "WI": {
+      const point = reader.readRipPoint();
+      const id = reader.readRipWord();
+      return { type: "WriteIcon", opcode: "WI", point, id };
+    }
+    default:
+      console.warn(`[RIP] Unknown opcode: |${opcode} at position ${startPos}`);
+      return null;
+  }
+}
+function parseRip(data, debug = false) {
+  if (debug) console.log(`[RIP] Starting parse of ${data.length} bytes`);
+  const reader = new RipReader(data);
+  const state = createInitialState();
+  const commands = [];
+  let width = 640;
+  let height = 350;
+  let commandCount = 0;
+  let errorCount = 0;
+  try {
+    while (!reader.isEOF()) {
+      const peek = reader.peek();
+      if (peek === 124) {
+        break;
+      }
+      if (peek === -1) break;
+      reader.readByte();
+      if (debug) console.log(`[RIP] Skipping initial byte: 0x${peek.toString(16)} (${String.fromCharCode(peek)})`);
+    }
+    while (!reader.isEOF()) {
+      try {
+        const command = parseCommand(reader, state, debug);
+        if (!command) {
+          let foundNext = false;
+          while (!reader.isEOF()) {
+            const peek = reader.peek();
+            if (peek === 124) {
+              foundNext = true;
+              break;
+            }
+            if (peek === -1) break;
+            reader.readByte();
+          }
+          if (!foundNext) {
+            break;
+          }
+          continue;
+        }
+        commands.push(command);
+        commandCount++;
+        if (command.type === "ViewPort") {
+          width = Math.max(width, command.rect.x + command.rect.width);
+          height = Math.max(height, command.rect.y + command.rect.height);
+          if (debug) console.log(`[RIP] ViewPort detected: ${width}x${height}`);
+        }
+      } catch (e) {
+        errorCount++;
+        const pos = reader.getPosition();
+        console.error(`[RIP] Error parsing command at position ${pos}:`, e?.message || e);
+        if (debug) {
+          console.error(`[RIP] Error details:`, e);
+          try {
+            while (!reader.isEOF()) {
+              const b = reader.readRipByte();
+              if (b === 124) {
+                reader.setPosition(reader.getPosition() - 1);
+                break;
+              }
+            }
+          } catch (skipError) {
+            console.error("[RIP] Cannot recover from parse error, stopping");
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[RIP] Fatal parse error:", e?.message || e);
+    if (debug) console.error("[RIP] Fatal error details:", e);
+  }
+  if (debug) {
+    console.log(`[RIP] Parse complete: ${commandCount} commands parsed, ${errorCount} errors`);
+    console.log(`[RIP] Detected dimensions: ${width}x${height}`);
+    console.log(`[RIP] Command breakdown:`, {
+      drawing: commands.filter((c) => ["Line", "Circle", "Oval", "Arc", "Polygon", "PolyLine", "Bar", "DrawRectangle", "Bezier", "Pixel", "Fill", "FilledPolygon", "FilledOval", "PieSlice", "OvalPieSlice", "OvalArc"].includes(c.type)).length,
+      state: commands.filter((c) => ["Color", "FillStyle", "LineStyle", "FontStyle", "ViewPort", "GotoXY", "Move", "Home", "WriteMode", "SetPalette", "OnePalette", "FillPattern"].includes(c.type)).length,
+      text: commands.filter((c) => ["BeginText", "EndText", "OutText", "OutTextXY", "RegionText", "TextWindow"].includes(c.type)).length,
+      other: commands.filter((c) => !["Line", "Circle", "Oval", "Arc", "Polygon", "PolyLine", "Bar", "DrawRectangle", "Bezier", "Pixel", "Fill", "FilledPolygon", "FilledOval", "PieSlice", "OvalPieSlice", "OvalArc", "Color", "FillStyle", "LineStyle", "FontStyle", "ViewPort", "GotoXY", "Move", "Home", "WriteMode", "SetPalette", "OnePalette", "FillPattern", "BeginText", "EndText", "OutText", "OutTextXY", "RegionText", "TextWindow"].includes(c.type)).length
+    });
+  }
+  return {
+    commands,
+    width,
+    height,
+    state
+  };
+}
+
+// src/rip/toSvg.ts
+var EGA_PALETTE_RGB = [
+  "#000000",
+  // 0: Black
+  "#0000AA",
+  // 1: Blue
+  "#00AA00",
+  // 2: Green
+  "#00AAAA",
+  // 3: Cyan
+  "#AA0000",
+  // 4: Red
+  "#AA00AA",
+  // 5: Magenta
+  "#AA5500",
+  // 6: Brown
+  "#AAAAAA",
+  // 7: Light Gray
+  "#555555",
+  // 8: Dark Gray
+  "#5555FF",
+  // 9: Bright Blue
+  "#55FF55",
+  // 10: Bright Green
+  "#55FFFF",
+  // 11: Bright Cyan
+  "#FF5555",
+  // 12: Bright Red
+  "#FF55FF",
+  // 13: Bright Magenta
+  "#FFFF55",
+  // 14: Yellow
+  "#FFFFFF"
+  // 15: White
+];
+function getColor(index, palette) {
+  if (palette && palette[index] !== void 0) {
+    const rgb = palette[index];
+    const r = rgb >> 16 & 255;
+    const g = rgb >> 8 & 255;
+    const b = rgb & 255;
+    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  }
+  return EGA_PALETTE_RGB[index & 15] || EGA_PALETTE_RGB[0];
+}
+function getFillStyle(style, fillColor, palette) {
+  switch (style) {
+    case 0 /* Empty */:
+      return "none";
+    case 1 /* Solid */:
+      return getColor(fillColor, palette);
+    default:
+      return getColor(fillColor, palette);
+  }
+}
+function getLineStyle(style, pattern) {
+  switch (style) {
+    case 0 /* Solid */:
+      return "none";
+    case 1 /* Dotted */:
+      return "2,2";
+    case 2 /* Center */:
+      return "8,4,2,4";
+    case 3 /* Dashed */:
+      return "8,4";
+    default:
+      return "none";
+  }
+}
+function escapeXml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function pointToString(p) {
+  return `${p.x},${p.y}`;
+}
+function pointsToString(points) {
+  return points.map(pointToString).join(" ");
+}
+function arcToPath(center, radius, startAngle, endAngle) {
+  const startRad = startAngle * Math.PI / 180;
+  const endRad = endAngle * Math.PI / 180;
+  const startX = center.x + radius * Math.cos(startRad);
+  const startY = center.y - radius * Math.sin(startRad);
+  const endX = center.x + radius * Math.cos(endRad);
+  const endY = center.y - radius * Math.sin(endRad);
+  const largeArc = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
+  const sweep = endAngle > startAngle ? 1 : 0;
+  return `M ${startX},${startY} A ${radius},${radius} 0 ${largeArc},${sweep} ${endX},${endY}`;
+}
+function ellipseArcToPath(center, radius, startAngle, endAngle) {
+  const startRad = startAngle * Math.PI / 180;
+  const endRad = endAngle * Math.PI / 180;
+  const startX = center.x + radius.width * Math.cos(startRad);
+  const startY = center.y - radius.height * Math.sin(startRad);
+  const endX = center.x + radius.width * Math.cos(endRad);
+  const endY = center.y - radius.height * Math.sin(endRad);
+  const largeArc = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
+  const sweep = endAngle > startAngle ? 1 : 0;
+  return `M ${startX},${startY} A ${radius.width},${radius.height} 0 ${largeArc},${sweep} ${endX},${endY}`;
+}
+function commandToSvg(command, state) {
+  const color = getColor(state.color, state.palette);
+  const fill = getFillStyle(state.fillStyle, state.fillColor, state.palette);
+  const stroke = color;
+  const strokeDasharray = getLineStyle(state.lineStyle, 0);
+  switch (command.type) {
+    case "Line": {
+      return `<line x1="${command.start.x}" y1="${command.start.y}" x2="${command.end.x}" y2="${command.end.y}" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "Circle": {
+      return `<circle cx="${command.center.x}" cy="${command.center.y}" r="${command.radius}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "Oval": {
+      const rx = command.radius.width;
+      const ry = command.radius.height;
+      if (command.startAngle === 0 && command.endAngle === 360) {
+        return `<ellipse cx="${command.center.x}" cy="${command.center.y}" rx="${rx}" ry="${ry}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      } else {
+        const path = ellipseArcToPath(command.center, command.radius, command.startAngle, command.endAngle);
+        return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      }
+    }
+    case "Arc": {
+      const path = arcToPath(command.center, command.radius, command.startAngle, command.endAngle);
+      return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "Polygon": {
+      const points = pointsToString(command.points);
+      return `<polygon points="${points}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "PolyLine": {
+      const points = pointsToString(command.points);
+      return `<polyline points="${points}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "Bar": {
+      return `<rect x="${command.rect.x}" y="${command.rect.y}" width="${command.rect.width}" height="${command.rect.height}" fill="${fill}" stroke="${stroke}" />`;
+    }
+    case "DrawRectangle": {
+      return `<rect x="${command.rect.x}" y="${command.rect.y}" width="${command.rect.width}" height="${command.rect.height}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "Bezier": {
+      if (command.points.length < 4) return "";
+      let path = `M ${pointToString(command.points[0])}`;
+      for (let i = 1; i < command.points.length; i += 3) {
+        if (i + 2 < command.points.length) {
+          path += ` C ${pointToString(command.points[i])} ${pointToString(command.points[i + 1])} ${pointToString(command.points[i + 2])}`;
+        }
+      }
+      return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "Pixel": {
+      return `<rect x="${command.point.x}" y="${command.point.y}" width="1" height="1" fill="${color}" />`;
+    }
+    case "Fill": {
+      return "";
+    }
+    case "FilledPolygon": {
+      const points = pointsToString(command.points);
+      return `<polygon points="${points}" fill="${fill}" stroke="${stroke}" />`;
+    }
+    case "FilledOval": {
+      return `<ellipse cx="${command.center.x}" cy="${command.center.y}" rx="${command.radius.width}" ry="${command.radius.height}" fill="${fill}" stroke="${stroke}" />`;
+    }
+    case "PieSlice": {
+      const startRad = command.startAngle * Math.PI / 180;
+      const endRad = command.endAngle * Math.PI / 180;
+      const startX = command.center.x + command.radius * Math.cos(startRad);
+      const startY = command.center.y - command.radius * Math.sin(startRad);
+      const endX = command.center.x + command.radius * Math.cos(endRad);
+      const endY = command.center.y - command.radius * Math.sin(endRad);
+      const largeArc = Math.abs(command.endAngle - command.startAngle) > 180 ? 1 : 0;
+      const path = `M ${command.center.x},${command.center.y} L ${startX},${startY} A ${command.radius},${command.radius} 0 ${largeArc},1 ${endX},${endY} Z`;
+      return `<path d="${path}" fill="${fill}" stroke="${stroke}" />`;
+    }
+    case "OvalPieSlice": {
+      const startRad = command.startAngle * Math.PI / 180;
+      const endRad = command.endAngle * Math.PI / 180;
+      const startX = command.center.x + command.radius.width * Math.cos(startRad);
+      const startY = command.center.y - command.radius.height * Math.sin(startRad);
+      const endX = command.center.x + command.radius.width * Math.cos(endRad);
+      const endY = command.center.y - command.radius.height * Math.sin(endRad);
+      const largeArc = Math.abs(command.endAngle - command.startAngle) > 180 ? 1 : 0;
+      const path = `M ${command.center.x},${command.center.y} L ${startX},${startY} A ${command.radius.width},${command.radius.height} 0 ${largeArc},1 ${endX},${endY} Z`;
+      return `<path d="${path}" fill="${fill}" stroke="${stroke}" />`;
+    }
+    case "OvalArc": {
+      const path = ellipseArcToPath(command.center, command.radius, command.startAngle, command.endAngle);
+      return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+    }
+    case "OutText": {
+      const x = state.cursor.x;
+      const y = state.cursor.y;
+      return `<text x="${x}" y="${y}" fill="${color}" font-family="monospace" font-size="12">${escapeXml(command.text)}</text>`;
+    }
+    case "OutTextXY": {
+      return `<text x="${command.point.x}" y="${command.point.y}" fill="${color}" font-family="monospace" font-size="12">${escapeXml(command.text)}</text>`;
+    }
+    case "RegionText": {
+      return `<text x="${command.rect.x}" y="${command.rect.y + 12}" fill="${color}" font-family="monospace" font-size="12">${escapeXml(command.text)}</text>`;
+    }
+    case "Button": {
+      return `<g data-rip-button="true">
+				<rect x="${command.rect.x}" y="${command.rect.y}" width="${command.rect.width}" height="${command.rect.height}" fill="${fill}" stroke="${stroke}" />
+				<text x="${command.rect.x + command.rect.width / 2}" y="${command.rect.y + command.rect.height / 2}" fill="${color}" font-family="monospace" font-size="12" text-anchor="middle" dominant-baseline="middle">${escapeXml(command.text)}</text>
+			</g>`;
+    }
+    // State commands don't generate SVG directly, but update state
+    case "Color":
+    case "FillStyle":
+    case "LineStyle":
+    case "FontStyle":
+    case "ViewPort":
+    case "GotoXY":
+    case "Move":
+    case "Home":
+    case "WriteMode":
+    case "SetPalette":
+    case "OnePalette":
+    case "FillPattern":
+    case "BeginText":
+    case "EndText":
+    case "TextWindow":
+    case "ButtonStyle":
+    case "Mouse":
+    case "KillMouseFields":
+    case "EraseEOL":
+    case "EraseView":
+    case "EraseWindow":
+    case "ResetWindows":
+    case "GetImage":
+    case "PutImage":
+    case "LoadIcon":
+    case "WriteIcon":
+      return "";
+    default:
+      return "";
+  }
+}
+function ripToSvg(commands, width, height, initialState, background = "#000000") {
+  const state = { ...initialState };
+  const elements = [];
+  for (const command of commands) {
+    switch (command.type) {
+      case "Color":
+        state.color = command.value;
+        break;
+      case "FillStyle":
+        state.fillStyle = command.style;
+        state.fillColor = command.color;
+        break;
+      case "LineStyle":
+        state.lineStyle = command.style;
+        break;
+      case "FontStyle":
+        state.fontStyle = command.font;
+        break;
+      case "ViewPort":
+        state.viewport = command.rect;
+        break;
+      case "GotoXY":
+      case "Move":
+        state.cursor = command.point;
+        break;
+      case "Home":
+        state.cursor = { x: 0, y: 0 };
+        break;
+      case "WriteMode":
+        state.writeMode = command.mode;
+        break;
+      case "SetPalette":
+        state.palette = command.palette;
+        break;
+      case "OnePalette":
+        if (state.palette) {
+          state.palette[command.color] = command.palette;
+        }
+        break;
+      case "TextWindow":
+        state.textWindow = command.rect;
+        break;
+    }
+    const svg = commandToSvg(command, state);
+    if (svg) {
+      elements.push(svg);
+    }
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background-color: ${background};">
+${elements.join("\n")}
+</svg>`;
+}
+function ripToSvgFrame(commands, width, height, initialState, background = "#000000", maxCommands) {
+  const limitedCommands = maxCommands !== void 0 ? commands.slice(0, maxCommands) : commands;
+  return ripToSvg(limitedCommands, width, height, initialState, background);
+}
+
+// src/components/RipArt.tsx
+import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+function RipArt({
+  url,
+  mode = "auto",
+  width = "auto",
+  height = "auto",
+  background = "#000000",
+  allowDrop = true,
+  showOverlayControls = false,
+  showPerformanceOverlay = false,
+  debug = false,
+  fps = 30,
+  bytesPerSecond = 960,
+  autoStart = true
+}) {
+  const [ripData, setRipData] = useState4(null);
+  const [error, setError] = useState4(null);
+  const [isDragging, setIsDragging] = useState4(false);
+  const [fileName, setFileName] = useState4(null);
+  const [detectedWidth, setDetectedWidth] = useState4(640);
+  const [detectedHeight, setDetectedHeight] = useState4(350);
+  const [commands, setCommands] = useState4([]);
+  const [initialState, setInitialState] = useState4(null);
+  const [detectedMode, setDetectedMode] = useState4("final");
+  const [currentFrame, setCurrentFrame] = useState4(0);
+  const [isPlaying, setIsPlaying] = useState4(autoStart);
+  const [isOverlayVisible, setIsOverlayVisible] = useState4(false);
+  const [currentSpeed, setCurrentSpeed] = useState4(() => bytesPerSecond);
+  const animationFrameRef = useRef5(null);
+  const lastFrameTimeRef = useRef5(0);
+  const currentBytePositionRef = useRef5(0);
+  const totalBytesRef = useRef5(0);
+  const overlayTimeoutRef = useRef5(null);
+  useEffect5(() => {
+    if (mode === "auto" && commands.length > 0) {
+      const viewportCount = commands.filter((c) => c.type === "ViewPort").length;
+      const isAnimated = viewportCount > 1 || commands.length > 100;
+      setDetectedMode(isAnimated ? "animated" : "final");
+    } else if (mode !== "auto") {
+      setDetectedMode(mode);
+    }
+  }, [mode, commands]);
+  const effectiveMode = useMemo3(() => {
+    if (mode === "auto") {
+      return detectedMode;
+    }
+    return mode;
+  }, [mode, detectedMode]);
+  useEffect5(() => {
+    if (!url) return;
+    let cancelled = false;
+    async function load() {
+      setError(null);
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (!cancelled) {
+          setRipData(buf);
+          setFileName(null);
+          totalBytesRef.current = buf.length;
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e?.message || e));
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+  const onDragEnter = (e) => {
+    if (!allowDrop) return;
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  const onDragOver = (e) => {
+    if (!allowDrop) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsDragging(true);
+  };
+  const onDragLeave = (e) => {
+    if (!allowDrop) return;
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  const onDrop = async (e) => {
+    if (!allowDrop) return;
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) {
+      console.warn("[RipArt] No file in drop event");
+      return;
+    }
+    console.log(`[RipArt] File dropped: ${file.name}, size: ${file.size} bytes`);
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      console.log(`[RipArt] File loaded: ${buf.length} bytes`);
+      setRipData(buf);
+      setFileName(file.name);
+      totalBytesRef.current = buf.length;
+      setError(null);
+    } catch (err) {
+      const errorMsg = String(err?.message || err);
+      console.error(`[RipArt] Error loading file:`, errorMsg);
+      setError(errorMsg);
+    }
+  };
+  useEffect5(() => {
+    if (!ripData) return;
+    try {
+      if (debug) console.log(`[RipArt] Parsing RIP file: ${fileName || url || "dropped file"}, ${ripData.length} bytes`);
+      const result = parseRip(ripData, debug);
+      setCommands(result.commands);
+      setInitialState(result.state);
+      setDetectedWidth(result.width);
+      setDetectedHeight(result.height);
+      currentBytePositionRef.current = 0;
+      setCurrentFrame(0);
+      if (debug) console.log(`[RipArt] Parse successful: ${result.commands.length} commands, dimensions: ${result.width}x${result.height}`);
+    } catch (e) {
+      const errorMsg = String(e?.message || e);
+      console.error(`[RipArt] Parse failed:`, errorMsg);
+      if (debug) console.error(`[RipArt] Error details:`, e);
+      setError(errorMsg);
+    }
+  }, [ripData, debug, fileName, url]);
+  const displayWidth = useMemo3(() => {
+    if (width === "auto") {
+      return detectedWidth;
+    }
+    return width;
+  }, [width, detectedWidth]);
+  const displayHeight = useMemo3(() => {
+    if (height === "auto") {
+      return detectedHeight;
+    }
+    return height;
+  }, [height, detectedHeight]);
+  const getCommandsForBytePosition = useCallback4(
+    (bytePos) => {
+      if (totalBytesRef.current === 0) return commands.length;
+      const ratio = Math.min(bytePos / totalBytesRef.current, 1);
+      return Math.floor(ratio * commands.length);
+    },
+    [commands]
+  );
+  const svgContent = useMemo3(() => {
+    if (!initialState || commands.length === 0) return null;
+    if (effectiveMode === "final") {
+      return ripToSvg(commands, displayWidth, displayHeight, initialState, background);
+    } else {
+      const maxCommands = getCommandsForBytePosition(currentBytePositionRef.current);
+      return ripToSvgFrame(
+        commands,
+        displayWidth,
+        displayHeight,
+        initialState,
+        background,
+        maxCommands
+      );
+    }
+  }, [commands, displayWidth, displayHeight, initialState, background, effectiveMode, currentFrame]);
+  useEffect5(() => {
+    if (effectiveMode !== "animated" || !isPlaying) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      return;
+    }
+    const animate = (timestamp) => {
+      if (lastFrameTimeRef.current === 0) {
+        lastFrameTimeRef.current = timestamp;
+      }
+      const deltaTime = (timestamp - lastFrameTimeRef.current) / 1e3;
+      const bytesToAdvance = Math.floor(deltaTime * currentSpeed);
+      if (bytesToAdvance > 0) {
+        currentBytePositionRef.current = Math.min(
+          currentBytePositionRef.current + bytesToAdvance,
+          totalBytesRef.current
+        );
+        setCurrentFrame((prev) => prev + 1);
+        lastFrameTimeRef.current = timestamp;
+      }
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+    animationFrameRef.current = requestAnimationFrame(animate);
+    lastFrameTimeRef.current = 0;
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [effectiveMode, isPlaying, currentSpeed]);
+  const handlePlayPause = useCallback4(() => {
+    if (currentBytePositionRef.current >= totalBytesRef.current) {
+      currentBytePositionRef.current = 0;
+      setCurrentFrame(0);
+    }
+    setIsPlaying((prev) => !prev);
+  }, []);
+  const handleRestart = useCallback4(() => {
+    currentBytePositionRef.current = 0;
+    setCurrentFrame(0);
+    setIsPlaying(true);
+  }, []);
+  const handleSeek = useCallback4((bytePosition) => {
+    currentBytePositionRef.current = Math.max(0, Math.min(bytePosition, totalBytesRef.current));
+    setCurrentFrame((prev) => prev + 1);
+  }, []);
+  const handleSpeedChange = useCallback4((newBytesPerSecond) => {
+    setCurrentSpeed(newBytesPerSecond);
+  }, []);
+  const handleAdvanceByte = useCallback4(() => {
+    currentBytePositionRef.current = Math.min(
+      currentBytePositionRef.current + 1,
+      totalBytesRef.current
+    );
+    setCurrentFrame((prev) => prev + 1);
+  }, []);
+  const handleRewindByte = useCallback4(() => {
+    currentBytePositionRef.current = Math.max(currentBytePositionRef.current - 1, 0);
+    setCurrentFrame((prev) => prev + 1);
+  }, []);
+  const handleMouseMove = useCallback4(() => {
+    setIsOverlayVisible(true);
+    if (overlayTimeoutRef.current) {
+      clearTimeout(overlayTimeoutRef.current);
+    }
+    overlayTimeoutRef.current = window.setTimeout(() => {
+      setIsOverlayVisible(false);
+    }, 3e3);
+  }, []);
+  useEffect5(() => {
+    return () => {
+      if (overlayTimeoutRef.current) {
+        window.clearTimeout(overlayTimeoutRef.current);
+      }
+    };
+  }, []);
+  const rootStyle = useMemo3(
+    () => ({
+      ...isDragging ? { outline: "2px dashed #888", outlineOffset: "-2px" } : {}
+    }),
+    [isDragging]
+  );
+  if (error) {
+    return /* @__PURE__ */ jsx6(
+      "div",
+      {
+        style: {
+          ...rootStyle,
+          padding: "16px",
+          color: "#FF5555",
+          background: "#000",
+          fontFamily: "monospace"
+        },
+        onDragEnter,
+        onDragOver,
+        onDragLeave,
+        onDrop,
+        children: error
+      }
+    );
+  }
+  if (!ripData) {
+    return /* @__PURE__ */ jsx6(
+      "div",
+      {
+        style: {
+          ...rootStyle,
+          padding: "16px",
+          color: "#AAA",
+          background: "#000",
+          fontFamily: "monospace"
+        },
+        onDragEnter,
+        onDragOver,
+        onDragLeave,
+        onDrop,
+        children: url ? "Loading\u2026" : "Drop a .rip file here or provide a URL"
+      }
+    );
+  }
+  if (!svgContent || !initialState || commands.length === 0) {
+    return /* @__PURE__ */ jsx6(
+      "div",
+      {
+        style: {
+          ...rootStyle,
+          padding: "16px",
+          color: "#FFAA00",
+          background: "#000",
+          fontFamily: "monospace"
+        },
+        onDragEnter,
+        onDragOver,
+        onDragLeave,
+        onDrop,
+        children: commands.length === 0 ? `No commands parsed from file${fileName ? `: ${fileName}` : ""}. ${debug ? "Check console for details." : "Try enabling debug mode."}` : "Processing\u2026"
+      }
+    );
+  }
+  return /* @__PURE__ */ jsxs5(
+    "div",
+    {
+      style: {
+        ...rootStyle,
+        position: "relative",
+        display: "inline-block"
+      },
+      onDragEnter,
+      onDragOver,
+      onDragLeave,
+      onDrop,
+      onMouseMove: effectiveMode === "animated" && showOverlayControls ? handleMouseMove : void 0,
+      children: [
+        /* @__PURE__ */ jsx6(
+          "div",
+          {
+            dangerouslySetInnerHTML: { __html: svgContent },
+            style: {
+              width: displayWidth,
+              height: displayHeight
+            }
+          }
+        ),
+        effectiveMode === "animated" && showOverlayControls && /* @__PURE__ */ jsx6(
+          AnsiPlayerOverlay,
+          {
+            isPlaying,
+            currentBytes: currentBytePositionRef.current,
+            totalBytes: totalBytesRef.current,
+            currentSpeed,
+            isVisible: isOverlayVisible,
+            onPlayPause: handlePlayPause,
+            onRestart: handleRestart,
+            onSeek: handleSeek,
+            onSpeedChange: handleSpeedChange,
+            onAdvanceByte: handleAdvanceByte,
+            onRewindByte: handleRewindByte,
+            onMouseMove: handleMouseMove
+          }
+        )
+      ]
+    }
+  );
+}
+
+// src/components/PlasmaBackgroundLayout.tsx
+import { useCallback as useCallback5, useEffect as useEffect6, useMemo as useMemo4, useRef as useRef6, useState as useState5 } from "react";
 
 // src/generators/asciiPerlinPlasmaGenerator.ts
 var DEFAULT_CHARS = [
@@ -4285,28 +4916,299 @@ function createAsciiPerlinPlasmaSampler(frame, options = {}) {
   };
 }
 
-// src/PlasmaBackgroundLayout.tsx
-import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+// src/generators/asciiFireGenerator.ts
+var DEFAULT_CHARS2 = [" ", ".", ":", ";", "+", "=", "x", "X", "$", "&", "#", "@"];
+var DEFAULT_DARKEN_AMOUNT = 0.5;
+var DEFAULT_SPARK_RANGE = [200, 255];
+var DEFAULT_BG_COLOR2 = "#000000";
+var DEFAULT_SEED = 12345;
+function generateFirePalette() {
+  const palette = [];
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let r;
+    let g;
+    let b;
+    if (t < 0.3) {
+      const localT = t / 0.3;
+      r = Math.floor(localT * 50);
+      g = 0;
+      b = 0;
+    } else if (t < 0.6) {
+      const localT = (t - 0.3) / 0.3;
+      r = Math.floor(50 + localT * 200);
+      g = Math.floor(localT * 30);
+      b = 0;
+    } else if (t < 0.85) {
+      const localT = (t - 0.6) / 0.25;
+      r = 255;
+      g = Math.floor(30 + localT * 100);
+      b = 0;
+    } else {
+      const localT = (t - 0.85) / 0.15;
+      r = 255;
+      g = Math.floor(130 + localT * 125);
+      b = Math.floor(localT * 50);
+    }
+    palette[i] = `rgb(${r},${g},${b})`;
+  }
+  return palette;
+}
+var FIRE_PALETTE = generateFirePalette();
+function createRandom(seed) {
+  let state = seed;
+  return () => {
+    state = (state * 9301 + 49297) % 233280;
+    return state / 233280;
+  };
+}
+function calculateNaturalFireHeight(darkenAmount, sparkRange) {
+  const maxHeat = sparkRange[1];
+  const naturalHeight = Math.ceil(maxHeat / darkenAmount);
+  return Math.max(30, Math.min(200, naturalHeight));
+}
+var fireStateMap = /* @__PURE__ */ new Map();
+function generateAsciiFireFrame(frame, columns, rows, options = {}) {
+  const {
+    chars = DEFAULT_CHARS2,
+    darkenAmount = DEFAULT_DARKEN_AMOUNT,
+    sparkRange = DEFAULT_SPARK_RANGE,
+    bgColor = DEFAULT_BG_COLOR2,
+    seed = DEFAULT_SEED
+  } = options;
+  const naturalHeight = calculateNaturalFireHeight(darkenAmount, sparkRange);
+  const actualBufferHeight = Math.min(naturalHeight, rows);
+  const charCount = chars.length;
+  const charLookup = new Array(256);
+  for (let i = 0; i < 256; i++) {
+    const normalizedValue = i / 255;
+    charLookup[i] = chars[Math.floor(normalizedValue * (charCount - 1e-3))];
+  }
+  const stateKey = JSON.stringify({ columns, rows, seed, darkenAmount, sparkRange, naturalHeight });
+  let state = fireStateMap.get(stateKey);
+  if (!state || frame < state.lastFrame) {
+    const bufferRows2 = actualBufferHeight + 1;
+    const buffer = new Uint8Array(columns * bufferRows2);
+    const bottomRowStart2 = (bufferRows2 - 1) * columns;
+    for (let x = 0; x < columns; x++) {
+      buffer[bottomRowStart2 + x] = 255;
+    }
+    for (let y = actualBufferHeight - 1; y >= Math.max(0, actualBufferHeight - 5); y--) {
+      for (let x = 0; x < columns; x++) {
+        const idx = y * columns + x;
+        const distFromBottom = actualBufferHeight - 1 - y;
+        const heat = Math.max(0, 255 - distFromBottom * 50);
+        buffer[idx] = heat;
+      }
+    }
+    state = { buffer, lastFrame: -1 };
+    fireStateMap.set(stateKey, state);
+  }
+  const fireBuffer = state.buffer;
+  state.lastFrame = frame;
+  const random = createRandom(seed + frame);
+  const readBuffer = new Uint8Array(fireBuffer);
+  const bufferRows = actualBufferHeight + 1;
+  const bottomRowStart = (bufferRows - 1) * columns;
+  for (let x = 0; x < columns; x++) {
+    const sparkValue = Math.floor(sparkRange[0] + random() * (sparkRange[1] - sparkRange[0]));
+    fireBuffer[bottomRowStart + x] = sparkValue;
+  }
+  for (let y = actualBufferHeight - 1; y >= 0; y--) {
+    for (let x = 0; x < columns; x++) {
+      const currentIdx = y * columns + x;
+      const belowY = y + 1;
+      const leftX = (x - 1 + columns) % columns;
+      const rightX = (x + 1) % columns;
+      const belowIdx = belowY * columns + x;
+      const belowLeftIdx = belowY * columns + leftX;
+      const belowRightIdx = belowY * columns + rightX;
+      const avg = (readBuffer[belowIdx] + readBuffer[belowLeftIdx] + readBuffer[belowRightIdx]) / 3;
+      const darkened = Math.max(0, avg - darkenAmount);
+      fireBuffer[currentIdx] = Math.floor(darkened);
+    }
+  }
+  const lines = [];
+  for (let y = 0; y < actualBufferHeight; y++) {
+    const line = [];
+    for (let x = 0; x < columns; x++) {
+      const paletteIndex = fireBuffer[y * columns + x];
+      const ch = charLookup[paletteIndex];
+      const fgColor = FIRE_PALETTE[paletteIndex];
+      line.push({ ch, fg: fgColor, bg: bgColor, bold: false });
+    }
+    lines.push(line);
+  }
+  for (let y = actualBufferHeight; y < rows; y++) {
+    const line = [];
+    for (let x = 0; x < columns; x++) {
+      line.push({ ch: " ", fg: FIRE_PALETTE[0], bg: bgColor, bold: false });
+    }
+    lines.push(line);
+  }
+  return { lines, columns };
+}
+var samplerStateMap = /* @__PURE__ */ new Map();
+function createAsciiFireSampler(frame, options = {}) {
+  const {
+    chars = DEFAULT_CHARS2,
+    darkenAmount = DEFAULT_DARKEN_AMOUNT,
+    sparkRange = DEFAULT_SPARK_RANGE,
+    bgColor = DEFAULT_BG_COLOR2,
+    seed = DEFAULT_SEED,
+    worldHeight,
+    // Optional: height of virtual world in scrollable mode
+    worldWidth
+    // Optional: width of virtual world in scrollable mode
+  } = options;
+  const charCount = chars.length;
+  const charLookup = new Array(256);
+  for (let i = 0; i < 256; i++) {
+    const normalizedValue = i / 255;
+    charLookup[i] = chars[Math.floor(normalizedValue * (charCount - 1e-3))];
+  }
+  const naturalHeight = calculateNaturalFireHeight(darkenAmount, sparkRange);
+  const bufferCols = worldWidth || 200;
+  const stateKey = JSON.stringify({
+    seed,
+    darkenAmount,
+    sparkRange,
+    naturalHeight
+  });
+  let samplerState = samplerStateMap.get(stateKey);
+  const bufferRows = naturalHeight + 1;
+  if (samplerState) {
+    if (frame < samplerState.lastFrame) {
+      const buffer = new Uint8Array(bufferCols * bufferRows);
+      const bottomRowStart = (bufferRows - 1) * bufferCols;
+      for (let x = 0; x < bufferCols; x++) {
+        buffer[bottomRowStart + x] = 255;
+      }
+      for (let y = bufferRows - 2; y >= Math.max(0, bufferRows - 6); y--) {
+        for (let x = 0; x < bufferCols; x++) {
+          const idx = y * bufferCols + x;
+          const distFromBottom = bufferRows - 2 - y;
+          const heat = Math.max(0, 255 - distFromBottom * 50);
+          buffer[idx] = heat;
+        }
+      }
+      samplerState.buffer = buffer;
+      samplerState.bufferCols = bufferCols;
+      samplerState.bufferRows = bufferRows;
+      samplerState.lastFrame = -1;
+    } else if (samplerState.bufferCols !== bufferCols || samplerState.bufferRows !== bufferRows) {
+      const oldBuffer = samplerState.buffer;
+      const oldCols = samplerState.bufferCols;
+      const oldRows = samplerState.bufferRows;
+      const newBuffer = new Uint8Array(bufferCols * bufferRows);
+      for (let y = 0; y < bufferRows; y++) {
+        for (let x = 0; x < bufferCols; x++) {
+          const newIdx = y * bufferCols + x;
+          if (x < oldCols && y < oldRows) {
+            const oldIdx = y * oldCols + x;
+            newBuffer[newIdx] = oldBuffer[oldIdx];
+          } else {
+            if (y === bufferRows - 1) {
+              newBuffer[newIdx] = 255;
+            } else {
+              newBuffer[newIdx] = 0;
+            }
+          }
+        }
+      }
+      samplerState.buffer = newBuffer;
+      samplerState.bufferCols = bufferCols;
+      samplerState.bufferRows = bufferRows;
+    }
+  } else {
+    const buffer = new Uint8Array(bufferCols * bufferRows);
+    const bottomRowStart = (bufferRows - 1) * bufferCols;
+    for (let x = 0; x < bufferCols; x++) {
+      buffer[bottomRowStart + x] = 255;
+    }
+    for (let y = bufferRows - 2; y >= Math.max(0, bufferRows - 6); y--) {
+      for (let x = 0; x < bufferCols; x++) {
+        const idx = y * bufferCols + x;
+        const distFromBottom = bufferRows - 2 - y;
+        const heat = Math.max(0, 255 - distFromBottom * 50);
+        buffer[idx] = heat;
+      }
+    }
+    samplerState = { buffer, bufferCols, bufferRows, lastFrame: -1 };
+    samplerStateMap.set(stateKey, samplerState);
+  }
+  const virtualBuffer = samplerState.buffer;
+  const currentBufferCols = samplerState.bufferCols;
+  const currentBufferRows = samplerState.bufferRows;
+  if (frame > samplerState.lastFrame) {
+    const readBuffer = new Uint8Array(virtualBuffer);
+    const random = createRandom(seed + frame);
+    const bottomRowStart = (currentBufferRows - 1) * currentBufferCols;
+    for (let x = 0; x < currentBufferCols; x++) {
+      const sparkValue = Math.floor(sparkRange[0] + random() * (sparkRange[1] - sparkRange[0]));
+      virtualBuffer[bottomRowStart + x] = sparkValue;
+    }
+    for (let y = currentBufferRows - 2; y >= 0; y--) {
+      for (let x = 0; x < currentBufferCols; x++) {
+        const currentIdx = y * currentBufferCols + x;
+        const belowY = y + 1;
+        const leftX = (x - 1 + currentBufferCols) % currentBufferCols;
+        const rightX = (x + 1) % currentBufferCols;
+        const belowIdx = belowY * currentBufferCols + x;
+        const belowLeftIdx = belowY * currentBufferCols + leftX;
+        const belowRightIdx = belowY * currentBufferCols + rightX;
+        const avg = (readBuffer[belowIdx] + readBuffer[belowLeftIdx] + readBuffer[belowRightIdx]) / 3;
+        const darkened = Math.max(0, avg - darkenAmount);
+        virtualBuffer[currentIdx] = Math.floor(darkened);
+      }
+    }
+    samplerState.lastFrame = frame;
+  }
+  return (x, y) => {
+    const wrappedX = (x % currentBufferCols + currentBufferCols) % currentBufferCols;
+    const actualWorldHeight = worldHeight || currentBufferRows;
+    const fireStartY = Math.max(0, actualWorldHeight - naturalHeight);
+    if (y < fireStartY) {
+      return { ch: " ", fg: FIRE_PALETTE[0], bg: bgColor, bold: false };
+    }
+    const bufferY = y - fireStartY;
+    const clampedY = Math.max(0, Math.min(bufferY, currentBufferRows - 2));
+    const paletteIndex = virtualBuffer[clampedY * currentBufferCols + wrappedX];
+    const ch = charLookup[paletteIndex];
+    const fgColor = FIRE_PALETTE[paletteIndex];
+    return { ch, fg: fgColor, bg: bgColor, bold: false };
+  };
+}
+function clearFireState() {
+  fireStateMap.clear();
+  samplerStateMap.clear();
+}
+
+// src/components/PlasmaBackgroundLayout.tsx
+import { jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
 function PlasmaBackgroundLayout({
   children,
   mode = "fixed",
   contentClassName,
   contentStyle,
   plasmaClassName,
+  generatorType = "plasma",
   virtualWidthPx,
   virtualHeightPx,
   chars,
   timeScale,
   octaves,
   seed,
+  darkenAmount,
+  sparkRange,
   fgColor,
   bgColor,
   showPerformanceOverlay = false,
   fps = 30,
   bitmapFontUrl
 }) {
-  const containerRef = useRef5(null);
-  const scrollableRef = useRef5(null);
+  const containerRef = useRef6(null);
+  const scrollableRef = useRef6(null);
   const [viewportBounds, setViewportBounds] = useState5({ top: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState5({ width: 0, height: 0 });
   const [containerHeight, setContainerHeight] = useState5(0);
@@ -4314,22 +5216,28 @@ function PlasmaBackgroundLayout({
   const [maxScrollTop, setMaxScrollTop] = useState5(0);
   const [isMounted, setIsMounted] = useState5(false);
   const [bitmapFont, setBitmapFont] = useState5(null);
-  useEffect5(() => {
+  useEffect6(() => {
     if (!bitmapFontUrl) {
       setBitmapFont(null);
       return;
     }
     let cancelled = false;
     async function loadFont() {
-      const font = await loadBitmapFontFromUrl(bitmapFontUrl);
-      if (!cancelled) setBitmapFont(font);
+      try {
+        const font = await loadBitmapFontFromUrl(bitmapFontUrl);
+        if (!cancelled) {
+          setBitmapFont(font);
+        }
+      } catch (error) {
+        console.error("Font loading failed:", error);
+      }
     }
     loadFont();
     return () => {
       cancelled = true;
     };
   }, [bitmapFontUrl]);
-  useEffect5(() => {
+  useEffect6(() => {
     if (typeof window === "undefined") return;
     const updateViewportSize = () => {
       setViewportSize({
@@ -4345,10 +5253,13 @@ function PlasmaBackgroundLayout({
     window.addEventListener("resize", updateViewportSize);
     return () => window.removeEventListener("resize", updateViewportSize);
   }, []);
-  useEffect5(() => {
+  useEffect6(() => {
     if (mode !== "scrollable" || typeof window === "undefined" || !isMounted) {
       return;
     }
+    let rafId = null;
+    let lastScrollHeight = 0;
+    let checkInterval = null;
     const updateBounds = () => {
       if (!containerRef.current || !scrollableRef.current || typeof window === "undefined") {
         return;
@@ -4358,7 +5269,10 @@ function PlasmaBackgroundLayout({
       const scrollHeight = scrollableEl2.scrollHeight;
       const clientHeight = scrollableEl2.clientHeight;
       const currentScrollTop = scrollableEl2.scrollTop;
-      setContainerHeight(scrollHeight);
+      if (scrollHeight !== lastScrollHeight) {
+        setContainerHeight(scrollHeight);
+        lastScrollHeight = scrollHeight;
+      }
       setScrollTop(currentScrollTop);
       const maxScroll = Math.max(0, scrollHeight - clientHeight);
       setMaxScrollTop(maxScroll);
@@ -4371,7 +5285,17 @@ function PlasmaBackgroundLayout({
         height: Math.max(0, Math.min(visibleHeight, window.innerHeight))
       });
     };
+    const scheduleUpdate = () => {
+      if (rafId !== null) {
+        return;
+      }
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        updateBounds();
+      });
+    };
     updateBounds();
+    lastScrollHeight = scrollableRef.current?.scrollHeight || 0;
     const handleScroll = () => {
       const scrollableEl2 = scrollableRef.current;
       if (!scrollableEl2) {
@@ -4379,20 +5303,13 @@ function PlasmaBackgroundLayout({
       }
       const currentScrollTop = scrollableEl2.scrollTop;
       setScrollTop(currentScrollTop);
-      requestAnimationFrame(() => {
-        if (!containerRef.current || !scrollableRef.current || typeof window === "undefined") return;
-        const containerRect = containerRef.current.getBoundingClientRect();
-        const visibleTop = Math.max(0, -containerRect.top);
-        const visibleBottom = Math.min(containerRect.height, window.innerHeight - containerRect.top);
-        const visibleHeight = Math.max(0, visibleBottom - visibleTop);
-        setViewportBounds({
-          top: Math.max(0, containerRect.top),
-          height: Math.max(0, Math.min(visibleHeight, window.innerHeight))
-        });
-      });
+      scheduleUpdate();
     };
     const resizeObserver = new ResizeObserver(() => {
-      updateBounds();
+      scheduleUpdate();
+    });
+    const mutationObserver = new MutationObserver(() => {
+      scheduleUpdate();
     });
     const scrollableEl = scrollableRef.current;
     const containerEl = containerRef.current;
@@ -4401,22 +5318,43 @@ function PlasmaBackgroundLayout({
     }
     if (scrollableEl) {
       resizeObserver.observe(scrollableEl);
+      mutationObserver.observe(scrollableEl, {
+        childList: true,
+        subtree: true,
+        attributes: false,
+        characterData: false
+      });
       scrollableEl.addEventListener("scroll", handleScroll, { passive: true });
     }
     if (typeof window !== "undefined") {
-      window.addEventListener("resize", updateBounds, { passive: true });
+      window.addEventListener("resize", scheduleUpdate, { passive: true });
     }
+    checkInterval = setInterval(() => {
+      if (scrollableEl) {
+        const currentScrollHeight = scrollableEl.scrollHeight;
+        if (currentScrollHeight !== lastScrollHeight) {
+          scheduleUpdate();
+        }
+      }
+    }, 500);
     return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      if (checkInterval !== null) {
+        clearInterval(checkInterval);
+      }
       resizeObserver.disconnect();
+      mutationObserver.disconnect();
       if (scrollableEl) {
         scrollableEl.removeEventListener("scroll", handleScroll);
       }
       if (typeof window !== "undefined") {
-        window.removeEventListener("resize", updateBounds);
+        window.removeEventListener("resize", scheduleUpdate);
       }
     };
   }, [mode, isMounted]);
-  const mergedOptions = useMemo4(() => {
+  const mergedPlasmaOptions = useMemo4(() => {
     const options = {};
     if (chars) options.chars = chars;
     if (timeScale !== void 0) options.timeScale = timeScale;
@@ -4426,35 +5364,72 @@ function PlasmaBackgroundLayout({
     if (bgColor) options.bgColor = bgColor;
     return options;
   }, [chars, timeScale, octaves, seed, fgColor, bgColor]);
+  const mergedFireOptions = useMemo4(() => {
+    const options = {};
+    if (chars) options.chars = chars;
+    if (darkenAmount !== void 0) options.darkenAmount = darkenAmount;
+    if (sparkRange) options.sparkRange = sparkRange;
+    if (seed !== void 0) options.seed = seed;
+    if (bgColor) options.bgColor = bgColor;
+    return options;
+  }, [chars, darkenAmount, sparkRange, seed, bgColor]);
   const fixedFrameGenerator = useCallback5(
     (frame, columns, rows) => {
-      return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedOptions);
-    },
-    [mergedOptions]
-  );
-  const viewYRef = useRef5(0);
-  const scrollableFrameGenerator = useCallback5(
-    (frame, reqColumns, reqRows) => {
-      const sampler = createAsciiPerlinPlasmaSampler(frame, mergedOptions);
-      const lines = [];
-      const currentViewY = viewYRef.current;
-      const rowsToRender = reqRows + 1;
-      for (let y = 0; y < rowsToRender; y++) {
-        const line = [];
-        for (let x = 0; x < reqColumns; x++) {
-          const cell = sampler(x, currentViewY + y);
-          line.push(cell);
-        }
-        lines.push(line);
+      if (generatorType === "fire") {
+        return generateAsciiFireFrame(frame, columns, rows, mergedFireOptions);
+      } else {
+        return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions);
       }
-      return { lines, columns: reqColumns };
     },
-    [mergedOptions]
+    [generatorType, mergedPlasmaOptions, mergedFireOptions]
   );
+  const viewYRef = useRef6(0);
+  const virtualRowsRef = useRef6(0);
+  const virtualColumnsRef = useRef6(0);
+  const scrollableFrameGenerator = useMemo4(() => {
+    if (generatorType === "fire") {
+      return (frame, reqColumns, reqRows) => {
+        const fireOptionsWithDimensions = {
+          ...mergedFireOptions,
+          worldHeight: virtualRowsRef.current,
+          worldWidth: virtualColumnsRef.current
+        };
+        const sampler = createAsciiFireSampler(frame, fireOptionsWithDimensions);
+        const lines = [];
+        const currentViewY = viewYRef.current;
+        const rowsToRender = reqRows + 1;
+        for (let y = 0; y < rowsToRender; y++) {
+          const line = [];
+          for (let x = 0; x < reqColumns; x++) {
+            const cell = sampler(x, currentViewY + y);
+            line.push(cell);
+          }
+          lines.push(line);
+        }
+        return { lines, columns: reqColumns };
+      };
+    } else {
+      return (frame, reqColumns, reqRows) => {
+        const sampler = createAsciiPerlinPlasmaSampler(frame, mergedPlasmaOptions);
+        const lines = [];
+        const currentViewY = viewYRef.current;
+        const rowsToRender = reqRows + 1;
+        for (let y = 0; y < rowsToRender; y++) {
+          const line = [];
+          for (let x = 0; x < reqColumns; x++) {
+            const cell = sampler(x, currentViewY + y);
+            line.push(cell);
+          }
+          lines.push(line);
+        }
+        return { lines, columns: reqColumns };
+      };
+    }
+  }, [generatorType, mergedFireOptions, mergedPlasmaOptions]);
   const cellWidthPx = bitmapFont?.width || 8;
   const cellHeightPx = bitmapFont?.height || 16;
   if (mode === "fixed") {
-    return /* @__PURE__ */ jsxs4(
+    return /* @__PURE__ */ jsxs6(
       "div",
       {
         ref: containerRef,
@@ -4464,7 +5439,7 @@ function PlasmaBackgroundLayout({
           width: "100%"
         },
         children: [
-          /* @__PURE__ */ jsx5(
+          /* @__PURE__ */ jsx7(
             "div",
             {
               style: {
@@ -4480,7 +5455,7 @@ function PlasmaBackgroundLayout({
                 const columns = Math.max(1, Math.ceil(viewportSize.width / cellWidthPx));
                 const rows = Math.max(1, Math.ceil(viewportSize.height / cellHeightPx));
                 if (!bitmapFont) return null;
-                return /* @__PURE__ */ jsx5(
+                return /* @__PURE__ */ jsx7(
                   AnsiVirtualDisplay,
                   {
                     columns,
@@ -4496,7 +5471,7 @@ function PlasmaBackgroundLayout({
               })()
             }
           ),
-          /* @__PURE__ */ jsx5(
+          /* @__PURE__ */ jsx7(
             "div",
             {
               ref: scrollableRef,
@@ -4517,7 +5492,7 @@ function PlasmaBackgroundLayout({
     );
   }
   if (!isMounted) {
-    return /* @__PURE__ */ jsx5(
+    return /* @__PURE__ */ jsx7(
       "div",
       {
         ref: containerRef,
@@ -4526,7 +5501,7 @@ function PlasmaBackgroundLayout({
           width: "100%",
           minHeight: "100vh"
         },
-        children: /* @__PURE__ */ jsx5(
+        children: /* @__PURE__ */ jsx7(
           "div",
           {
             ref: scrollableRef,
@@ -4550,14 +5525,16 @@ function PlasmaBackgroundLayout({
     Math.ceil((viewportBounds.height || window.innerHeight) / cellHeightPx)
   );
   const calculatedVirtualWidthPx = virtualWidthPx || Math.max(viewportSize.width, containerHeight);
-  const calculatedVirtualHeightPx = virtualHeightPx || Math.max(viewportSize.height, containerHeight);
+  const calculatedVirtualHeightPx = virtualHeightPx || containerHeight;
   const virtualColumns = Math.max(visibleColumns, Math.ceil(calculatedVirtualWidthPx / cellWidthPx));
   const virtualRows = Math.max(visibleRows, Math.ceil(calculatedVirtualHeightPx / cellHeightPx));
   const viewX = 0;
   const viewY = Math.max(0, Math.floor(scrollTop / cellHeightPx));
   viewYRef.current = viewY;
+  virtualRowsRef.current = virtualRows;
+  virtualColumnsRef.current = virtualColumns;
   const pixelOffsetY = scrollTop % cellHeightPx;
-  return /* @__PURE__ */ jsxs4(
+  return /* @__PURE__ */ jsxs6(
     "div",
     {
       ref: containerRef,
@@ -4567,7 +5544,7 @@ function PlasmaBackgroundLayout({
         minHeight: "100vh"
       },
       children: [
-        /* @__PURE__ */ jsx5(
+        /* @__PURE__ */ jsx7(
           "div",
           {
             style: {
@@ -4579,7 +5556,7 @@ function PlasmaBackgroundLayout({
               zIndex: 0,
               pointerEvents: "none"
             },
-            children: bitmapFont && /* @__PURE__ */ jsx5(
+            children: bitmapFont && /* @__PURE__ */ jsx7(
               AnsiVirtualDisplay,
               {
                 columns: visibleColumns,
@@ -4599,7 +5576,7 @@ function PlasmaBackgroundLayout({
             )
           }
         ),
-        /* @__PURE__ */ jsx5(
+        /* @__PURE__ */ jsx7(
           "div",
           {
             ref: scrollableRef,
@@ -4621,16 +5598,16 @@ function PlasmaBackgroundLayout({
   );
 }
 
-// src/FontCharacterChart.tsx
-import { useEffect as useEffect6, useMemo as useMemo5, useRef as useRef6, useState as useState6 } from "react";
-import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+// src/components/FontCharacterChart.tsx
+import { useEffect as useEffect7, useMemo as useMemo5, useRef as useRef7, useState as useState6 } from "react";
+import { jsx as jsx8, jsxs as jsxs7 } from "react/jsx-runtime";
 function FontCharacterChart({ bitmapFontUrl }) {
   const [bitmapFont, setBitmapFont] = useState6(null);
   const [loading, setLoading] = useState6(true);
   const [error, setError] = useState6(null);
   const [sorted, setSorted] = useState6(false);
-  const canvasRefs = useRef6(/* @__PURE__ */ new Map());
-  useEffect6(() => {
+  const canvasRefs = useRef7(/* @__PURE__ */ new Map());
+  useEffect7(() => {
     let cancelled = false;
     async function loadFont() {
       setLoading(true);
@@ -4697,7 +5674,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
     if (!sorted) return characterInfo;
     return [...characterInfo].sort((a, b) => b.darkness - a.darkness);
   }, [characterInfo, sorted]);
-  useEffect6(() => {
+  useEffect7(() => {
     if (!bitmapFont) return;
     displayedCharacters.forEach(({ charCode }) => {
       const canvas = canvasRefs.current.get(charCode);
@@ -4717,20 +5694,20 @@ function FontCharacterChart({ bitmapFontUrl }) {
     }
   }
   if (loading) {
-    return /* @__PURE__ */ jsx6("div", { children: "Loading font..." });
+    return /* @__PURE__ */ jsx8("div", { children: "Loading font..." });
   }
   if (error) {
-    return /* @__PURE__ */ jsxs5("div", { children: [
+    return /* @__PURE__ */ jsxs7("div", { children: [
       "Error: ",
       error
     ] });
   }
   if (!bitmapFont) {
-    return /* @__PURE__ */ jsx6("div", { children: "No font loaded" });
+    return /* @__PURE__ */ jsx8("div", { children: "No font loaded" });
   }
-  return /* @__PURE__ */ jsxs5("div", { style: { padding: "20px" }, children: [
-    /* @__PURE__ */ jsx6("div", { style: { marginBottom: "20px" }, children: /* @__PURE__ */ jsx6("button", { onClick: () => setSorted(!sorted), children: sorted ? "Show Original Order" : "Sort by Darkness (Darkest to Lightest)" }) }),
-    /* @__PURE__ */ jsx6(
+  return /* @__PURE__ */ jsxs7("div", { style: { padding: "20px" }, children: [
+    /* @__PURE__ */ jsx8("div", { style: { marginBottom: "20px" }, children: /* @__PURE__ */ jsx8("button", { onClick: () => setSorted(!sorted), children: sorted ? "Show Original Order" : "Sort by Darkness (Darkest to Lightest)" }) }),
+    /* @__PURE__ */ jsx8(
       "div",
       {
         style: {
@@ -4738,7 +5715,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
           gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))",
           gap: "10px"
         },
-        children: displayedCharacters.map(({ charCode, character, darkness }) => /* @__PURE__ */ jsxs5(
+        children: displayedCharacters.map(({ charCode, character, darkness }) => /* @__PURE__ */ jsxs7(
           "div",
           {
             onClick: () => copyToClipboard(character),
@@ -4754,7 +5731,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
             },
             title: `Click to copy: ${character}`,
             children: [
-              /* @__PURE__ */ jsx6(
+              /* @__PURE__ */ jsx8(
                 "canvas",
                 {
                   ref: (el) => {
@@ -4769,7 +5746,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
                   }
                 }
               ),
-              /* @__PURE__ */ jsxs5("div", { style: { marginTop: "8px", fontSize: "12px", color: "#888" }, children: [
+              /* @__PURE__ */ jsxs7("div", { style: { marginTop: "8px", fontSize: "12px", color: "#888" }, children: [
                 darkness.toFixed(1),
                 "%"
               ] })
@@ -4782,7 +5759,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
   ] });
 }
 
-// src/rgbToAnsi.ts
+// src/utils/rgbToAnsi.ts
 var ANSI_COLORS_RGB = [
   [0, 0, 0],
   // 0: Black
@@ -4913,7 +5890,7 @@ function rgbToAnsiColor(r, g, b) {
   return rgbToPaletteColor(r, g, b, ANSI_COLORS_RGB);
 }
 
-// src/frameToAnsi.ts
+// src/ansi/frameToAnsi.ts
 var BLOCK_CHARS = {
   dark: " ",
   // Space
@@ -5002,25 +5979,31 @@ function convertFrameDataToAnsi(frame, columns, rows, palette = "ansi16") {
 export {
   ANSI_COLORS_RGB,
   AnsiArt,
-  AnsiArtNG,
   AnsiPlayerOverlay,
   AnsiVirtualDisplay,
   FontCharacterChart,
   PlasmaBackgroundLayout,
+  RipArt,
+  clearFireState,
+  clearFontCache,
   convertFrameDataToAnsi,
   createAnsiArtFrameGenerator,
   createAnsiFrameGenerator,
+  createAsciiFireSampler,
   createAsciiPerlinPlasmaSampler,
   detectAnimation,
   drawPerformanceOverlay,
   extractFontFromFON,
+  generateAsciiFireFrame,
   generateAsciiPerlinPlasmaFrame,
   generateEvenlySpacedPalette,
   getPalette,
   getSauceInfo,
   loadBitmapFontFromUrl,
   loadRawBitmapFont,
+  parseAnsi,
   parseAscii,
+  parseRip,
   parseSauce,
   renderGlyph,
   renderText,

@@ -1,25 +1,26 @@
-export { AnsiArt } from './AnsiArt'
-export type { AnsiArtProps } from './AnsiArt'
+export { AnsiArt } from './components/AnsiArt'
+export type { AnsiArtProps } from './components/AnsiArt'
 
-export { AnsiArtNG } from './AnsiArtNG'
-export type { AnsiArtNGProps } from './AnsiArtNG'
+export { RipArt } from './components/RipArt'
+export type { RipArtProps } from './components/RipArt'
 
-export { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
-export type { AnsiVirtualDisplayProps } from './AnsiVirtualDisplay'
+export { AnsiVirtualDisplay } from './components/AnsiVirtualDisplay'
+export type { AnsiVirtualDisplayProps } from './components/AnsiVirtualDisplay'
 
-export { AnsiPlayerOverlay } from './AnsiPlayerOverlay'
-export type { AnsiPlayerOverlayProps } from './AnsiPlayerOverlay'
+export { AnsiPlayerOverlay } from './components/AnsiPlayerOverlay'
+export type { AnsiPlayerOverlayProps } from './components/AnsiPlayerOverlay'
 
-export { PlasmaBackgroundLayout } from './PlasmaBackgroundLayout'
-export type { PlasmaBackgroundLayoutProps } from './PlasmaBackgroundLayout'
+export { PlasmaBackgroundLayout } from './components/PlasmaBackgroundLayout'
+export type { PlasmaBackgroundLayoutProps } from './components/PlasmaBackgroundLayout'
 
-export { FontCharacterChart } from './FontCharacterChart'
-export type { FontCharacterChartProps } from './FontCharacterChart'
+export { FontCharacterChart } from './components/FontCharacterChart'
+export type { FontCharacterChartProps } from './components/FontCharacterChart'
 
-export { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
-export type { BitmapFont } from './font/bitmapFont'
 export { loadRawBitmapFont, renderGlyph, renderText } from './font/bitmapFont'
+export type { BitmapFont } from './font/bitmapFont'
+export { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
 export { extractFontFromFON, type FontExtractionResult } from './font/fonExtractor'
+export { clearFontCache } from './font/fontCache'
 
 export { drawPerformanceOverlay, type PerformanceStats } from './utils/performanceOverlay'
 
@@ -29,13 +30,28 @@ export {
 	getPalette,
 	rgbToAnsiColor,
 	rgbToPaletteColor,
-} from './rgbToAnsi'
-export type { PaletteMode } from './rgbToAnsi'
+} from './utils/rgbToAnsi'
+export type { PaletteMode } from './utils/rgbToAnsi'
 
-export { parseSauce, detectAnimation, getSauceInfo, parseAscii } from './ansiParser'
-export type { SauceMetadata, CharacterEncoding } from './ansiParser'
+export { detectAnimation, parseAnsi, parseAscii } from './ansi/parser'
+export type { CharacterEncoding } from './ansi/parser'
+export { parseRip } from './rip/parser'
+export type {
+	AnyRipCommand,
+	Direction,
+	FillStyle,
+	FontStyle,
+	LineStyle,
+	Point,
+	Rectangle,
+	RipState,
+	Size,
+	WriteMode,
+} from './rip/types'
+export { getSauceInfo, parseSauce } from './utils/sauce'
+export type { SauceMetadata } from './utils/sauce'
 
-export { convertFrameDataToAnsi } from './frameToAnsi'
+export { convertFrameDataToAnsi } from './ansi/frameToAnsi'
 
 export {
 	createAsciiPerlinPlasmaSampler,
@@ -45,6 +61,13 @@ export type {
 	AsciiPerlinPlasmaOptions,
 	OctaveConfig,
 } from './generators/asciiPerlinPlasmaGenerator'
+
+export {
+	clearFireState,
+	createAsciiFireSampler,
+	generateAsciiFireFrame,
+} from './generators/asciiFireGenerator'
+export type { AsciiFireOptions } from './generators/asciiFireGenerator'
 
 export {
 	createAnsiArtFrameGenerator,
@@ -66,4 +89,4 @@ export type {
 	PixelFrameGenerator,
 	RGBAColor,
 	ViewportConfig,
-} from './types'
+} from './types/types'

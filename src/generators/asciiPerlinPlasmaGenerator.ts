@@ -1,4 +1,4 @@
-import type { AnsiScreen } from '../ansiParser'
+import type { AnsiScreen } from '../ansi/parser'
 
 // Default character set (same as asciiPerlinPlasma.tsx)
 const DEFAULT_CHARS2 = [

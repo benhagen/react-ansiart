@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import type { SauceMetadata } from '../ansi/parser'
 
 export type AnsiPlayerOverlayProps = {
 	isPlaying: boolean
@@ -15,6 +16,8 @@ export type AnsiPlayerOverlayProps = {
 	onAdvanceByte: () => void
 	onRewindByte: () => void
 	onMouseMove: () => void
+	sauce?: SauceMetadata
+	onSauceClick?: () => void
 }
 
 // Baud rate presets
@@ -54,6 +57,8 @@ export function AnsiPlayerOverlay({
 	onAdvanceByte,
 	onRewindByte,
 	onMouseMove,
+	sauce,
+	onSauceClick,
 }: AnsiPlayerOverlayProps) {
 	const [isScrubbing, setIsScrubbing] = useState(false)
 	const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState(false)
@@ -373,6 +378,39 @@ export function AnsiPlayerOverlay({
 
 				{/* Spacer */}
 				<div style={{ flex: 1 }} />
+
+				{/* SAUCE button */}
+				{sauce && onSauceClick && (
+					<button
+						onClick={onSauceClick}
+						style={{
+							background: 'rgba(255, 255, 255, 0.2)',
+							border: 'none',
+							color: '#fff',
+							width: '36px',
+							height: '36px',
+							borderRadius: '50%',
+							cursor: 'pointer',
+							display: 'flex',
+							alignItems: 'center',
+							justifyContent: 'center',
+							fontSize: '10px',
+							fontWeight: 'bold',
+							transition: 'background 0.2s',
+							lineHeight: '1',
+							padding: 0,
+						}}
+						onMouseEnter={e => {
+							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
+						}}
+						onMouseLeave={e => {
+							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
+						}}
+						title='View SAUCE metadata'
+					>
+						S
+					</button>
+				)}
 
 				{/* Speed selector */}
 				<div style={{ position: 'relative' }} ref={speedMenuRef}>
