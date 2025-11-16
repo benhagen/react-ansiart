@@ -78,12 +78,13 @@ export function RipArt({
 	// Load RIP file from URL
 	useEffect(() => {
 		if (!url) return
+		const urlToFetch = url // Capture url in const for TypeScript
 		let cancelled = false
 		async function load() {
 			setError(null)
 			try {
-				const res = await fetch(url)
-				if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`)
+				const res = await fetch(urlToFetch)
+				if (!res.ok) throw new Error(`Failed to fetch ${urlToFetch}: ${res.status}`)
 				const buf = new Uint8Array(await res.arrayBuffer())
 				if (!cancelled) {
 					setRipData(buf)

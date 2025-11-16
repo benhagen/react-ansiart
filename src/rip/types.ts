@@ -153,7 +153,7 @@ export interface RipBezier extends RipCommand {
 
 export interface RipPixel extends RipCommand {
 	type: 'Pixel'
-	opcode: 'PX'
+	opcode: 'PX' | 'X'
 	point: Point
 }
 
@@ -213,14 +213,14 @@ export interface RipColor extends RipCommand {
 
 export interface RipFillStyle extends RipCommand {
 	type: 'FillStyle'
-	opcode: 'FS'
+	opcode: 'FS' | 'S'
 	style: FillStyle
 	color: number
 }
 
 export interface RipLineStyle extends RipCommand {
 	type: 'LineStyle'
-	opcode: 'LS'
+	opcode: 'LS' | '='
 	style: LineStyle
 	pattern: number
 	thickness: number
@@ -265,7 +265,7 @@ export interface RipWriteMode extends RipCommand {
 
 export interface RipSetPalette extends RipCommand {
 	type: 'SetPalette'
-	opcode: 'SP'
+	opcode: 'SP' | 'Q'
 	palette: number[]
 }
 
