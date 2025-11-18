@@ -36,6 +36,7 @@ export type { PaletteMode } from './utils/rgbToAnsi'
 export { detectAnimation, parseAnsi, parseAscii } from './ansi/parser'
 export type { CharacterEncoding } from './ansi/parser'
 export { parseRip } from './rip/parser'
+export { ripToCanvas } from './rip/toCanvas'
 export type {
 	AnyRipCommand,
 	Direction,

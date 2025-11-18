@@ -3518,40 +3518,16 @@ function AnsiArt({
 import { useCallback as useCallback4, useEffect as useEffect5, useMemo as useMemo3, useRef as useRef5, useState as useState4 } from "react";
 
 // src/rip/parser.ts
-var EGA_PALETTE = [
-  [0, 0, 0],
-  // 0: Black
-  [0, 0, 170],
-  // 1: Blue
-  [0, 170, 0],
-  // 2: Green
-  [0, 170, 170],
-  // 3: Cyan
-  [170, 0, 0],
-  // 4: Red
-  [170, 0, 170],
-  // 5: Magenta
-  [170, 85, 0],
-  // 6: Brown
-  [170, 170, 170],
-  // 7: Light Gray
-  [85, 85, 85],
-  // 8: Dark Gray
-  [85, 85, 255],
-  // 9: Bright Blue
-  [85, 255, 85],
-  // 10: Bright Green
-  [85, 255, 255],
-  // 11: Bright Cyan
-  [255, 85, 85],
-  // 12: Bright Red
-  [255, 85, 255],
-  // 13: Bright Magenta
-  [255, 255, 85],
-  // 14: Yellow
-  [255, 255, 255]
-  // 15: White
-];
+var DEFAULT_RIP_PALETTE = [0, 1, 2, 3, 4, 5, 7, 20, 56, 57, 58, 59, 60, 61, 62, 63];
+function cloneRipState(state) {
+  return {
+    ...state,
+    cursor: { ...state.cursor },
+    viewport: state.viewport ? { ...state.viewport } : null,
+    textWindow: state.textWindow ? { ...state.textWindow } : null,
+    palette: state.palette ? [...state.palette] : []
+  };
+}
 function createInitialState() {
   return {
     color: 7,
@@ -3564,7 +3540,7 @@ function createInitialState() {
     viewport: null,
     cursor: { x: 0, y: 0 },
     writeMode: 0 /* CopyPut */,
-    palette: EGA_PALETTE.map((rgb) => rgb[0] << 16 | rgb[1] << 8 | rgb[2]),
+    palette: [...DEFAULT_RIP_PALETTE],
     textWindow: null
   };
 }
@@ -3630,14 +3606,17 @@ var RipReader = class {
     };
   }
   // Read RIP rectangle (2 points: start, end)
+  // Note: RIP rectangles use inclusive coordinates (both endpoints included)
   readRipRectangle() {
     const start = this.readRipPoint();
     const end = this.readRipPoint();
     return {
       x: Math.min(start.x, end.x),
       y: Math.min(start.y, end.y),
-      width: Math.abs(end.x - start.x),
-      height: Math.abs(end.y - start.y)
+      width: Math.abs(end.x - start.x) + 1,
+      // +1 because coordinates are inclusive
+      height: Math.abs(end.y - start.y) + 1
+      // +1 because coordinates are inclusive
     };
   }
   // Read RIP string (until |, CR, LF, or EOF)
@@ -3675,17 +3654,31 @@ function parseCommand(reader, state, debug = false) {
   const startPos = reader.getPosition();
   const b = reader.readRipByte();
   if (b !== 124) {
-    if (debug) console.log(`[RIP] Skipping non-command byte: 0x${b.toString(16)} (${String.fromCharCode(b)}) at position ${startPos}`);
+    const isCommonWhitespace = b === 32 || b === 9 || b === 10 || b === 13;
+    if (debug && !isCommonWhitespace) {
+      console.log(
+        `[RIP] Skipping non-command byte: 0x${b.toString(16)} (${String.fromCharCode(
+          b
+        )}) at position ${startPos}`
+      );
+    }
     return null;
   }
   let opcode = String.fromCharCode(reader.readRipByte());
   if (opcode === "1") {
-    opcode += String.fromCharCode(reader.readRipByte());
+    const nextByte = reader.readRipByte();
+    const nextChar = String.fromCharCode(nextByte);
+    if ("KBTEtCPIW".includes(nextChar)) {
+      opcode += nextChar;
+    } else {
+      if (debug)
+        console.log(`[RIP] Invalid two-char opcode: 1${nextChar} (0x${nextByte.toString(16)})`);
+      reader.setPosition(reader.getPosition() - 1);
+    }
   } else if (opcode === "#") {
     if (debug) console.log("[RIP] End marker (#) found");
     return null;
   }
-  if (debug) console.log(`[RIP] Parsing command: |${opcode} at position ${startPos}`);
   switch (opcode) {
     // Drawing commands
     case "L": {
@@ -3700,108 +3693,127 @@ function parseCommand(reader, state, debug = false) {
     }
     case "O": {
       const center = reader.readRipPoint();
-      const radius = reader.readRipSize();
       const startAngle = reader.readRipWord();
       const endAngle = reader.readRipWord();
+      const radius = reader.readRipSize();
       return { type: "Oval", opcode: "O", center, radius, startAngle, endAngle };
     }
     case "A": {
       const center = reader.readRipPoint();
-      const radius = reader.readRipWord();
       const startAngle = reader.readRipWord();
       const endAngle = reader.readRipWord();
+      const radius = reader.readRipWord();
       return { type: "Arc", opcode: "A", center, radius, startAngle, endAngle };
     }
     case "P": {
       const count = reader.readRipWord();
+      if (count < 2 || count > 512) {
+        if (debug) console.log(`[RIP] Polygon point count out of range: ${count} (must be 2-512)`);
+        return null;
+      }
       const points = [];
       for (let i = 0; i < count; i++) {
         points.push(reader.readRipPoint());
       }
       return { type: "Polygon", opcode: "P", points };
     }
+    case "l":
     case "PL": {
       const count = reader.readRipWord();
+      if (count < 2 || count > 512) {
+        if (debug) console.log(`[RIP] PolyLine point count out of range: ${count} (must be 2-512)`);
+        return null;
+      }
       const points = [];
       for (let i = 0; i < count; i++) {
         points.push(reader.readRipPoint());
       }
-      return { type: "PolyLine", opcode: "PL", points };
+      return { type: "PolyLine", opcode: "l", points };
     }
     case "B": {
       const rect = reader.readRipRectangle();
       return { type: "Bar", opcode: "B", rect };
     }
+    case "R":
     case "DR": {
       const rect = reader.readRipRectangle();
-      return { type: "DrawRectangle", opcode: "DR", rect };
+      return { type: "DrawRectangle", opcode: "R", rect };
     }
+    case "Z":
     case "BE": {
-      const count = reader.readRipWord();
       const points = [];
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < 4; i++) {
         points.push(reader.readRipPoint());
       }
       const segments = reader.readRipWord();
-      return { type: "Bezier", opcode: "BE", points, segments };
+      return { type: "Bezier", opcode: "Z", points, segments };
     }
-    case "X":
-    case "PX": {
+    case "X": {
       const point = reader.readRipPoint();
-      return { type: "Pixel", opcode: opcode === "X" ? "X" : "PX", point };
+      return { type: "Pixel", opcode: "X", point };
     }
     case "F": {
       const point = reader.readRipPoint();
       const border = reader.readRipWord();
       return { type: "Fill", opcode: "F", point, border };
     }
+    case "p":
     case "FP": {
       const count = reader.readRipWord();
+      if (count < 2 || count > 512) {
+        if (debug)
+          console.log(`[RIP] FilledPolygon point count out of range: ${count} (must be 2-512)`);
+        return null;
+      }
       const points = [];
       for (let i = 0; i < count; i++) {
         points.push(reader.readRipPoint());
       }
-      return { type: "FilledPolygon", opcode: "FP", points };
+      return { type: "FilledPolygon", opcode: "p", points };
     }
+    case "o":
     case "FO": {
       const center = reader.readRipPoint();
       const radius = reader.readRipSize();
-      return { type: "FilledOval", opcode: "FO", center, radius };
+      return { type: "FilledOval", opcode: "o", center, radius };
     }
+    case "I":
     case "PS": {
       const center = reader.readRipPoint();
-      const radius = reader.readRipWord();
       const startAngle = reader.readRipWord();
       const endAngle = reader.readRipWord();
-      return { type: "PieSlice", opcode: "PS", center, radius, startAngle, endAngle };
+      const radius = reader.readRipWord();
+      return { type: "PieSlice", opcode: "I", center, radius, startAngle, endAngle };
     }
+    case "i":
     case "OPS": {
       const center = reader.readRipPoint();
-      const radius = reader.readRipSize();
       const startAngle = reader.readRipWord();
       const endAngle = reader.readRipWord();
-      return { type: "OvalPieSlice", opcode: "OPS", center, radius, startAngle, endAngle };
+      const radius = reader.readRipSize();
+      return { type: "OvalPieSlice", opcode: "i", center, radius, startAngle, endAngle };
     }
+    case "V":
     case "OA": {
       const center = reader.readRipPoint();
-      const radius = reader.readRipSize();
       const startAngle = reader.readRipWord();
       const endAngle = reader.readRipWord();
-      return { type: "OvalArc", opcode: "OA", center, radius, startAngle, endAngle };
+      const radius = reader.readRipSize();
+      return { type: "OvalArc", opcode: "V", center, radius, startAngle, endAngle };
     }
     // State commands
     case "c": {
       const value = reader.readRipWord();
-      state.color = value;
-      return { type: "Color", opcode: "c", value };
+      state.color = value % 16;
+      return { type: "Color", opcode: "c", value: value % 16 };
     }
     case "S":
     case "FS": {
       const style = reader.readRipWord();
       const color = reader.readRipWord();
       state.fillStyle = style;
-      state.fillColor = color;
-      return { type: "FillStyle", opcode: opcode === "S" ? "S" : "FS", style, color };
+      state.fillColor = color % 16;
+      return { type: "FillStyle", opcode: "S", style, color: color % 16 };
     }
     case "=":
     case "LS": {
@@ -3809,100 +3821,155 @@ function parseCommand(reader, state, debug = false) {
       const pattern = reader.readRipInt();
       const thickness = reader.readRipWord();
       state.lineStyle = style;
-      return { type: "LineStyle", opcode: opcode === "=" ? "=" : "LS", style, pattern, thickness };
+      return { type: "LineStyle", opcode: "=", style, pattern, thickness };
     }
+    case "Y":
     case "FT": {
       const font = reader.readRipWord();
       const direction = reader.readRipWord();
       const characterSize = reader.readRipWord();
       reader.readRipWord();
       state.fontStyle = font;
-      return { type: "FontStyle", opcode: "FT", font, direction, characterSize };
+      return {
+        type: "FontStyle",
+        opcode: "Y",
+        font,
+        direction,
+        characterSize
+      };
     }
-    case "V":
     case "v": {
-      const rect = reader.readRipRectangle();
+      const x0 = reader.readRipWord();
+      const y0 = reader.readRipWord();
+      const x1 = reader.readRipWord();
+      const y1 = reader.readRipWord();
+      if (x0 === 0 && y0 === 0 && x1 === 0 && y1 === 0) {
+        state.viewport = null;
+        return { type: "ViewPort", opcode: "v", rect: { x: 0, y: 0, width: 0, height: 0 } };
+      }
+      const minX = Math.min(x0, x1);
+      const maxX = Math.max(x0, x1);
+      const minY = Math.min(y0, y1);
+      const maxY = Math.max(y0, y1);
+      const rect = {
+        x: minX,
+        y: minY,
+        width: maxX - minX + 1,
+        height: maxY - minY + 1
+      };
       state.viewport = rect;
-      return { type: "ViewPort", opcode: "V", rect };
+      return { type: "ViewPort", opcode: "v", rect };
     }
+    case "g":
     case "G": {
       const point = reader.readRipPoint();
       state.cursor = point;
-      return { type: "GotoXY", opcode: "G", point };
+      return { type: "GotoXY", opcode: "g", point };
     }
-    case "M": {
+    case "m": {
       const point = reader.readRipPoint();
       state.cursor = point;
-      return { type: "Move", opcode: "M", point };
+      return { type: "Move", opcode: "m", point };
     }
     case "H": {
       state.cursor = { x: 0, y: 0 };
       return { type: "Home", opcode: "H" };
     }
+    case "W":
     case "WM": {
       const mode = reader.readRipWord();
       state.writeMode = mode;
-      return { type: "WriteMode", opcode: "WM", mode };
+      return { type: "WriteMode", opcode: "W", mode };
     }
     case "Q":
     case "SP": {
       const palette = [];
       for (let i = 0; i < 16; i++) {
-        palette.push(reader.readRipWord());
+        const raw = reader.readRipWord();
+        const egaIndex = Math.max(0, Math.min(raw, 63));
+        palette.push(egaIndex);
       }
-      state.palette = palette;
-      return { type: "SetPalette", opcode: opcode === "Q" ? "Q" : "SP", palette };
+      state.palette = [...palette];
+      return { type: "SetPalette", opcode: "Q", palette: [...palette] };
     }
+    case "a":
     case "OP": {
       const color = reader.readRipWord();
-      const palette = reader.readRipWord();
-      return { type: "OnePalette", opcode: "OP", color, palette };
+      const paletteValue = reader.readRipWord();
+      const colorIndex = color % 16;
+      const egaIndex = Math.max(0, Math.min(paletteValue, 63));
+      if (state.palette) {
+        state.palette[colorIndex] = egaIndex;
+      }
+      return { type: "OnePalette", opcode: "a", color: colorIndex, palette: egaIndex };
     }
+    case "s":
     case "FPAT": {
       const pattern = [];
       for (let i = 0; i < 8; i++) {
         pattern.push(reader.readRipWord());
       }
       const color = reader.readRipWord();
-      return { type: "FillPattern", opcode: "FPAT", pattern, color };
+      state.fillStyle = 12 /* User */;
+      state.fillColor = color % 16;
+      return { type: "FillPattern", opcode: "s", pattern, color: color % 16 };
     }
     // Text commands
+    case "1T":
     case "BT": {
       const rect = reader.readRipRectangle();
       const flags = reader.readRipWord();
-      return { type: "BeginText", opcode: "BT", rect, flags };
+      return { type: "BeginText", opcode: "1T", rect, flags };
     }
+    case "1E":
     case "ET": {
-      return { type: "EndText", opcode: "ET" };
+      return { type: "EndText", opcode: "1E" };
     }
+    case "T":
     case "OT": {
       const text = reader.readRipString();
-      return { type: "OutText", opcode: "OT", text };
+      return { type: "OutText", opcode: "T", text };
     }
+    case "@":
     case "OTX": {
       const point = reader.readRipPoint();
       const text = reader.readRipString();
-      return { type: "OutTextXY", opcode: "OTX", point, text };
+      return { type: "OutTextXY", opcode: "@", point, text };
     }
+    case "1t":
     case "RT": {
       const rect = reader.readRipRectangle();
       const text = reader.readRipString();
-      return { type: "RegionText", opcode: "RT", rect, text };
+      return { type: "RegionText", opcode: "1t", rect, text };
     }
+    case "w":
     case "TW": {
-      const rect = reader.readRipRectangle();
+      const x0 = reader.readRipWord();
+      const y0 = reader.readRipWord();
+      const x1 = reader.readRipWord();
+      const y1 = reader.readRipWord();
+      const wrap = reader.readRipNumber();
+      const size = reader.readRipNumber();
+      const rect = {
+        x: Math.min(x0, x1),
+        y: Math.min(y0, y1),
+        width: Math.abs(x1 - x0) + 1,
+        height: Math.abs(y1 - y0) + 1
+      };
       state.textWindow = rect;
-      return { type: "TextWindow", opcode: "TW", rect };
+      return { type: "TextWindow", opcode: "w", rect, wrap, size };
     }
     // Interactive commands
+    case "U":
     case "BU": {
       const rect = reader.readRipRectangle();
       const hotKey = reader.readRipWord();
       const flags = reader.readRipNumber();
       reader.readRipNumber();
       const text = reader.readRipString();
-      return { type: "Button", opcode: "BU", rect, hotKey, flags, text };
+      return { type: "Button", opcode: "U", rect, hotKey, flags, text };
     }
+    case "1B":
     case "BS": {
       reader.readRipWord();
       reader.readRipWord();
@@ -3919,61 +3986,71 @@ function parseCommand(reader, state, debug = false) {
       reader.readRipWord();
       reader.readRipWord();
       reader.readRipWord();
-      return { type: "ButtonStyle", opcode: "BS" };
+      return { type: "ButtonStyle", opcode: "1B" };
     }
+    case "M":
     case "MO": {
       const enabled = reader.readRipWord() !== 0;
-      return { type: "Mouse", opcode: "MO", enabled };
+      return { type: "Mouse", opcode: "M", enabled };
     }
+    case "1K":
     case "KM": {
-      return { type: "KillMouseFields", opcode: "KM" };
+      return { type: "KillMouseFields", opcode: "1K" };
     }
     // Erase commands
+    case ">":
     case "EE": {
-      return { type: "EraseEOL", opcode: "EE" };
+      return { type: "EraseEOL", opcode: ">" };
     }
+    case "E":
     case "EV": {
-      return { type: "EraseView", opcode: "EV" };
+      return { type: "EraseView", opcode: "E" };
     }
+    case "e":
     case "EW": {
-      const rect = reader.readRipRectangle();
-      return { type: "EraseWindow", opcode: "EW", rect };
+      return { type: "EraseWindow", opcode: "e" };
     }
+    case "*":
     case "RW": {
-      return { type: "ResetWindows", opcode: "RW" };
+      return { type: "ResetWindows", opcode: "*" };
     }
     // Image commands
+    case "1C":
     case "GI": {
       const rect = reader.readRipRectangle();
       const id = reader.readRipNumber();
-      return { type: "GetImage", opcode: "GI", rect, id };
+      return { type: "GetImage", opcode: "1C", rect, id };
     }
+    case "1P":
     case "PI": {
       const point = reader.readRipPoint();
       const writeMode = reader.readRipWord();
       const id = reader.readRipNumber();
-      return { type: "PutImage", opcode: "PI", point, writeMode, id };
+      return { type: "PutImage", opcode: "1P", point, writeMode, id };
     }
+    case "1I":
     case "LI": {
       const point = reader.readRipPoint();
       const id = reader.readRipWord();
       const flags = reader.readRipNumber();
       const filename = reader.readRipString();
-      return { type: "LoadIcon", opcode: "LI", point, id, flags, filename };
+      return { type: "LoadIcon", opcode: "1I", point, id, flags, filename };
     }
+    case "1W":
     case "WI": {
       const point = reader.readRipPoint();
       const id = reader.readRipWord();
-      return { type: "WriteIcon", opcode: "WI", point, id };
+      return { type: "WriteIcon", opcode: "1W", point, id };
     }
     default:
-      console.warn(`[RIP] Unknown opcode: |${opcode} at position ${startPos}`);
+      if (debug) console.log(`[RIP] Unknown opcode: |${opcode} at position ${startPos}`);
       return null;
   }
 }
 function parseRip(data, debug = false) {
   if (debug) console.log(`[RIP] Starting parse of ${data.length} bytes`);
   const reader = new RipReader(data);
+  const initialState = createInitialState();
   const state = createInitialState();
   const commands = [];
   let width = 640;
@@ -3988,7 +4065,6 @@ function parseRip(data, debug = false) {
       }
       if (peek === -1) break;
       reader.readByte();
-      if (debug) console.log(`[RIP] Skipping initial byte: 0x${peek.toString(16)} (${String.fromCharCode(peek)})`);
     }
     while (!reader.isEOF()) {
       try {
@@ -4043,231 +4119,781 @@ function parseRip(data, debug = false) {
     console.error("[RIP] Fatal parse error:", e?.message || e);
     if (debug) console.error("[RIP] Fatal error details:", e);
   }
-  if (debug) {
+  if (debug && errorCount > 0) {
     console.log(`[RIP] Parse complete: ${commandCount} commands parsed, ${errorCount} errors`);
-    console.log(`[RIP] Detected dimensions: ${width}x${height}`);
-    console.log(`[RIP] Command breakdown:`, {
-      drawing: commands.filter((c) => ["Line", "Circle", "Oval", "Arc", "Polygon", "PolyLine", "Bar", "DrawRectangle", "Bezier", "Pixel", "Fill", "FilledPolygon", "FilledOval", "PieSlice", "OvalPieSlice", "OvalArc"].includes(c.type)).length,
-      state: commands.filter((c) => ["Color", "FillStyle", "LineStyle", "FontStyle", "ViewPort", "GotoXY", "Move", "Home", "WriteMode", "SetPalette", "OnePalette", "FillPattern"].includes(c.type)).length,
-      text: commands.filter((c) => ["BeginText", "EndText", "OutText", "OutTextXY", "RegionText", "TextWindow"].includes(c.type)).length,
-      other: commands.filter((c) => !["Line", "Circle", "Oval", "Arc", "Polygon", "PolyLine", "Bar", "DrawRectangle", "Bezier", "Pixel", "Fill", "FilledPolygon", "FilledOval", "PieSlice", "OvalPieSlice", "OvalArc", "Color", "FillStyle", "LineStyle", "FontStyle", "ViewPort", "GotoXY", "Move", "Home", "WriteMode", "SetPalette", "OnePalette", "FillPattern", "BeginText", "EndText", "OutText", "OutTextXY", "RegionText", "TextWindow"].includes(c.type)).length
-    });
   }
+  const finalState = cloneRipState(state);
+  const initialStateClone = cloneRipState(initialState);
   return {
     commands,
     width,
     height,
-    state
+    state: initialStateClone,
+    initialState: initialStateClone,
+    finalState
   };
 }
 
-// src/rip/toSvg.ts
-var EGA_PALETTE_RGB = [
-  "#000000",
-  // 0: Black
-  "#0000AA",
-  // 1: Blue
-  "#00AA00",
-  // 2: Green
-  "#00AAAA",
-  // 3: Cyan
-  "#AA0000",
-  // 4: Red
-  "#AA00AA",
-  // 5: Magenta
-  "#AA5500",
-  // 6: Brown
-  "#AAAAAA",
-  // 7: Light Gray
-  "#555555",
-  // 8: Dark Gray
-  "#5555FF",
-  // 9: Bright Blue
-  "#55FF55",
-  // 10: Bright Green
-  "#55FFFF",
-  // 11: Bright Cyan
-  "#FF5555",
-  // 12: Bright Red
-  "#FF55FF",
-  // 13: Bright Magenta
-  "#FFFF55",
-  // 14: Yellow
-  "#FFFFFF"
-  // 15: White
-];
+// src/utils/egaPalette.ts
+function toHex(component) {
+  return component.toString(16).padStart(2, "0").toUpperCase();
+}
+function egaRed(index) {
+  return 85 * (index >> 1 & 2 | index >> 5 & 1);
+}
+function egaGreen(index) {
+  return 85 * (index & 2 | index >> 4 & 1);
+}
+function egaBlue(index) {
+  return 85 * (index << 1 & 2 | index >> 3 & 1);
+}
+function egaIndexToColor(index) {
+  const red = egaRed(index);
+  const green = egaGreen(index);
+  const blue = egaBlue(index);
+  return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+var EGA_PALETTE_RGB = Array.from({ length: 64 }, (_, i) => egaIndexToColor(i));
+
+// src/rip/toCanvas.ts
+function cloneRipState2(state) {
+  return {
+    ...state,
+    cursor: { ...state.cursor },
+    viewport: state.viewport ? { ...state.viewport } : null,
+    textWindow: state.textWindow ? { ...state.textWindow } : null,
+    palette: state.palette ? [...state.palette] : []
+  };
+}
+function drawLine(ctx, x1, y1, x2, y2, maxCommands) {
+  const lYDelta = Math.abs(y2 - y1);
+  const lXDelta = Math.abs(x2 - x1);
+  if (lXDelta === 0) {
+    const startY = Math.min(y1, y2);
+    for (let y = 0; y <= lYDelta; y++) {
+      ctx.fillRect(x1, startY + y, 1, 1);
+    }
+  } else if (lYDelta === 0) {
+    const startX = Math.min(x1, x2);
+    for (let x = 0; x <= lXDelta; x++) {
+      ctx.fillRect(startX + x, y1, 1, 1);
+    }
+  } else if (lXDelta >= lYDelta) {
+    let lAdjUp, lAdjDown, lError, lAdvance;
+    let lWholeStep, lStartLength, lEndLength, lCount;
+    let lRunLength;
+    let lStep;
+    let pos;
+    lAdvance = 1;
+    if (y1 < y2) {
+      pos = { x: x1, y: y1 };
+      lStep = x1 > x2 ? -1 : 1;
+    } else {
+      pos = { x: x2, y: y2 };
+      lStep = x2 > x1 ? -1 : 1;
+    }
+    lWholeStep = Math.floor(lXDelta / lYDelta) * lStep;
+    lAdjUp = lXDelta % lYDelta;
+    lAdjDown = lYDelta * 2;
+    lError = lAdjUp - lAdjDown;
+    lAdjUp *= 2;
+    lStartLength = Math.floor(lWholeStep / 2) + lStep;
+    lEndLength = lStartLength;
+    if (lAdjUp === 0 && (lWholeStep & 1) === 0) {
+      lStartLength -= lStep;
+    }
+    if ((lWholeStep & 1) !== 0) {
+      lError += lYDelta;
+    }
+    for (let i = 0; i < Math.abs(lStartLength); i++) {
+      ctx.fillRect(pos.x + i * Math.sign(lStartLength), pos.y, 1, 1);
+    }
+    pos.x += lStartLength;
+    pos.y += lAdvance;
+    for (lCount = 0; lCount < lYDelta - 1; lCount++) {
+      lRunLength = lWholeStep;
+      if ((lError += lAdjUp) > 0) {
+        lRunLength += lStep;
+        lError -= lAdjDown;
+      }
+      for (let i = 0; i < Math.abs(lRunLength); i++) {
+        ctx.fillRect(pos.x + i * Math.sign(lRunLength), pos.y, 1, 1);
+      }
+      pos.x += lRunLength;
+      pos.y += lAdvance;
+    }
+    for (let i = 0; i < Math.abs(lEndLength); i++) {
+      ctx.fillRect(pos.x + i * Math.sign(lEndLength), pos.y, 1, 1);
+    }
+  } else {
+    let lAdjUp, lAdjDown, lError, lAdvance;
+    let lWholeStep, lStartLength, lEndLength, lCount;
+    let lRunLength;
+    let pos;
+    if (y1 < y2) {
+      pos = { x: x1, y: y1 };
+      lAdvance = x1 > x2 ? -1 : 1;
+    } else {
+      pos = { x: x2, y: y2 };
+      lAdvance = x2 > x1 ? -1 : 1;
+    }
+    lWholeStep = Math.floor(lYDelta / lXDelta);
+    lAdjUp = lYDelta % lXDelta;
+    lAdjDown = lXDelta * 2;
+    lError = lAdjUp - lAdjDown;
+    lAdjUp *= 2;
+    lStartLength = Math.floor(lWholeStep / 2) + 1;
+    lEndLength = lStartLength;
+    if (lAdjUp === 0 && (lWholeStep & 1) === 0) {
+      lStartLength--;
+    }
+    if ((lWholeStep & 1) !== 0) {
+      lError += lXDelta;
+    }
+    for (let i = 0; i < lStartLength; i++) {
+      ctx.fillRect(pos.x, pos.y + i, 1, 1);
+    }
+    pos.y += lStartLength;
+    pos.x += lAdvance;
+    for (lCount = 0; lCount < lXDelta - 1; lCount++) {
+      lRunLength = lWholeStep;
+      if ((lError += lAdjUp) > 0) {
+        lRunLength++;
+        lError -= lAdjDown;
+      }
+      for (let i = 0; i < lRunLength; i++) {
+        ctx.fillRect(pos.x, pos.y + i, 1, 1);
+      }
+      pos.y += lRunLength;
+      pos.x += lAdvance;
+    }
+    for (let i = 0; i < lEndLength; i++) {
+      ctx.fillRect(pos.x, pos.y + i, 1, 1);
+    }
+  }
+}
+function drawEllipse(ctx, x, y, startAngle, endAngle, radiusx, radiusy) {
+  if (startAngle > endAngle) {
+    ;
+    [startAngle, endAngle] = [endAngle, startAngle];
+  }
+  radiusx = Math.max(1, radiusx);
+  radiusy = Math.max(1, radiusy);
+  const diameterx = radiusx * 2;
+  const diametery = radiusy * 2;
+  const b1 = diametery & 1;
+  let stopx = 4 * (1 - diameterx) * diametery * diametery;
+  let stopy = 4 * (b1 + 1) * diameterx * diameterx;
+  let err = stopx + stopy + b1 * diameterx * diameterx;
+  let xoffset = radiusx;
+  let yoffset = 0;
+  const incx = 8 * diameterx * diameterx;
+  const incy = 8 * diametery * diametery;
+  const aspect = radiusx / radiusy;
+  const horizontal_angle = radiusx < radiusy ? 90 - 45 * aspect : 45 / aspect;
+  do {
+    const e2 = 2 * err;
+    const angle = Math.atan(yoffset * aspect / xoffset) * (180 / Math.PI);
+    if (angle >= startAngle && angle <= endAngle) {
+      symmetryPlot(ctx, x, y, xoffset, yoffset, angle <= horizontal_angle);
+      if (Math.abs(angle - horizontal_angle) < 1) {
+        symmetryPlot(ctx, x, y, xoffset, yoffset, !(angle <= horizontal_angle));
+      }
+    }
+    if (e2 <= stopy) {
+      yoffset++;
+      err += stopy += incx;
+    }
+    if (e2 >= stopx) {
+      xoffset--;
+      err += stopx += incy;
+    }
+  } while (xoffset >= 0);
+}
+function symmetryPlot(ctx, x, y, xoffset, yoffset, horizontal) {
+  if (horizontal) {
+    ctx.fillRect(x + xoffset, y + yoffset, 1, 1);
+    ctx.fillRect(x - xoffset, y + yoffset, 1, 1);
+    ctx.fillRect(x + xoffset, y - yoffset, 1, 1);
+    ctx.fillRect(x - xoffset, y - yoffset, 1, 1);
+  } else {
+    ctx.fillRect(x + yoffset, y + xoffset, 1, 1);
+    ctx.fillRect(x - yoffset, y + xoffset, 1, 1);
+    ctx.fillRect(x + yoffset, y - xoffset, 1, 1);
+    ctx.fillRect(x - yoffset, y - xoffset, 1, 1);
+  }
+}
+function fillPolygon(ctx, points) {
+  if (points.length <= 2) return;
+  const rows = new Array(352);
+  for (let i = 1; i < points.length; i++) {
+    scanLine(points[i - 1], points[i], rows);
+  }
+  scanLine(points[points.length - 1], points[0], rows);
+  for (let y = 0; y < rows.length; y++) {
+    const row = rows[y];
+    if (row && row.length > 0) {
+      row.sort((a, b) => a - b);
+      let on = false;
+      let lastX = -1;
+      for (const x of row) {
+        if (on) {
+          const width = x - lastX + 1;
+          if (width > 0) {
+            ctx.fillRect(lastX, y - 1, width, 1);
+          }
+        }
+        on = !on;
+        lastX = x;
+      }
+    }
+  }
+}
+function scanLine(start, end, rows) {
+  const yDelta = Math.abs(end.y - start.y);
+  if (start.y < end.y) {
+    addScanRow(rows, start.x, start.y);
+  }
+  if (yDelta > 0) {
+    const xDelta = start.y > end.y ? start.x - end.x : end.x - start.x;
+    const minX = start.y > end.y ? end.x : start.x;
+    let posY = Math.min(start.y, end.y);
+    posY++;
+    for (let count = 1; count < yDelta; count++) {
+      const posX = Math.round(xDelta * count / yDelta) + minX;
+      if (posY >= -1 && posY <= 350) {
+        addScanRow(rows, posX, posY);
+      }
+      posY++;
+    }
+  }
+  if (end.y < start.y) {
+    addScanRow(rows, end.x, end.y);
+  }
+}
+function addScanRow(rows, x, y) {
+  if (y < -1 || y > 350) return;
+  const rowIndex = y + 1;
+  if (!rows[rowIndex]) {
+    rows[rowIndex] = [];
+  }
+  rows[rowIndex].push(x);
+}
 function getColor(index, palette) {
   if (palette && palette[index] !== void 0) {
-    const rgb = palette[index];
-    const r = rgb >> 16 & 255;
-    const g = rgb >> 8 & 255;
-    const b = rgb & 255;
-    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+    const egaIndex2 = Math.max(0, Math.min(palette[index], EGA_PALETTE_RGB.length - 1));
+    return EGA_PALETTE_RGB[egaIndex2];
   }
-  return EGA_PALETTE_RGB[index & 15] || EGA_PALETTE_RGB[0];
+  const egaIndex = Math.max(0, Math.min(index, EGA_PALETTE_RGB.length - 1));
+  return EGA_PALETTE_RGB[egaIndex];
 }
-function getFillStyle(style, fillColor, palette) {
-  switch (style) {
-    case 0 /* Empty */:
-      return "none";
-    case 1 /* Solid */:
-      return getColor(fillColor, palette);
-    default:
-      return getColor(fillColor, palette);
+var FILL_PATTERNS = [
+  // 0: Background Fill (Empty)
+  [0, 0, 0, 0, 0, 0, 0, 0],
+  // 1: Solid Fill
+  [255, 255, 255, 255, 255, 255, 255, 255],
+  // 2: Line Fill
+  [255, 255, 0, 0, 0, 0, 0, 0],
+  // 3: Light Slash Fill
+  [1, 2, 4, 8, 16, 32, 64, 128],
+  // 4: Normal Slash Fill
+  [224, 193, 131, 7, 14, 28, 56, 112],
+  // 5: Light Backslash Fill (spec shows this as "Light Backslash")
+  [240, 120, 60, 30, 15, 135, 195, 225],
+  // 6: Light Backslash Fill (alternate pattern from spec)
+  [165, 210, 105, 180, 90, 45, 150, 75],
+  // 7: Light Hatch Fill
+  [255, 136, 136, 136, 255, 136, 136, 136],
+  // 8: Heavy Cross Hatch Fill
+  [129, 66, 36, 24, 24, 36, 66, 129],
+  // 9: Interleaving Line Fill
+  [204, 51, 204, 51, 204, 51, 204, 51],
+  // 10 (0A): Widely Spaced Dot Fill
+  [128, 0, 8, 0, 128, 0, 8, 0],
+  // 11 (0B): Closely Spaced Dot Fill
+  [136, 0, 34, 0, 136, 0, 34, 0],
+  // 12: User (will be set dynamically)
+  [170, 85, 170, 85, 170, 85, 170, 85]
+];
+function createFillPattern(ctx, style, fillColor, palette, userPattern) {
+  if (style === 0 /* Empty */) {
+    return null;
   }
+  const patternCanvas = document.createElement("canvas");
+  patternCanvas.width = 8;
+  patternCanvas.height = 8;
+  const patternCtx = patternCanvas.getContext("2d");
+  const fillColorStr = getColor(fillColor, palette);
+  if (style === 1 /* Solid */) {
+    patternCtx.fillStyle = fillColorStr;
+    patternCtx.fillRect(0, 0, 8, 8);
+  } else if (style === 12 /* User */ && userPattern) {
+    patternCtx.fillStyle = fillColorStr;
+    for (let row = 0; row < 8; row++) {
+      const byte = userPattern[row] || 0;
+      for (let col = 0; col < 8; col++) {
+        const bit = 7 - col;
+        if (byte & 1 << bit) {
+          patternCtx.fillRect(col, row, 1, 1);
+        }
+      }
+    }
+  } else {
+    const pattern = FILL_PATTERNS[style] || FILL_PATTERNS[1 /* Solid */];
+    patternCtx.fillStyle = fillColorStr;
+    for (let row = 0; row < 8; row++) {
+      const byte = pattern[row] || 0;
+      for (let col = 0; col < 8; col++) {
+        const bit = 7 - col;
+        if (byte & 1 << bit) {
+          patternCtx.fillRect(col, row, 1, 1);
+        }
+      }
+    }
+  }
+  return ctx.createPattern(patternCanvas, "repeat");
 }
-function getLineStyle(style, pattern) {
+function setLineStyle(ctx, style) {
   switch (style) {
     case 0 /* Solid */:
-      return "none";
+      ctx.setLineDash([]);
+      break;
     case 1 /* Dotted */:
-      return "2,2";
+      ctx.setLineDash([2, 2]);
+      break;
     case 2 /* Center */:
-      return "8,4,2,4";
+      ctx.setLineDash([8, 4, 2, 4]);
+      break;
     case 3 /* Dashed */:
-      return "8,4";
+      ctx.setLineDash([8, 4]);
+      break;
     default:
-      return "none";
+      ctx.setLineDash([]);
   }
 }
-function escapeXml(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+function floodFill(ctx, startX, startY, fillColor, fillPattern, borderColor, width, height) {
+  const fillMatch = fillColor.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
+  if (!fillMatch) return;
+  const fillR = parseInt(fillMatch[1], 16);
+  const fillG = parseInt(fillMatch[2], 16);
+  const fillB = parseInt(fillMatch[3], 16);
+  const borderMatch = borderColor.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
+  if (!borderMatch) return;
+  const borderR = parseInt(borderMatch[1], 16);
+  const borderG = parseInt(borderMatch[2], 16);
+  const borderB = parseInt(borderMatch[3], 16);
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
+  ctx.beginPath();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.fill();
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const startIdx = (startY * width + startX) * 4;
+  const startR = imageData.data[startIdx];
+  const startG = imageData.data[startIdx + 1];
+  const startB = imageData.data[startIdx + 2];
+  console.log(
+    `[RIP] DEBUG Fill point (${startX}, ${startY}) actual color: rgb(${startR}, ${startG}, ${startB})`
+  );
+  console.log(`[RIP] DEBUG Border color: rgb(${borderR}, ${borderG}, ${borderB})`);
+  if (startR === borderR && startG === borderG && startB === borderB) {
+    console.log(`[RIP] DEBUG Fill skipped: start pixel matches border color`);
+    return;
+  }
+  const isBorder = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return true;
+    const idx = (y * width + x) * 4;
+    return imageData.data[idx] === borderR && imageData.data[idx + 1] === borderG && imageData.data[idx + 2] === borderB;
+  };
+  const findLine = (x, y) => {
+    if (isBorder(x, y)) {
+      return null;
+    }
+    let startx = x;
+    let endx = x;
+    for (endx = x; endx < width; endx++) {
+      if (isBorder(endx, y)) break;
+    }
+    endx--;
+    for (startx = x - 1; startx >= 0; startx--) {
+      if (isBorder(startx, y)) break;
+    }
+    startx++;
+    if (startx === endx && (startx === 0 || endx === width - 1)) {
+      return null;
+    }
+    return { x1: startx, x2: endx, y };
+  };
+  const alreadyDrawn = (x, y) => {
+    for (const li of fillLines[y]) {
+      if (x >= li.x1 && x <= li.x2) return true;
+    }
+    return false;
+  };
+  const fillLineSegment = (x1, x2, y) => {
+    for (let x = x1; x <= x2; x++) {
+      const idx = (y * width + x) * 4;
+      imageData.data[idx] = fillR;
+      imageData.data[idx + 1] = fillG;
+      imageData.data[idx + 2] = fillB;
+    }
+    if (fillPattern) {
+      ctx.fillStyle = fillPattern;
+    } else {
+      ctx.fillStyle = fillColor;
+    }
+    ctx.fillRect(x1, y, x2 - x1 + 1, 1);
+  };
+  const fillLines = [];
+  for (let i = 0; i < height; i++) {
+    fillLines[i] = [];
+  }
+  const pointStack = [];
+  const initialLine = findLine(startX, startY);
+  if (initialLine) {
+    fillLines[initialLine.y].push(initialLine);
+    fillLineSegment(initialLine.x1, initialLine.x2, initialLine.y);
+    pointStack.push({ ...initialLine, dir: 1 });
+    pointStack.push({ ...initialLine, dir: -1 });
+    while (pointStack.length > 0) {
+      const fli = pointStack.pop();
+      const cury = fli.y + fli.dir;
+      if (cury < 0 || cury >= height) continue;
+      for (let cx = fli.x1; cx <= fli.x2; cx++) {
+        if (isBorder(cx, cury)) continue;
+        if (alreadyDrawn(cx, cury)) continue;
+        const li = findLine(cx, cury);
+        if (li) {
+          fillLines[li.y].push(li);
+          fillLineSegment(li.x1, li.x2, li.y);
+          cx = li.x2;
+          pointStack.push({ x1: li.x1, x2: li.x2, y: li.y, dir: fli.dir });
+          if (!(fillR === 0 && fillG === 0 && fillB === 0)) {
+            if (li.x2 > fli.x2) {
+              pointStack.push({ x1: fli.x2 + 1, x2: li.x2, y: li.y, dir: -fli.dir });
+            }
+            if (li.x1 < fli.x1) {
+              pointStack.push({ x1: li.x1, x2: fli.x1 - 1, y: li.y, dir: -fli.dir });
+            }
+          }
+        }
+      }
+    }
+  }
 }
-function pointToString(p) {
-  return `${p.x},${p.y}`;
+function isViewportEnabled(viewport) {
+  if (!viewport) return true;
+  return !(viewport.x === 0 && viewport.y === 0 && viewport.width === 0 && viewport.height === 0);
 }
-function pointsToString(points) {
-  return points.map(pointToString).join(" ");
-}
-function arcToPath(center, radius, startAngle, endAngle) {
-  const startRad = startAngle * Math.PI / 180;
-  const endRad = endAngle * Math.PI / 180;
-  const startX = center.x + radius * Math.cos(startRad);
-  const startY = center.y - radius * Math.sin(startRad);
-  const endX = center.x + radius * Math.cos(endRad);
-  const endY = center.y - radius * Math.sin(endRad);
-  const largeArc = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
-  const sweep = endAngle > startAngle ? 1 : 0;
-  return `M ${startX},${startY} A ${radius},${radius} 0 ${largeArc},${sweep} ${endX},${endY}`;
-}
-function ellipseArcToPath(center, radius, startAngle, endAngle) {
-  const startRad = startAngle * Math.PI / 180;
-  const endRad = endAngle * Math.PI / 180;
-  const startX = center.x + radius.width * Math.cos(startRad);
-  const startY = center.y - radius.height * Math.sin(startRad);
-  const endX = center.x + radius.width * Math.cos(endRad);
-  const endY = center.y - radius.height * Math.sin(endRad);
-  const largeArc = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
-  const sweep = endAngle > startAngle ? 1 : 0;
-  return `M ${startX},${startY} A ${radius.width},${radius.height} 0 ${largeArc},${sweep} ${endX},${endY}`;
-}
-function commandToSvg(command, state) {
+function drawCommand(ctx, command, state, _imageData, canvasWidth, canvasHeight, userPattern, maxCommands) {
+  const viewportCommands = [
+    "Line",
+    "Circle",
+    "Oval",
+    "Arc",
+    "Polygon",
+    "PolyLine",
+    "Bar",
+    "DrawRectangle",
+    "Bezier",
+    "Pixel",
+    "Fill",
+    "FilledPolygon",
+    "FilledOval",
+    "PieSlice",
+    "OvalPieSlice",
+    "OvalArc",
+    "OutText",
+    "OutTextXY",
+    "RegionText",
+    "Button"
+  ];
+  if (viewportCommands.includes(command.type)) {
+    if (!isViewportEnabled(state.viewport)) {
+      return;
+    }
+  }
   const color = getColor(state.color, state.palette);
-  const fill = getFillStyle(state.fillStyle, state.fillColor, state.palette);
-  const stroke = color;
-  const strokeDasharray = getLineStyle(state.lineStyle, 0);
+  const fillColor = getColor(state.fillColor, state.palette);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  setLineStyle(ctx, state.lineStyle);
+  ctx.fillStyle = color;
+  const fillPattern = createFillPattern(
+    ctx,
+    state.fillStyle,
+    state.fillColor,
+    state.palette,
+    userPattern
+  );
   switch (command.type) {
     case "Line": {
-      return `<line x1="${command.start.x}" y1="${command.start.y}" x2="${command.end.x}" y2="${command.end.y}" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      drawLine(ctx, command.start.x, command.start.y, command.end.x, command.end.y, maxCommands);
+      break;
     }
     case "Circle": {
-      return `<circle cx="${command.center.x}" cy="${command.center.y}" r="${command.radius}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      const ASPECT = 350 / 480 * 1.06;
+      const ry = Math.round(command.radius * ASPECT);
+      const rx = command.radius;
+      drawEllipse(ctx, command.center.x, command.center.y, 0, 360, rx, ry);
+      break;
     }
     case "Oval": {
       const rx = command.radius.width;
       const ry = command.radius.height;
       if (command.startAngle === 0 && command.endAngle === 360) {
-        return `<ellipse cx="${command.center.x}" cy="${command.center.y}" rx="${rx}" ry="${ry}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+        drawEllipse(ctx, command.center.x, command.center.y, 0, 360, rx, ry);
       } else {
-        const path = ellipseArcToPath(command.center, command.radius, command.startAngle, command.endAngle);
-        return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+        drawEllipse(
+          ctx,
+          command.center.x,
+          command.center.y,
+          command.startAngle,
+          command.endAngle,
+          rx,
+          ry
+        );
       }
+      break;
     }
     case "Arc": {
-      const path = arcToPath(command.center, command.radius, command.startAngle, command.endAngle);
-      return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      const ASPECT = 350 / 480 * 1.06;
+      const ry = Math.round(command.radius * ASPECT);
+      const rx = command.radius;
+      drawEllipse(
+        ctx,
+        command.center.x,
+        command.center.y,
+        command.startAngle,
+        command.endAngle,
+        rx,
+        ry
+      );
+      break;
     }
     case "Polygon": {
-      const points = pointsToString(command.points);
-      return `<polygon points="${points}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      if (command.points.length < 2) break;
+      console.log(`[RIP] Drawing polygon with ${command.points.length} points, color: ${color}`);
+      for (let i = 0; i < command.points.length; i++) {
+        const start = command.points[i];
+        const end = command.points[(i + 1) % command.points.length];
+        console.log(
+          `[RIP] Drawing polygon line ${i}: (${start.x}, ${start.y}) -> (${end.x}, ${end.y})`
+        );
+        drawLine(ctx, start.x, start.y, end.x, end.y, maxCommands);
+      }
+      break;
     }
     case "PolyLine": {
-      const points = pointsToString(command.points);
-      return `<polyline points="${points}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      if (command.points.length < 2) break;
+      for (let i = 0; i < command.points.length - 1; i++) {
+        const start = command.points[i];
+        const end = command.points[i + 1];
+        drawLine(ctx, start.x, start.y, end.x, end.y, maxCommands);
+      }
+      break;
     }
     case "Bar": {
-      return `<rect x="${command.rect.x}" y="${command.rect.y}" width="${command.rect.width}" height="${command.rect.height}" fill="${fill}" stroke="${stroke}" />`;
+      const fillColorStr = getColor(state.fillColor, state.palette);
+      ctx.fillStyle = fillPattern || fillColorStr;
+      ctx.fillRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
+      if (state.color !== 0) {
+        ctx.strokeRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
+      }
+      break;
     }
     case "DrawRectangle": {
-      return `<rect x="${command.rect.x}" y="${command.rect.y}" width="${command.rect.width}" height="${command.rect.height}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      ctx.strokeRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
+      break;
     }
     case "Bezier": {
-      if (command.points.length < 4) return "";
-      let path = `M ${pointToString(command.points[0])}`;
+      if (command.points.length < 4) break;
+      ctx.beginPath();
+      ctx.moveTo(command.points[0].x, command.points[0].y);
       for (let i = 1; i < command.points.length; i += 3) {
         if (i + 2 < command.points.length) {
-          path += ` C ${pointToString(command.points[i])} ${pointToString(command.points[i + 1])} ${pointToString(command.points[i + 2])}`;
+          ctx.bezierCurveTo(
+            command.points[i].x,
+            command.points[i].y,
+            command.points[i + 1].x,
+            command.points[i + 1].y,
+            command.points[i + 2].x,
+            command.points[i + 2].y
+          );
         }
       }
-      return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      ctx.stroke();
+      break;
     }
     case "Pixel": {
-      return `<rect x="${command.point.x}" y="${command.point.y}" width="1" height="1" fill="${color}" />`;
+      ctx.fillStyle = color;
+      ctx.fillRect(command.point.x, command.point.y, 1, 1);
+      break;
     }
     case "Fill": {
-      return "";
+      if (command.point.x < 0 || command.point.x >= canvasWidth || command.point.y < 0 || command.point.y >= canvasHeight) {
+        console.warn("[RIP] Fill point out of bounds, skipping:", command.point);
+        break;
+      }
+      const borderColor = getColor(command.border & 15, state.palette);
+      console.log(
+        `[RIP] DEBUG Fill applied: point=(${command.point.x}, ${command.point.y}), border=${command.border}, fillColor=${fillColor}, fillStyle=${state.fillStyle}`
+      );
+      floodFill(
+        ctx,
+        command.point.x,
+        command.point.y,
+        fillColor,
+        fillPattern,
+        borderColor,
+        canvasWidth,
+        canvasHeight
+      );
+      break;
     }
     case "FilledPolygon": {
-      const points = pointsToString(command.points);
-      return `<polygon points="${points}" fill="${fill}" stroke="${stroke}" />`;
+      if (command.points.length < 3) break;
+      const fillColorStr = getColor(state.fillColor, state.palette);
+      ctx.fillStyle = fillPattern || fillColorStr;
+      fillPolygon(ctx, command.points);
+      if (state.color !== 0) {
+        for (let i = 0; i < command.points.length - 1; i++) {
+          const start = command.points[i];
+          const end = command.points[i + 1];
+          drawLine(ctx, start.x, start.y, end.x, end.y, maxCommands);
+        }
+        const first = command.points[0];
+        const last = command.points[command.points.length - 1];
+        drawLine(ctx, last.x, last.y, first.x, first.y, maxCommands);
+      }
+      break;
     }
     case "FilledOval": {
-      return `<ellipse cx="${command.center.x}" cy="${command.center.y}" rx="${command.radius.width}" ry="${command.radius.height}" fill="${fill}" stroke="${stroke}" />`;
+      ctx.beginPath();
+      ctx.ellipse(
+        command.center.x,
+        command.center.y,
+        command.radius.width,
+        command.radius.height,
+        0,
+        0,
+        Math.PI * 2
+      );
+      const fillColorStr = getColor(state.fillColor, state.palette);
+      ctx.fillStyle = fillPattern || fillColorStr;
+      ctx.fill();
+      if (state.color !== 0) {
+        ctx.stroke();
+      }
+      break;
     }
     case "PieSlice": {
+      const ASPECT = 0.772;
+      const radiusX = command.radius;
+      const radiusY = Math.trunc(command.radius * ASPECT);
       const startRad = command.startAngle * Math.PI / 180;
       const endRad = command.endAngle * Math.PI / 180;
-      const startX = command.center.x + command.radius * Math.cos(startRad);
-      const startY = command.center.y - command.radius * Math.sin(startRad);
-      const endX = command.center.x + command.radius * Math.cos(endRad);
-      const endY = command.center.y - command.radius * Math.sin(endRad);
-      const largeArc = Math.abs(command.endAngle - command.startAngle) > 180 ? 1 : 0;
-      const path = `M ${command.center.x},${command.center.y} L ${startX},${startY} A ${command.radius},${command.radius} 0 ${largeArc},1 ${endX},${endY} Z`;
-      return `<path d="${path}" fill="${fill}" stroke="${stroke}" />`;
+      ctx.beginPath();
+      ctx.moveTo(command.center.x, command.center.y);
+      ctx.lineTo(
+        command.center.x + radiusX * Math.cos(startRad),
+        command.center.y - radiusY * Math.sin(startRad)
+      );
+      ctx.ellipse(command.center.x, command.center.y, radiusX, radiusY, 0, startRad, endRad);
+      ctx.closePath();
+      const fillColorStr = getColor(state.fillColor, state.palette);
+      ctx.fillStyle = fillPattern || fillColorStr;
+      ctx.fill();
+      if (state.color !== 0) {
+        ctx.stroke();
+      }
+      break;
     }
     case "OvalPieSlice": {
       const startRad = command.startAngle * Math.PI / 180;
       const endRad = command.endAngle * Math.PI / 180;
-      const startX = command.center.x + command.radius.width * Math.cos(startRad);
-      const startY = command.center.y - command.radius.height * Math.sin(startRad);
-      const endX = command.center.x + command.radius.width * Math.cos(endRad);
-      const endY = command.center.y - command.radius.height * Math.sin(endRad);
-      const largeArc = Math.abs(command.endAngle - command.startAngle) > 180 ? 1 : 0;
-      const path = `M ${command.center.x},${command.center.y} L ${startX},${startY} A ${command.radius.width},${command.radius.height} 0 ${largeArc},1 ${endX},${endY} Z`;
-      return `<path d="${path}" fill="${fill}" stroke="${stroke}" />`;
+      ctx.beginPath();
+      ctx.moveTo(command.center.x, command.center.y);
+      ctx.lineTo(
+        command.center.x + command.radius.width * Math.cos(startRad),
+        command.center.y - command.radius.height * Math.sin(startRad)
+      );
+      ctx.ellipse(
+        command.center.x,
+        command.center.y,
+        command.radius.width,
+        command.radius.height,
+        0,
+        startRad,
+        endRad
+      );
+      ctx.closePath();
+      const fillColorStr = getColor(state.fillColor, state.palette);
+      ctx.fillStyle = fillPattern || fillColorStr;
+      ctx.fill();
+      if (state.color !== 0) {
+        ctx.stroke();
+      }
+      break;
     }
     case "OvalArc": {
-      const path = ellipseArcToPath(command.center, command.radius, command.startAngle, command.endAngle);
-      return `<path d="${path}" fill="none" stroke="${stroke}" stroke-dasharray="${strokeDasharray}" />`;
+      const startRad = command.startAngle * Math.PI / 180;
+      const endRad = command.endAngle * Math.PI / 180;
+      ctx.beginPath();
+      ctx.ellipse(
+        command.center.x,
+        command.center.y,
+        command.radius.width,
+        command.radius.height,
+        0,
+        startRad,
+        endRad
+      );
+      ctx.stroke();
+      break;
     }
     case "OutText": {
-      const x = state.cursor.x;
-      const y = state.cursor.y;
-      return `<text x="${x}" y="${y}" fill="${color}" font-family="monospace" font-size="12">${escapeXml(command.text)}</text>`;
+      ctx.fillStyle = color;
+      ctx.font = "12px monospace";
+      ctx.textBaseline = "top";
+      ctx.fillText(command.text, state.cursor.x, state.cursor.y);
+      break;
     }
     case "OutTextXY": {
-      return `<text x="${command.point.x}" y="${command.point.y}" fill="${color}" font-family="monospace" font-size="12">${escapeXml(command.text)}</text>`;
+      ctx.fillStyle = color;
+      ctx.font = "12px monospace";
+      ctx.textBaseline = "top";
+      ctx.fillText(command.text, command.point.x, command.point.y);
+      break;
     }
     case "RegionText": {
-      return `<text x="${command.rect.x}" y="${command.rect.y + 12}" fill="${color}" font-family="monospace" font-size="12">${escapeXml(command.text)}</text>`;
+      ctx.fillStyle = color;
+      ctx.font = "12px monospace";
+      ctx.textBaseline = "top";
+      ctx.fillText(command.text, command.rect.x, command.rect.y);
+      break;
     }
     case "Button": {
-      return `<g data-rip-button="true">
-				<rect x="${command.rect.x}" y="${command.rect.y}" width="${command.rect.width}" height="${command.rect.height}" fill="${fill}" stroke="${stroke}" />
-				<text x="${command.rect.x + command.rect.width / 2}" y="${command.rect.y + command.rect.height / 2}" fill="${color}" font-family="monospace" font-size="12" text-anchor="middle" dominant-baseline="middle">${escapeXml(command.text)}</text>
-			</g>`;
+      const fillColorStr = getColor(state.fillColor, state.palette);
+      ctx.fillStyle = fillPattern || fillColorStr;
+      ctx.fillRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
+      if (state.color !== 0) {
+        ctx.strokeRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
+      }
+      ctx.fillStyle = color;
+      ctx.font = "12px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(
+        command.text,
+        command.rect.x + command.rect.width / 2,
+        command.rect.y + command.rect.height / 2
+      );
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      break;
     }
-    // State commands don't generate SVG directly, but update state
+    // State commands don't draw anything
     case "Color":
     case "FillStyle":
     case "LineStyle":
@@ -4289,22 +4915,51 @@ function commandToSvg(command, state) {
     case "EraseEOL":
     case "EraseView":
     case "EraseWindow":
+      break;
     case "ResetWindows":
+      break;
     case "GetImage":
     case "PutImage":
     case "LoadIcon":
     case "WriteIcon":
-      return "";
+      break;
     default:
-      return "";
+      break;
   }
 }
-function ripToSvg(commands, width, height, initialState, background = "#000000") {
-  const state = { ...initialState };
-  const elements = [];
-  for (const command of commands) {
+function ripToCanvas(canvas, commands, width, height, initialState, background = "#000000", maxCommands) {
+  console.log(
+    `[RIP] ripToCanvas called: ${commands.length} commands, maxCommands=${maxCommands}, canvas=${width}x${height}`
+  );
+  if (maxCommands !== void 0) {
+    console.log(`[RIP] DEBUG Canvas setup: ${width}x${height}, background: ${background}`);
+  }
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: true,
+    alpha: false,
+    // Disable alpha channel for better color matching
+    desynchronized: true
+    // Reduce latency
+  });
+  if (!ctx) return;
+  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingQuality = "low";
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+  const limitedCommands = maxCommands !== void 0 ? commands.slice(0, maxCommands) : commands;
+  const state = cloneRipState2(initialState);
+  let userPattern = void 0;
+  let fillCommandsProcessed = 0;
+  let fillCommandsSkipped = 0;
+  for (let i = 0; i < limitedCommands.length; i++) {
+    const command = limitedCommands[i];
+    console.log(`[RIP] Command ${i}: ${command.type} (${command.opcode})`, command, state);
     switch (command.type) {
       case "Color":
+        console.log(`[RIP] Color command: changing from ${state.color} to ${command.value}`);
         state.color = command.value;
         break;
       case "FillStyle":
@@ -4331,30 +4986,45 @@ function ripToSvg(commands, width, height, initialState, background = "#000000")
         state.writeMode = command.mode;
         break;
       case "SetPalette":
-        state.palette = command.palette;
+        state.palette = [...command.palette];
         break;
       case "OnePalette":
         if (state.palette) {
           state.palette[command.color] = command.palette;
         }
         break;
+      case "FillPattern":
+        state.fillStyle = 12 /* User */;
+        state.fillColor = command.color;
+        userPattern = command.pattern;
+        break;
       case "TextWindow":
         state.textWindow = command.rect;
         break;
+      case "ResetWindows":
+        state.palette = Array.from({ length: 16 }, (_, i2) => {
+          const defaultMapping = [0, 1, 2, 3, 4, 5, 7, 20, 56, 57, 58, 59, 60, 61, 62, 63];
+          return defaultMapping[i2] || i2;
+        });
+        state.viewport = null;
+        state.textWindow = null;
+        state.cursor = { x: 0, y: 0 };
+        state.color = 7;
+        state.fillColor = 0;
+        state.fillStyle = 1 /* Solid */;
+        state.lineStyle = 0 /* Solid */;
+        break;
     }
-    const svg = commandToSvg(command, state);
-    if (svg) {
-      elements.push(svg);
+    const wasFillCommand = command.type === "Fill";
+    drawCommand(ctx, command, state, null, width, height, userPattern, maxCommands);
+    if (wasFillCommand) {
+      fillCommandsProcessed++;
+      if (fillCommandsProcessed % 100 === 0) {
+        console.log(`[RIP] Processed ${fillCommandsProcessed} fill commands`);
+      }
     }
   }
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background-color: ${background};">
-${elements.join("\n")}
-</svg>`;
-}
-function ripToSvgFrame(commands, width, height, initialState, background = "#000000", maxCommands) {
-  const limitedCommands = maxCommands !== void 0 ? commands.slice(0, maxCommands) : commands;
-  return ripToSvg(limitedCommands, width, height, initialState, background);
+  console.log(`[RIP] Rendering complete: ${fillCommandsProcessed} fill commands processed`);
 }
 
 // src/components/RipArt.tsx
@@ -4369,6 +5039,7 @@ function RipArt({
   showOverlayControls = false,
   showPerformanceOverlay = false,
   debug = false,
+  maxCommands,
   fps = 30,
   bytesPerSecond = 960,
   autoStart = true
@@ -4391,6 +5062,7 @@ function RipArt({
   const currentBytePositionRef = useRef5(0);
   const totalBytesRef = useRef5(0);
   const overlayTimeoutRef = useRef5(null);
+  const canvasRef = useRef5(null);
   useEffect5(() => {
     if (mode === "auto" && commands.length > 0) {
       const viewportCount = commands.filter((c) => c.type === "ViewPort").length;
@@ -4475,12 +5147,11 @@ function RipArt({
       if (debug) console.log(`[RipArt] Parsing RIP file: ${fileName || url || "dropped file"}, ${ripData.length} bytes`);
       const result = parseRip(ripData, debug);
       setCommands(result.commands);
-      setInitialState(result.state);
+      setInitialState(result.initialState ?? result.state);
       setDetectedWidth(result.width);
       setDetectedHeight(result.height);
       currentBytePositionRef.current = 0;
       setCurrentFrame(0);
-      if (debug) console.log(`[RipArt] Parse successful: ${result.commands.length} commands, dimensions: ${result.width}x${result.height}`);
     } catch (e) {
       const errorMsg = String(e?.message || e);
       console.error(`[RipArt] Parse failed:`, errorMsg);
@@ -4508,22 +5179,32 @@ function RipArt({
     },
     [commands]
   );
-  const svgContent = useMemo3(() => {
-    if (!initialState || commands.length === 0) return null;
-    if (effectiveMode === "final") {
-      return ripToSvg(commands, displayWidth, displayHeight, initialState, background);
-    } else {
-      const maxCommands = getCommandsForBytePosition(currentBytePositionRef.current);
-      return ripToSvgFrame(
-        commands,
-        displayWidth,
-        displayHeight,
-        initialState,
-        background,
-        maxCommands
-      );
+  useEffect5(() => {
+    console.log(`[RipArt] Render effect triggered: canvas=${!!canvasRef.current}, initialState=${!!initialState}, commands=${commands.length}`);
+    if (!canvasRef.current || !initialState || commands.length === 0) {
+      console.log(`[RipArt] Skipping render: canvas=${!!canvasRef.current}, initialState=${!!initialState}, commands=${commands.length}`);
+      return;
     }
-  }, [commands, displayWidth, displayHeight, initialState, background, effectiveMode, currentFrame]);
+    const canvas = canvasRef.current;
+    console.log(`[RipArt] Rendering to canvas: ${displayWidth}x${displayHeight}, maxCommands=${maxCommands}`);
+    let renderMaxCommands = maxCommands;
+    if (effectiveMode === "animated" && renderMaxCommands === void 0) {
+      renderMaxCommands = getCommandsForBytePosition(currentBytePositionRef.current);
+    }
+    ripToCanvas(
+      canvas,
+      commands,
+      displayWidth,
+      displayHeight,
+      initialState,
+      background,
+      renderMaxCommands
+      // Use maxCommands prop for debugging
+    );
+    if (debug) {
+      console.log(`[RipArt] Rendered to canvas: ${commands.length} commands${renderMaxCommands !== void 0 ? `, showing ${renderMaxCommands}` : ""}`);
+    }
+  }, [commands, displayWidth, displayHeight, initialState, background, effectiveMode, currentFrame, debug, maxCommands, getCommandsForBytePosition]);
   useEffect5(() => {
     if (effectiveMode !== "animated" || !isPlaying) {
       if (animationFrameRef.current) {
@@ -4647,7 +5328,7 @@ function RipArt({
       }
     );
   }
-  if (!svgContent || !initialState || commands.length === 0) {
+  if (!initialState || commands.length === 0) {
     return /* @__PURE__ */ jsx6(
       "div",
       {
@@ -4681,12 +5362,19 @@ function RipArt({
       onMouseMove: effectiveMode === "animated" && showOverlayControls ? handleMouseMove : void 0,
       children: [
         /* @__PURE__ */ jsx6(
-          "div",
+          "canvas",
           {
-            dangerouslySetInnerHTML: { __html: svgContent },
+            ref: canvasRef,
+            width: displayWidth,
+            height: displayHeight,
             style: {
               width: displayWidth,
-              height: displayHeight
+              height: displayHeight,
+              display: "block",
+              imageRendering: "pixelated",
+              WebkitImageSmoothingEnabled: "false",
+              MozImageSmoothingEnabled: "false",
+              OImageSmoothingEnabled: "false"
             }
           }
         ),
@@ -6009,6 +6697,7 @@ export {
   renderGlyph,
   renderText,
   rgbToAnsiColor,
-  rgbToPaletteColor
+  rgbToPaletteColor,
+  ripToCanvas
 };
 //# sourceMappingURL=index.js.map

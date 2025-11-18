@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RIP Canvas Test</title>
+    <style>
+        body { margin: 0; padding: 20px; background: #111; color: #fff; }
+        canvas { border: 1px solid #333; background: #000; }
+    </style>
+</head>
+<body>
+    <h1>RIP Canvas Test</h1>
+    <canvas id="ripCanvas" width="640" height="350"></canvas>
+
+    <script type="module">
+        import { parseRip, ripToCanvas } from './dist/index.js';
+
+        async function testRip() {
+            try {
+                // Load a RIP file
+                const response = await fetch('./testFiles/DG-NEO1.RIP');
+                const data = await response.arrayBuffer();
+                const uint8Data = new Uint8Array(data);
+
+                console.log('Parsing RIP file...');
+                const result = parseRip(uint8Data);
+                console.log(`Parsed ${result.commands.length} commands, ${result.commands.filter(c => c.type === 'Fill').length} fill commands`);
+
+                // Render to canvas
+                const canvas = document.getElementById('ripCanvas');
+                console.log('Rendering to canvas...');
+                ripToCanvas(canvas, result.commands, result.width, result.height, result.initialState ?? result.state);
+
+                console.log('Done!');
+            } catch (error) {
+                console.error('Error:', error);
+                document.body.innerHTML += '<p>Error: ' + error.message + '</p>';
+            }
+        }
+
+        testRip();
+    </script>
+</body>
+</html>

@@ -128,7 +128,7 @@ export interface RipPolygon extends RipCommand {
 
 export interface RipPolyLine extends RipCommand {
 	type: 'PolyLine'
-	opcode: 'PL'
+	opcode: 'l'
 	points: Point[]
 }
 
@@ -140,20 +140,20 @@ export interface RipBar extends RipCommand {
 
 export interface RipDrawRectangle extends RipCommand {
 	type: 'DrawRectangle'
-	opcode: 'DR'
+	opcode: 'R'
 	rect: Rectangle
 }
 
 export interface RipBezier extends RipCommand {
 	type: 'Bezier'
-	opcode: 'BE'
+	opcode: 'Z'
 	points: Point[]
 	segments: number
 }
 
 export interface RipPixel extends RipCommand {
 	type: 'Pixel'
-	opcode: 'PX' | 'X'
+	opcode: 'X'
 	point: Point
 }
 
@@ -166,20 +166,20 @@ export interface RipFill extends RipCommand {
 
 export interface RipFilledPolygon extends RipCommand {
 	type: 'FilledPolygon'
-	opcode: 'FP'
+	opcode: 'p'
 	points: Point[]
 }
 
 export interface RipFilledOval extends RipCommand {
 	type: 'FilledOval'
-	opcode: 'FO'
+	opcode: 'o'
 	center: Point
 	radius: Size
 }
 
 export interface RipPieSlice extends RipCommand {
 	type: 'PieSlice'
-	opcode: 'PS'
+	opcode: 'I'
 	center: Point
 	radius: number
 	startAngle: number
@@ -188,7 +188,7 @@ export interface RipPieSlice extends RipCommand {
 
 export interface RipOvalPieSlice extends RipCommand {
 	type: 'OvalPieSlice'
-	opcode: 'OPS'
+	opcode: 'i'
 	center: Point
 	radius: Size
 	startAngle: number
@@ -197,7 +197,7 @@ export interface RipOvalPieSlice extends RipCommand {
 
 export interface RipOvalArc extends RipCommand {
 	type: 'OvalArc'
-	opcode: 'OA'
+	opcode: 'V'
 	center: Point
 	radius: Size
 	startAngle: number
@@ -213,14 +213,14 @@ export interface RipColor extends RipCommand {
 
 export interface RipFillStyle extends RipCommand {
 	type: 'FillStyle'
-	opcode: 'FS' | 'S'
+	opcode: 'S'
 	style: FillStyle
 	color: number
 }
 
 export interface RipLineStyle extends RipCommand {
 	type: 'LineStyle'
-	opcode: 'LS' | '='
+	opcode: '='
 	style: LineStyle
 	pattern: number
 	thickness: number
@@ -228,7 +228,7 @@ export interface RipLineStyle extends RipCommand {
 
 export interface RipFontStyle extends RipCommand {
 	type: 'FontStyle'
-	opcode: 'FT'
+	opcode: 'Y'
 	font: FontStyle
 	direction: Direction
 	characterSize: number
@@ -236,19 +236,19 @@ export interface RipFontStyle extends RipCommand {
 
 export interface RipViewPort extends RipCommand {
 	type: 'ViewPort'
-	opcode: 'V'
+	opcode: 'v'
 	rect: Rectangle
 }
 
 export interface RipGotoXY extends RipCommand {
 	type: 'GotoXY'
-	opcode: 'G'
+	opcode: 'g'
 	point: Point
 }
 
 export interface RipMove extends RipCommand {
 	type: 'Move'
-	opcode: 'M'
+	opcode: 'm'
 	point: Point
 }
 
@@ -259,26 +259,26 @@ export interface RipHome extends RipCommand {
 
 export interface RipWriteMode extends RipCommand {
 	type: 'WriteMode'
-	opcode: 'WM'
+	opcode: 'W'
 	mode: WriteMode
 }
 
 export interface RipSetPalette extends RipCommand {
 	type: 'SetPalette'
-	opcode: 'SP' | 'Q'
+	opcode: 'Q'
 	palette: number[]
 }
 
 export interface RipOnePalette extends RipCommand {
 	type: 'OnePalette'
-	opcode: 'OP'
+	opcode: 'a'
 	color: number
 	palette: number
 }
 
 export interface RipFillPattern extends RipCommand {
 	type: 'FillPattern'
-	opcode: 'FPAT'
+	opcode: 's'
 	pattern: number[]
 	color: number
 }
@@ -286,46 +286,48 @@ export interface RipFillPattern extends RipCommand {
 // Text Commands
 export interface RipBeginText extends RipCommand {
 	type: 'BeginText'
-	opcode: 'BT'
+	opcode: '1T'
 	rect: Rectangle
 	flags: number
 }
 
 export interface RipEndText extends RipCommand {
 	type: 'EndText'
-	opcode: 'ET'
+	opcode: '1E'
 }
 
 export interface RipOutText extends RipCommand {
 	type: 'OutText'
-	opcode: 'OT'
+	opcode: 'T'
 	text: string
 }
 
 export interface RipOutTextXY extends RipCommand {
 	type: 'OutTextXY'
-	opcode: 'OTX'
+	opcode: '@'
 	point: Point
 	text: string
 }
 
 export interface RipRegionText extends RipCommand {
 	type: 'RegionText'
-	opcode: 'RT'
+	opcode: '1t'
 	rect: Rectangle
 	text: string
 }
 
 export interface RipTextWindow extends RipCommand {
 	type: 'TextWindow'
-	opcode: 'TW'
+	opcode: 'w'
 	rect: Rectangle
+	wrap: number // 0 = no wrap, 1 = wrap
+	size: number // Font size: 0-4
 }
 
 // Interactive Commands
 export interface RipButton extends RipCommand {
 	type: 'Button'
-	opcode: 'BU'
+	opcode: 'U'
 	rect: Rectangle
 	hotKey: number
 	flags: number
@@ -334,54 +336,54 @@ export interface RipButton extends RipCommand {
 
 export interface RipButtonStyle extends RipCommand {
 	type: 'ButtonStyle'
-	opcode: 'BS'
+	opcode: '1B'
 	// Complex structure with many fields
 }
 
 export interface RipMouse extends RipCommand {
 	type: 'Mouse'
-	opcode: 'MO'
+	opcode: 'M'
 	enabled: boolean
 }
 
 export interface RipKillMouseFields extends RipCommand {
 	type: 'KillMouseFields'
-	opcode: 'KM'
+	opcode: '1K'
 }
 
 // Erase Commands
 export interface RipEraseEOL extends RipCommand {
 	type: 'EraseEOL'
-	opcode: 'EE'
+	opcode: '>'
 }
 
 export interface RipEraseView extends RipCommand {
 	type: 'EraseView'
-	opcode: 'EV'
+	opcode: 'E'
 }
 
 export interface RipEraseWindow extends RipCommand {
 	type: 'EraseWindow'
-	opcode: 'EW'
-	rect: Rectangle
+	opcode: 'e'
+	// No parameters - clears text window to current background color
 }
 
 export interface RipResetWindows extends RipCommand {
 	type: 'ResetWindows'
-	opcode: 'RW'
+	opcode: '*'
 }
 
 // Image Commands
 export interface RipGetImage extends RipCommand {
 	type: 'GetImage'
-	opcode: 'GI'
+	opcode: '1C'
 	rect: Rectangle
 	id: number
 }
 
 export interface RipPutImage extends RipCommand {
 	type: 'PutImage'
-	opcode: 'PI'
+	opcode: '1P'
 	point: Point
 	writeMode: WriteMode
 	id: number
@@ -389,7 +391,7 @@ export interface RipPutImage extends RipCommand {
 
 export interface RipLoadIcon extends RipCommand {
 	type: 'LoadIcon'
-	opcode: 'LI'
+	opcode: '1I'
 	point: Point
 	id: number
 	flags: number
@@ -398,7 +400,7 @@ export interface RipLoadIcon extends RipCommand {
 
 export interface RipWriteIcon extends RipCommand {
 	type: 'WriteIcon'
-	opcode: 'WI'
+	opcode: '1W'
 	point: Point
 	id: number
 }
@@ -457,6 +459,8 @@ export interface RipParseResult {
 	commands: AnyRipCommand[]
 	width: number
 	height: number
-	state: RipState
+	state: RipState // Backwards-compat alias for initialState
+	initialState: RipState
+	finalState: RipState
 }
 

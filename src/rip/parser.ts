@@ -1,44 +1,26 @@
 // RIP (RIPscrip) vector graphics parser
 // Based on PabloDraw's RIP format implementation
 
-import type {
-	AnyRipCommand,
-	Point,
-	Size,
-	Rectangle,
-	RipState,
-	Direction,
-} from './types'
-import {
-	FillStyle,
-	LineStyle,
-	FontStyle,
-	WriteMode,
-} from './types'
 import { decodeCp437 } from '../utils/cp437'
+import type { AnyRipCommand, Direction, Point, Rectangle, RipState, Size } from './types'
+import { FillStyle, FontStyle, LineStyle, WriteMode } from './types'
 
-// EGA 16-color palette (standard RIP palette)
-const EGA_PALETTE: number[][] = [
-	[0, 0, 0], // 0: Black
-	[0, 0, 170], // 1: Blue
-	[0, 170, 0], // 2: Green
-	[0, 170, 170], // 3: Cyan
-	[170, 0, 0], // 4: Red
-	[170, 0, 170], // 5: Magenta
-	[170, 85, 0], // 6: Brown
-	[170, 170, 170], // 7: Light Gray
-	[85, 85, 85], // 8: Dark Gray
-	[85, 85, 255], // 9: Bright Blue
-	[85, 255, 85], // 10: Bright Green
-	[85, 255, 255], // 11: Bright Cyan
-	[255, 85, 85], // 12: Bright Red
-	[255, 85, 255], // 13: Bright Magenta
-	[255, 255, 85], // 14: Yellow
-	[255, 255, 255], // 15: White
-]
+const DEFAULT_RIP_PALETTE = [0, 1, 2, 3, 4, 5, 7, 20, 56, 57, 58, 59, 60, 61, 62, 63]
+
+function cloneRipState(state: RipState): RipState {
+	return {
+		...state,
+		cursor: { ...state.cursor },
+		viewport: state.viewport ? { ...state.viewport } : null,
+		textWindow: state.textWindow ? { ...state.textWindow } : null,
+		palette: state.palette ? [...state.palette] : [],
+	}
+}
 
 // Create initial RIP state
 function createInitialState(): RipState {
+	// Default 16-color RIP palette mapping to 64-color EGA palette per RIPscrip spec
+	// Spec: 00=0, 01=1, 02=2, 03=3, 04=4, 05=5, 06=7, 07=20(0K), 08=56(1K), 09=57(1L), 0A=58(1M), 0B=59(1N), 0C=60(1O), 0D=61(1P), 0E=62(1Q), 0F=63(1R)
 	return {
 		color: 7, // Light Gray (default)
 		fillColor: 0, // Black (default)
@@ -48,7 +30,7 @@ function createInitialState(): RipState {
 		viewport: null,
 		cursor: { x: 0, y: 0 },
 		writeMode: WriteMode.CopyPut,
-		palette: EGA_PALETTE.map((rgb) => rgb[0] << 16 | rgb[1] << 8 | rgb[2]),
+		palette: [...DEFAULT_RIP_PALETTE],
 		textWindow: null,
 	}
 }
@@ -133,14 +115,15 @@ class RipReader {
 	}
 
 	// Read RIP rectangle (2 points: start, end)
+	// Note: RIP rectangles use inclusive coordinates (both endpoints included)
 	readRipRectangle(): Rectangle {
 		const start = this.readRipPoint()
 		const end = this.readRipPoint()
 		return {
 			x: Math.min(start.x, end.x),
 			y: Math.min(start.y, end.y),
-			width: Math.abs(end.x - start.x),
-			height: Math.abs(end.y - start.y),
+			width: Math.abs(end.x - start.x) + 1, // +1 because coordinates are inclusive
+			height: Math.abs(end.y - start.y) + 1, // +1 because coordinates are inclusive
 		}
 	}
 
@@ -177,7 +160,11 @@ class RipReader {
 }
 
 // Parse a single RIP command
-function parseCommand(reader: RipReader, state: RipState, debug: boolean = false): AnyRipCommand | null {
+function parseCommand(
+	reader: RipReader,
+	state: RipState,
+	debug: boolean = false
+): AnyRipCommand | null {
 	if (reader.isEOF()) {
 		if (debug) console.log('[RIP] End of file reached')
 		return null
@@ -189,7 +176,15 @@ function parseCommand(reader: RipReader, state: RipState, debug: boolean = false
 	const b = reader.readRipByte()
 	if (b !== 0x7c) {
 		// Not a command, skip
-		if (debug) console.log(`[RIP] Skipping non-command byte: 0x${b.toString(16)} (${String.fromCharCode(b)}) at position ${startPos}`)
+		// Only log in debug mode, and skip common whitespace silently
+		const isCommonWhitespace = b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d
+		if (debug && !isCommonWhitespace) {
+			console.log(
+				`[RIP] Skipping non-command byte: 0x${b.toString(16)} (${String.fromCharCode(
+					b
+				)}) at position ${startPos}`
+			)
+		}
 		return null
 	}
 
@@ -197,14 +192,23 @@ function parseCommand(reader: RipReader, state: RipState, debug: boolean = false
 	let opcode = String.fromCharCode(reader.readRipByte())
 	if (opcode === '1') {
 		// Two-character opcode starting with 1
-		opcode += String.fromCharCode(reader.readRipByte())
+		// Valid second characters: K, B, T, E, t, C, P, I, W
+		const nextByte = reader.readRipByte()
+		const nextChar = String.fromCharCode(nextByte)
+		if ('KBTEtCPIW'.includes(nextChar)) {
+			opcode += nextChar
+		} else {
+			// Invalid two-character opcode, treat as unknown single-character '1'
+			if (debug)
+				console.log(`[RIP] Invalid two-char opcode: 1${nextChar} (0x${nextByte.toString(16)})`)
+			// Don't consume the next byte - it might be part of the next command
+			reader.setPosition(reader.getPosition() - 1)
+		}
 	} else if (opcode === '#') {
 		// End of file marker
 		if (debug) console.log('[RIP] End marker (#) found')
 		return null
 	}
-
-	if (debug) console.log(`[RIP] Parsing command: |${opcode} at position ${startPos}`)
 
 	// Parse command based on opcode
 	switch (opcode) {
@@ -221,109 +225,132 @@ function parseCommand(reader: RipReader, state: RipState, debug: boolean = false
 		}
 		case 'O': {
 			const center = reader.readRipPoint()
-			const radius = reader.readRipSize()
 			const startAngle = reader.readRipWord()
 			const endAngle = reader.readRipWord()
+			const radius = reader.readRipSize()
 			return { type: 'Oval', opcode: 'O', center, radius, startAngle, endAngle }
 		}
 		case 'A': {
 			const center = reader.readRipPoint()
-			const radius = reader.readRipWord()
 			const startAngle = reader.readRipWord()
 			const endAngle = reader.readRipWord()
+			const radius = reader.readRipWord()
 			return { type: 'Arc', opcode: 'A', center, radius, startAngle, endAngle }
 		}
 		case 'P': {
 			const count = reader.readRipWord()
+			// RIPscrip spec: 2-512 points allowed
+			if (count < 2 || count > 512) {
+				if (debug) console.log(`[RIP] Polygon point count out of range: ${count} (must be 2-512)`)
+				return null
+			}
 			const points: Point[] = []
 			for (let i = 0; i < count; i++) {
 				points.push(reader.readRipPoint())
 			}
 			return { type: 'Polygon', opcode: 'P', points }
 		}
+		case 'l':
 		case 'PL': {
 			const count = reader.readRipWord()
+			// RIPscrip spec: 2-512 points allowed
+			if (count < 2 || count > 512) {
+				if (debug) console.log(`[RIP] PolyLine point count out of range: ${count} (must be 2-512)`)
+				return null
+			}
 			const points: Point[] = []
 			for (let i = 0; i < count; i++) {
 				points.push(reader.readRipPoint())
 			}
-			return { type: 'PolyLine', opcode: 'PL', points }
+			return { type: 'PolyLine', opcode: 'l', points }
 		}
 		case 'B': {
 			const rect = reader.readRipRectangle()
 			return { type: 'Bar', opcode: 'B', rect }
 		}
+		case 'R':
 		case 'DR': {
 			const rect = reader.readRipRectangle()
-			return { type: 'DrawRectangle', opcode: 'DR', rect }
+			return { type: 'DrawRectangle', opcode: 'R', rect }
 		}
+		case 'Z':
 		case 'BE': {
-			const count = reader.readRipWord()
+			// Bezier always reads exactly 4 points, no count
 			const points: Point[] = []
-			for (let i = 0; i < count; i++) {
+			for (let i = 0; i < 4; i++) {
 				points.push(reader.readRipPoint())
 			}
 			const segments = reader.readRipWord()
-			return { type: 'Bezier', opcode: 'BE', points, segments }
+			return { type: 'Bezier', opcode: 'Z', points, segments }
 		}
-		case 'X':
-		case 'PX': {
+		case 'X': {
 			const point = reader.readRipPoint()
-			return { type: 'Pixel', opcode: opcode === 'X' ? 'X' : 'PX', point }
+			return { type: 'Pixel', opcode: 'X', point }
 		}
 		case 'F': {
 			const point = reader.readRipPoint()
 			const border = reader.readRipWord()
 			return { type: 'Fill', opcode: 'F', point, border }
 		}
+		case 'p':
 		case 'FP': {
 			const count = reader.readRipWord()
+			// RIPscrip spec: 2-512 points allowed
+			if (count < 2 || count > 512) {
+				if (debug)
+					console.log(`[RIP] FilledPolygon point count out of range: ${count} (must be 2-512)`)
+				return null
+			}
 			const points: Point[] = []
 			for (let i = 0; i < count; i++) {
 				points.push(reader.readRipPoint())
 			}
-			return { type: 'FilledPolygon', opcode: 'FP', points }
+			return { type: 'FilledPolygon', opcode: 'p', points }
 		}
+		case 'o':
 		case 'FO': {
 			const center = reader.readRipPoint()
 			const radius = reader.readRipSize()
-			return { type: 'FilledOval', opcode: 'FO', center, radius }
+			return { type: 'FilledOval', opcode: 'o', center, radius }
 		}
+		case 'I':
 		case 'PS': {
 			const center = reader.readRipPoint()
-			const radius = reader.readRipWord()
 			const startAngle = reader.readRipWord()
 			const endAngle = reader.readRipWord()
-			return { type: 'PieSlice', opcode: 'PS', center, radius, startAngle, endAngle }
+			const radius = reader.readRipWord()
+			return { type: 'PieSlice', opcode: 'I', center, radius, startAngle, endAngle }
 		}
+		case 'i':
 		case 'OPS': {
 			const center = reader.readRipPoint()
-			const radius = reader.readRipSize()
 			const startAngle = reader.readRipWord()
 			const endAngle = reader.readRipWord()
-			return { type: 'OvalPieSlice', opcode: 'OPS', center, radius, startAngle, endAngle }
+			const radius = reader.readRipSize()
+			return { type: 'OvalPieSlice', opcode: 'i', center, radius, startAngle, endAngle }
 		}
+		case 'V':
 		case 'OA': {
 			const center = reader.readRipPoint()
-			const radius = reader.readRipSize()
 			const startAngle = reader.readRipWord()
 			const endAngle = reader.readRipWord()
-			return { type: 'OvalArc', opcode: 'OA', center, radius, startAngle, endAngle }
+			const radius = reader.readRipSize()
+			return { type: 'OvalArc', opcode: 'V', center, radius, startAngle, endAngle }
 		}
 
 		// State commands
 		case 'c': {
 			const value = reader.readRipWord()
-			state.color = value
-			return { type: 'Color', opcode: 'c', value }
+			state.color = value % 16 // PabloDraw: color = (byte)(c % 16)
+			return { type: 'Color', opcode: 'c', value: value % 16 }
 		}
 		case 'S':
 		case 'FS': {
 			const style = reader.readRipWord()
 			const color = reader.readRipWord()
 			state.fillStyle = style as FillStyle
-			state.fillColor = color
-			return { type: 'FillStyle', opcode: opcode === 'S' ? 'S' : 'FS', style: style as FillStyle, color }
+			state.fillColor = color % 16 // PabloDraw: fillcolor = (byte)(color % 16)
+			return { type: 'FillStyle', opcode: 'S', style: style as FillStyle, color: color % 16 }
 		}
 		case '=':
 		case 'LS': {
@@ -331,103 +358,171 @@ function parseCommand(reader: RipReader, state: RipState, debug: boolean = false
 			const pattern = reader.readRipInt()
 			const thickness = reader.readRipWord()
 			state.lineStyle = style as LineStyle
-			return { type: 'LineStyle', opcode: opcode === '=' ? '=' : 'LS', style: style as LineStyle, pattern, thickness }
+			return { type: 'LineStyle', opcode: '=', style: style as LineStyle, pattern, thickness }
 		}
+		case 'Y':
 		case 'FT': {
 			const font = reader.readRipWord()
 			const direction = reader.readRipWord()
 			const characterSize = reader.readRipWord()
 			reader.readRipWord() // reserved
 			state.fontStyle = font as FontStyle
-			return { type: 'FontStyle', opcode: 'FT', font: font as FontStyle, direction: direction as Direction, characterSize }
+			return {
+				type: 'FontStyle',
+				opcode: 'Y',
+				font: font as FontStyle,
+				direction: direction as Direction,
+				characterSize,
+			}
 		}
-		case 'V':
 		case 'v': {
-			// ViewPort - can have different formats, read rectangle if present
-			const rect = reader.readRipRectangle()
+			// ViewPort - RIPscrip spec: !|v <x0> <y0> <x1> <y1>
+			// (x0,y0) = upper-left, (x1,y1) = lower-right (inclusive)
+			const x0 = reader.readRipWord()
+			const y0 = reader.readRipWord()
+			const x1 = reader.readRipWord()
+			const y1 = reader.readRipWord()
+
+			// If all parameters are zero, viewport is disabled
+			if (x0 === 0 && y0 === 0 && x1 === 0 && y1 === 0) {
+				state.viewport = null
+				return { type: 'ViewPort', opcode: 'v', rect: { x: 0, y: 0, width: 0, height: 0 } }
+			}
+
+			// Ensure x0 < x1 and y0 < y1 (spec requirement)
+			const minX = Math.min(x0, x1)
+			const maxX = Math.max(x0, x1)
+			const minY = Math.min(y0, y1)
+			const maxY = Math.max(y0, y1)
+
+			// Width and height are inclusive (x1-x0+1, y1-y0+1)
+			const rect = {
+				x: minX,
+				y: minY,
+				width: maxX - minX + 1,
+				height: maxY - minY + 1,
+			}
 			state.viewport = rect
-			return { type: 'ViewPort', opcode: 'V', rect }
+			return { type: 'ViewPort', opcode: 'v', rect }
 		}
+		case 'g':
 		case 'G': {
 			const point = reader.readRipPoint()
 			state.cursor = point
-			return { type: 'GotoXY', opcode: 'G', point }
+			return { type: 'GotoXY', opcode: 'g', point }
 		}
-		case 'M': {
+		case 'm': {
 			const point = reader.readRipPoint()
 			state.cursor = point
-			return { type: 'Move', opcode: 'M', point }
+			return { type: 'Move', opcode: 'm', point }
 		}
 		case 'H': {
 			state.cursor = { x: 0, y: 0 }
 			return { type: 'Home', opcode: 'H' }
 		}
+		case 'W':
 		case 'WM': {
 			const mode = reader.readRipWord()
 			state.writeMode = mode as WriteMode
-			return { type: 'WriteMode', opcode: 'WM', mode: mode as WriteMode }
+			return { type: 'WriteMode', opcode: 'W', mode: mode as WriteMode }
 		}
 		case 'Q':
 		case 'SP': {
 			const palette: number[] = []
 			for (let i = 0; i < 16; i++) {
-				palette.push(reader.readRipWord())
+				const raw = reader.readRipWord()
+				const egaIndex = Math.max(0, Math.min(raw, 63))
+				palette.push(egaIndex)
 			}
-			state.palette = palette
-			return { type: 'SetPalette', opcode: opcode === 'Q' ? 'Q' : 'SP', palette }
+			// Store palette copies separately for parser state and command replay
+			state.palette = [...palette]
+			return { type: 'SetPalette', opcode: 'Q', palette: [...palette] }
 		}
+		case 'a':
 		case 'OP': {
 			const color = reader.readRipWord()
-			const palette = reader.readRipWord()
-			return { type: 'OnePalette', opcode: 'OP', color, palette }
+			const paletteValue = reader.readRipWord()
+			// Color is palette slot index (0-15), palette is EGA color index (0-63)
+			const colorIndex = color % 16
+			const egaIndex = Math.max(0, Math.min(paletteValue, 63))
+			// Update state palette for subsequent commands during parsing
+			if (state.palette) {
+				state.palette[colorIndex] = egaIndex
+			}
+			return { type: 'OnePalette', opcode: 'a', color: colorIndex, palette: egaIndex }
 		}
+		case 's':
 		case 'FPAT': {
 			const pattern: number[] = []
 			for (let i = 0; i < 8; i++) {
 				pattern.push(reader.readRipWord())
 			}
 			const color = reader.readRipWord()
-			return { type: 'FillPattern', opcode: 'FPAT', pattern, color }
+			// FillPattern automatically sets fillStyle to User and updates fillColor
+			state.fillStyle = FillStyle.User
+			state.fillColor = color % 16 // PabloDraw: fillcolor = (byte)(color % 16)
+			return { type: 'FillPattern', opcode: 's', pattern, color: color % 16 }
 		}
 
 		// Text commands
+		case '1T':
 		case 'BT': {
 			const rect = reader.readRipRectangle()
 			const flags = reader.readRipWord()
-			return { type: 'BeginText', opcode: 'BT', rect, flags }
+			return { type: 'BeginText', opcode: '1T', rect, flags }
 		}
+		case '1E':
 		case 'ET': {
-			return { type: 'EndText', opcode: 'ET' }
+			return { type: 'EndText', opcode: '1E' }
 		}
+		case 'T':
 		case 'OT': {
 			const text = reader.readRipString()
-			return { type: 'OutText', opcode: 'OT', text }
+			return { type: 'OutText', opcode: 'T', text }
 		}
+		case '@':
 		case 'OTX': {
 			const point = reader.readRipPoint()
 			const text = reader.readRipString()
-			return { type: 'OutTextXY', opcode: 'OTX', point, text }
+			return { type: 'OutTextXY', opcode: '@', point, text }
 		}
+		case '1t':
 		case 'RT': {
 			const rect = reader.readRipRectangle()
 			const text = reader.readRipString()
-			return { type: 'RegionText', opcode: 'RT', rect, text }
+			return { type: 'RegionText', opcode: '1t', rect, text }
 		}
+		case 'w':
 		case 'TW': {
-			const rect = reader.readRipRectangle()
+			// TextWindow - RIPscrip spec: !|w <x0> <y0> <x1> <y1> <wrap> <size>
+			const x0 = reader.readRipWord()
+			const y0 = reader.readRipWord()
+			const x1 = reader.readRipWord()
+			const y1 = reader.readRipWord()
+			const wrap = reader.readRipNumber() // 1 digit: 0 or 1
+			const size = reader.readRipNumber() // 1 digit: 0-4
+
+			const rect = {
+				x: Math.min(x0, x1),
+				y: Math.min(y0, y1),
+				width: Math.abs(x1 - x0) + 1,
+				height: Math.abs(y1 - y0) + 1,
+			}
 			state.textWindow = rect
-			return { type: 'TextWindow', opcode: 'TW', rect }
+			return { type: 'TextWindow', opcode: 'w', rect, wrap, size }
 		}
 
 		// Interactive commands
+		case 'U':
 		case 'BU': {
 			const rect = reader.readRipRectangle()
 			const hotKey = reader.readRipWord()
 			const flags = reader.readRipNumber()
 			reader.readRipNumber() // reserved
 			const text = reader.readRipString()
-			return { type: 'Button', opcode: 'BU', rect, hotKey, flags, text }
+			return { type: 'Button', opcode: 'U', rect, hotKey, flags, text }
 		}
+		case '1B':
 		case 'BS': {
 			// ButtonStyle has many fields, read them all
 			reader.readRipWord()
@@ -445,59 +540,70 @@ function parseCommand(reader: RipReader, state: RipState, debug: boolean = false
 			reader.readRipWord()
 			reader.readRipWord()
 			reader.readRipWord()
-			return { type: 'ButtonStyle', opcode: 'BS' }
+			return { type: 'ButtonStyle', opcode: '1B' }
 		}
+		case 'M':
 		case 'MO': {
 			const enabled = reader.readRipWord() !== 0
-			return { type: 'Mouse', opcode: 'MO', enabled }
+			return { type: 'Mouse', opcode: 'M', enabled }
 		}
+		case '1K':
 		case 'KM': {
-			return { type: 'KillMouseFields', opcode: 'KM' }
+			return { type: 'KillMouseFields', opcode: '1K' }
 		}
 
 		// Erase commands
+		case '>':
 		case 'EE': {
-			return { type: 'EraseEOL', opcode: 'EE' }
+			return { type: 'EraseEOL', opcode: '>' }
 		}
+		case 'E':
 		case 'EV': {
-			return { type: 'EraseView', opcode: 'EV' }
+			return { type: 'EraseView', opcode: 'E' }
 		}
+		case 'e':
 		case 'EW': {
-			const rect = reader.readRipRectangle()
-			return { type: 'EraseWindow', opcode: 'EW', rect }
+			// EraseWindow - RIPscrip spec: !|e (no parameters)
+			// Clears Text Window to current background color
+			return { type: 'EraseWindow', opcode: 'e' }
 		}
+		case '*':
 		case 'RW': {
-			return { type: 'ResetWindows', opcode: 'RW' }
+			return { type: 'ResetWindows', opcode: '*' }
 		}
 
 		// Image commands
+		case '1C':
 		case 'GI': {
 			const rect = reader.readRipRectangle()
 			const id = reader.readRipNumber()
-			return { type: 'GetImage', opcode: 'GI', rect, id }
+			return { type: 'GetImage', opcode: '1C', rect, id }
 		}
+		case '1P':
 		case 'PI': {
 			const point = reader.readRipPoint()
 			const writeMode = reader.readRipWord()
 			const id = reader.readRipNumber()
-			return { type: 'PutImage', opcode: 'PI', point, writeMode: writeMode as WriteMode, id }
+			return { type: 'PutImage', opcode: '1P', point, writeMode: writeMode as WriteMode, id }
 		}
+		case '1I':
 		case 'LI': {
 			const point = reader.readRipPoint()
 			const id = reader.readRipWord()
 			const flags = reader.readRipNumber()
 			const filename = reader.readRipString()
-			return { type: 'LoadIcon', opcode: 'LI', point, id, flags, filename }
+			return { type: 'LoadIcon', opcode: '1I', point, id, flags, filename }
 		}
+		case '1W':
 		case 'WI': {
 			const point = reader.readRipPoint()
 			const id = reader.readRipWord()
-			return { type: 'WriteIcon', opcode: 'WI', point, id }
+			return { type: 'WriteIcon', opcode: '1W', point, id }
 		}
 
 		default:
 			// Unknown opcode, skip it
-			console.warn(`[RIP] Unknown opcode: |${opcode} at position ${startPos}`)
+			if (debug) console.log(`[RIP] Unknown opcode: |${opcode} at position ${startPos}`)
 			return null
 	}
 }
@@ -505,15 +611,21 @@ function parseCommand(reader: RipReader, state: RipState, debug: boolean = false
 /**
  * Parse a RIP file and return commands and metadata
  */
-export function parseRip(data: Uint8Array, debug: boolean = false): {
+export function parseRip(
+	data: Uint8Array,
+	debug: boolean = false
+): {
 	commands: AnyRipCommand[]
 	width: number
 	height: number
 	state: RipState
+	initialState: RipState
+	finalState: RipState
 } {
 	if (debug) console.log(`[RIP] Starting parse of ${data.length} bytes`)
 
 	const reader = new RipReader(data)
+	const initialState = createInitialState()
 	const state = createInitialState()
 	const commands: AnyRipCommand[] = []
 	let width = 640 // Default EGA width
@@ -532,7 +644,7 @@ export function parseRip(data: Uint8Array, debug: boolean = false): {
 			if (peek === -1) break
 			// Skip this byte
 			reader.readByte()
-			if (debug) console.log(`[RIP] Skipping initial byte: 0x${peek.toString(16)} (${String.fromCharCode(peek)})`)
+			// Don't log initial skip - it's normal for RIP files to have headers
 		}
 
 		while (!reader.isEOF()) {
@@ -603,22 +715,19 @@ export function parseRip(data: Uint8Array, debug: boolean = false): {
 		if (debug) console.error('[RIP] Fatal error details:', e)
 	}
 
-	if (debug) {
+	if (debug && errorCount > 0) {
 		console.log(`[RIP] Parse complete: ${commandCount} commands parsed, ${errorCount} errors`)
-		console.log(`[RIP] Detected dimensions: ${width}x${height}`)
-		console.log(`[RIP] Command breakdown:`, {
-			drawing: commands.filter(c => ['Line', 'Circle', 'Oval', 'Arc', 'Polygon', 'PolyLine', 'Bar', 'DrawRectangle', 'Bezier', 'Pixel', 'Fill', 'FilledPolygon', 'FilledOval', 'PieSlice', 'OvalPieSlice', 'OvalArc'].includes(c.type)).length,
-			state: commands.filter(c => ['Color', 'FillStyle', 'LineStyle', 'FontStyle', 'ViewPort', 'GotoXY', 'Move', 'Home', 'WriteMode', 'SetPalette', 'OnePalette', 'FillPattern'].includes(c.type)).length,
-			text: commands.filter(c => ['BeginText', 'EndText', 'OutText', 'OutTextXY', 'RegionText', 'TextWindow'].includes(c.type)).length,
-			other: commands.filter(c => !['Line', 'Circle', 'Oval', 'Arc', 'Polygon', 'PolyLine', 'Bar', 'DrawRectangle', 'Bezier', 'Pixel', 'Fill', 'FilledPolygon', 'FilledOval', 'PieSlice', 'OvalPieSlice', 'OvalArc', 'Color', 'FillStyle', 'LineStyle', 'FontStyle', 'ViewPort', 'GotoXY', 'Move', 'Home', 'WriteMode', 'SetPalette', 'OnePalette', 'FillPattern', 'BeginText', 'EndText', 'OutText', 'OutTextXY', 'RegionText', 'TextWindow'].includes(c.type)).length,
-		})
 	}
+
+	const finalState = cloneRipState(state)
+	const initialStateClone = cloneRipState(initialState)
 
 	return {
 		commands,
 		width,
 		height,
-		state,
+		state: initialStateClone,
+		initialState: initialStateClone,
+		finalState,
 	}
 }
-

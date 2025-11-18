@@ -31,11 +31,12 @@ type RipArtProps = {
     showOverlayControls?: boolean;
     showPerformanceOverlay?: boolean;
     debug?: boolean;
+    maxCommands?: number;
     fps?: number;
     bytesPerSecond?: number;
     autoStart?: boolean;
 };
-declare function RipArt({ url, mode, width, height, background, allowDrop, showOverlayControls, showPerformanceOverlay, debug, fps, bytesPerSecond, autoStart, }: RipArtProps): react_jsx_runtime.JSX.Element;
+declare function RipArt({ url, mode, width, height, background, allowDrop, showOverlayControls, showPerformanceOverlay, debug, maxCommands, fps, bytesPerSecond, autoStart, }: RipArtProps): react_jsx_runtime.JSX.Element;
 
 /**
  * SAUCE (Standard Architecture for Universal Comment Extensions) metadata
@@ -522,7 +523,7 @@ interface RipPolygon extends RipCommand {
 }
 interface RipPolyLine extends RipCommand {
     type: 'PolyLine';
-    opcode: 'PL';
+    opcode: 'l';
     points: Point[];
 }
 interface RipBar extends RipCommand {
@@ -532,18 +533,18 @@ interface RipBar extends RipCommand {
 }
 interface RipDrawRectangle extends RipCommand {
     type: 'DrawRectangle';
-    opcode: 'DR';
+    opcode: 'R';
     rect: Rectangle;
 }
 interface RipBezier extends RipCommand {
     type: 'Bezier';
-    opcode: 'BE';
+    opcode: 'Z';
     points: Point[];
     segments: number;
 }
 interface RipPixel extends RipCommand {
     type: 'Pixel';
-    opcode: 'PX' | 'X';
+    opcode: 'X';
     point: Point;
 }
 interface RipFill extends RipCommand {
@@ -554,18 +555,18 @@ interface RipFill extends RipCommand {
 }
 interface RipFilledPolygon extends RipCommand {
     type: 'FilledPolygon';
-    opcode: 'FP';
+    opcode: 'p';
     points: Point[];
 }
 interface RipFilledOval extends RipCommand {
     type: 'FilledOval';
-    opcode: 'FO';
+    opcode: 'o';
     center: Point;
     radius: Size;
 }
 interface RipPieSlice extends RipCommand {
     type: 'PieSlice';
-    opcode: 'PS';
+    opcode: 'I';
     center: Point;
     radius: number;
     startAngle: number;
@@ -573,7 +574,7 @@ interface RipPieSlice extends RipCommand {
 }
 interface RipOvalPieSlice extends RipCommand {
     type: 'OvalPieSlice';
-    opcode: 'OPS';
+    opcode: 'i';
     center: Point;
     radius: Size;
     startAngle: number;
@@ -581,7 +582,7 @@ interface RipOvalPieSlice extends RipCommand {
 }
 interface RipOvalArc extends RipCommand {
     type: 'OvalArc';
-    opcode: 'OA';
+    opcode: 'V';
     center: Point;
     radius: Size;
     startAngle: number;
@@ -594,37 +595,37 @@ interface RipColor extends RipCommand {
 }
 interface RipFillStyle extends RipCommand {
     type: 'FillStyle';
-    opcode: 'FS' | 'S';
+    opcode: 'S';
     style: FillStyle;
     color: number;
 }
 interface RipLineStyle extends RipCommand {
     type: 'LineStyle';
-    opcode: 'LS' | '=';
+    opcode: '=';
     style: LineStyle;
     pattern: number;
     thickness: number;
 }
 interface RipFontStyle extends RipCommand {
     type: 'FontStyle';
-    opcode: 'FT';
+    opcode: 'Y';
     font: FontStyle;
     direction: Direction;
     characterSize: number;
 }
 interface RipViewPort extends RipCommand {
     type: 'ViewPort';
-    opcode: 'V';
+    opcode: 'v';
     rect: Rectangle;
 }
 interface RipGotoXY extends RipCommand {
     type: 'GotoXY';
-    opcode: 'G';
+    opcode: 'g';
     point: Point;
 }
 interface RipMove extends RipCommand {
     type: 'Move';
-    opcode: 'M';
+    opcode: 'm';
     point: Point;
 }
 interface RipHome extends RipCommand {
@@ -633,61 +634,63 @@ interface RipHome extends RipCommand {
 }
 interface RipWriteMode extends RipCommand {
     type: 'WriteMode';
-    opcode: 'WM';
+    opcode: 'W';
     mode: WriteMode;
 }
 interface RipSetPalette extends RipCommand {
     type: 'SetPalette';
-    opcode: 'SP' | 'Q';
+    opcode: 'Q';
     palette: number[];
 }
 interface RipOnePalette extends RipCommand {
     type: 'OnePalette';
-    opcode: 'OP';
+    opcode: 'a';
     color: number;
     palette: number;
 }
 interface RipFillPattern extends RipCommand {
     type: 'FillPattern';
-    opcode: 'FPAT';
+    opcode: 's';
     pattern: number[];
     color: number;
 }
 interface RipBeginText extends RipCommand {
     type: 'BeginText';
-    opcode: 'BT';
+    opcode: '1T';
     rect: Rectangle;
     flags: number;
 }
 interface RipEndText extends RipCommand {
     type: 'EndText';
-    opcode: 'ET';
+    opcode: '1E';
 }
 interface RipOutText extends RipCommand {
     type: 'OutText';
-    opcode: 'OT';
+    opcode: 'T';
     text: string;
 }
 interface RipOutTextXY extends RipCommand {
     type: 'OutTextXY';
-    opcode: 'OTX';
+    opcode: '@';
     point: Point;
     text: string;
 }
 interface RipRegionText extends RipCommand {
     type: 'RegionText';
-    opcode: 'RT';
+    opcode: '1t';
     rect: Rectangle;
     text: string;
 }
 interface RipTextWindow extends RipCommand {
     type: 'TextWindow';
-    opcode: 'TW';
+    opcode: 'w';
     rect: Rectangle;
+    wrap: number;
+    size: number;
 }
 interface RipButton extends RipCommand {
     type: 'Button';
-    opcode: 'BU';
+    opcode: 'U';
     rect: Rectangle;
     hotKey: number;
     flags: number;
@@ -695,50 +698,49 @@ interface RipButton extends RipCommand {
 }
 interface RipButtonStyle extends RipCommand {
     type: 'ButtonStyle';
-    opcode: 'BS';
+    opcode: '1B';
 }
 interface RipMouse extends RipCommand {
     type: 'Mouse';
-    opcode: 'MO';
+    opcode: 'M';
     enabled: boolean;
 }
 interface RipKillMouseFields extends RipCommand {
     type: 'KillMouseFields';
-    opcode: 'KM';
+    opcode: '1K';
 }
 interface RipEraseEOL extends RipCommand {
     type: 'EraseEOL';
-    opcode: 'EE';
+    opcode: '>';
 }
 interface RipEraseView extends RipCommand {
     type: 'EraseView';
-    opcode: 'EV';
+    opcode: 'E';
 }
 interface RipEraseWindow extends RipCommand {
     type: 'EraseWindow';
-    opcode: 'EW';
-    rect: Rectangle;
+    opcode: 'e';
 }
 interface RipResetWindows extends RipCommand {
     type: 'ResetWindows';
-    opcode: 'RW';
+    opcode: '*';
 }
 interface RipGetImage extends RipCommand {
     type: 'GetImage';
-    opcode: 'GI';
+    opcode: '1C';
     rect: Rectangle;
     id: number;
 }
 interface RipPutImage extends RipCommand {
     type: 'PutImage';
-    opcode: 'PI';
+    opcode: '1P';
     point: Point;
     writeMode: WriteMode;
     id: number;
 }
 interface RipLoadIcon extends RipCommand {
     type: 'LoadIcon';
-    opcode: 'LI';
+    opcode: '1I';
     point: Point;
     id: number;
     flags: number;
@@ -746,7 +748,7 @@ interface RipLoadIcon extends RipCommand {
 }
 interface RipWriteIcon extends RipCommand {
     type: 'WriteIcon';
-    opcode: 'WI';
+    opcode: '1W';
     point: Point;
     id: number;
 }
@@ -760,7 +762,14 @@ declare function parseRip(data: Uint8Array, debug?: boolean): {
     width: number;
     height: number;
     state: RipState;
+    initialState: RipState;
+    finalState: RipState;
 };
+
+/**
+ * Render RIP commands to a canvas
+ */
+declare function ripToCanvas(canvas: HTMLCanvasElement, commands: AnyRipCommand[], width: number, height: number, initialState: RipState, background?: string, maxCommands?: number): void;
 
 /**
  * Convert FrameData to AnsiScreen
@@ -857,4 +866,4 @@ type AnsiArtFrameGeneratorOptions = {
  */
 declare function createAnsiArtFrameGenerator(options: AnsiArtFrameGeneratorOptions): CharacterFrameGeneratorWithMetadata | null;
 
-export { ANSI_COLORS_RGB, AnsiArt, type AnsiArtFrameGeneratorOptions, type AnsiArtProps, type AnsiFrameGeneratorOptions, AnsiPlayerOverlay, type AnsiPlayerOverlayProps, AnsiVirtualDisplay, type AnsiVirtualDisplayProps, type AnyRipCommand, type AsciiFireOptions, type AsciiPerlinPlasmaOptions, type BitmapFont, type CharacterEncoding, type CharacterFrameGenerator, type CharacterFrameGeneratorWithMetadata, Direction, type DisplayFrameGenerator, FillStyle, FontCharacterChart, type FontCharacterChartProps, type FontExtractionResult, FontStyle, type FrameConverter, type FrameData, type FrameGenerator, type GeneratorCapabilities, LineStyle, type OctaveConfig, type PaletteMode, type PerformanceStats, type PixelFrameGenerator, PlasmaBackgroundLayout, type PlasmaBackgroundLayoutProps, type Point, type RGBAColor, type Rectangle, RipArt, type RipArtProps, type RipState, type SauceMetadata, type Size, type ViewportConfig, WriteMode, clearFireState, clearFontCache, convertFrameDataToAnsi, createAnsiArtFrameGenerator, createAnsiFrameGenerator, createAsciiFireSampler, createAsciiPerlinPlasmaSampler, detectAnimation, drawPerformanceOverlay, extractFontFromFON, generateAsciiFireFrame, generateAsciiPerlinPlasmaFrame, generateEvenlySpacedPalette, getPalette, getSauceInfo, loadBitmapFontFromUrl, loadRawBitmapFont, parseAnsi, parseAscii, parseRip, parseSauce, renderGlyph, renderText, rgbToAnsiColor, rgbToPaletteColor };
+export { ANSI_COLORS_RGB, AnsiArt, type AnsiArtFrameGeneratorOptions, type AnsiArtProps, type AnsiFrameGeneratorOptions, AnsiPlayerOverlay, type AnsiPlayerOverlayProps, AnsiVirtualDisplay, type AnsiVirtualDisplayProps, type AnyRipCommand, type AsciiFireOptions, type AsciiPerlinPlasmaOptions, type BitmapFont, type CharacterEncoding, type CharacterFrameGenerator, type CharacterFrameGeneratorWithMetadata, Direction, type DisplayFrameGenerator, FillStyle, FontCharacterChart, type FontCharacterChartProps, type FontExtractionResult, FontStyle, type FrameConverter, type FrameData, type FrameGenerator, type GeneratorCapabilities, LineStyle, type OctaveConfig, type PaletteMode, type PerformanceStats, type PixelFrameGenerator, PlasmaBackgroundLayout, type PlasmaBackgroundLayoutProps, type Point, type RGBAColor, type Rectangle, RipArt, type RipArtProps, type RipState, type SauceMetadata, type Size, type ViewportConfig, WriteMode, clearFireState, clearFontCache, convertFrameDataToAnsi, createAnsiArtFrameGenerator, createAnsiFrameGenerator, createAsciiFireSampler, createAsciiPerlinPlasmaSampler, detectAnimation, drawPerformanceOverlay, extractFontFromFON, generateAsciiFireFrame, generateAsciiPerlinPlasmaFrame, generateEvenlySpacedPalette, getPalette, getSauceInfo, loadBitmapFontFromUrl, loadRawBitmapFont, parseAnsi, parseAscii, parseRip, parseSauce, renderGlyph, renderText, rgbToAnsiColor, rgbToPaletteColor, ripToCanvas };

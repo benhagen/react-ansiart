@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { parseRip } from '../rip/parser'
-import { ripToSvg, ripToSvgFrame } from '../rip/toSvg'
+import { ripToCanvas } from '../rip/toCanvas'
 import { AnsiPlayerOverlay } from './AnsiPlayerOverlay'
 import type { AnyRipCommand, RipState } from '../rip/types'
 
@@ -16,6 +16,7 @@ export type RipArtProps = {
 	showOverlayControls?: boolean // YouTube-style overlay controls (only for animated mode)
 	showPerformanceOverlay?: boolean
 	debug?: boolean // Enable debug logging for RIP parsing
+	maxCommands?: number // Stop rendering after X commands (for debugging)
 	// Animation settings (only used in animated mode)
 	fps?: number
 	bytesPerSecond?: number // Bytes per second for animation speed
@@ -32,6 +33,7 @@ export function RipArt({
 	showOverlayControls = false,
 	showPerformanceOverlay = false,
 	debug = false,
+	maxCommands,
 	fps = 30,
 	bytesPerSecond = 960,
 	autoStart = true,
@@ -54,6 +56,7 @@ export function RipArt({
 	const currentBytePositionRef = useRef<number>(0)
 	const totalBytesRef = useRef<number>(0)
 	const overlayTimeoutRef = useRef<number | null>(null)
+	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
 	// Detect animation when mode is 'auto' and commands are available
 	useEffect(() => {
@@ -150,12 +153,12 @@ export function RipArt({
 			if (debug) console.log(`[RipArt] Parsing RIP file: ${fileName || url || 'dropped file'}, ${ripData.length} bytes`)
 			const result = parseRip(ripData, debug)
 			setCommands(result.commands)
-			setInitialState(result.state)
+			setInitialState(result.initialState ?? result.state)
 			setDetectedWidth(result.width)
 			setDetectedHeight(result.height)
 			currentBytePositionRef.current = 0
 			setCurrentFrame(0)
-			if (debug) console.log(`[RipArt] Parse successful: ${result.commands.length} commands, dimensions: ${result.width}x${result.height}`)
+			// Reduced parser logging - focus on rendering
 		} catch (e: any) {
 			const errorMsg = String(e?.message || e)
 			console.error(`[RipArt] Parse failed:`, errorMsg)
@@ -191,25 +194,37 @@ export function RipArt({
 		[commands]
 	)
 
-	// Generate SVG for current frame
-	const svgContent = useMemo(() => {
-		if (!initialState || commands.length === 0) return null
-
-		if (effectiveMode === 'final') {
-			return ripToSvg(commands, displayWidth, displayHeight, initialState, background)
-		} else {
-			// Animated mode: show commands up to current byte position
-			const maxCommands = getCommandsForBytePosition(currentBytePositionRef.current)
-			return ripToSvgFrame(
-				commands,
-				displayWidth,
-				displayHeight,
-				initialState,
-				background,
-				maxCommands
-			)
+	// Render to canvas
+	useEffect(() => {
+		console.log(`[RipArt] Render effect triggered: canvas=${!!canvasRef.current}, initialState=${!!initialState}, commands=${commands.length}`)
+		if (!canvasRef.current || !initialState || commands.length === 0) {
+			console.log(`[RipArt] Skipping render: canvas=${!!canvasRef.current}, initialState=${!!initialState}, commands=${commands.length}`)
+			return
 		}
-	}, [commands, displayWidth, displayHeight, initialState, background, effectiveMode, currentFrame])
+
+		const canvas = canvasRef.current
+		console.log(`[RipArt] Rendering to canvas: ${displayWidth}x${displayHeight}, maxCommands=${maxCommands}`)
+		let renderMaxCommands: number | undefined = maxCommands // Use prop if provided
+
+		if (effectiveMode === 'animated' && renderMaxCommands === undefined) {
+			// Animated mode: show commands up to current byte position (only if not overridden by prop)
+			renderMaxCommands = getCommandsForBytePosition(currentBytePositionRef.current)
+		}
+
+		ripToCanvas(
+			canvas,
+			commands,
+			displayWidth,
+			displayHeight,
+			initialState,
+			background,
+			renderMaxCommands // Use maxCommands prop for debugging
+		)
+
+		if (debug) {
+			console.log(`[RipArt] Rendered to canvas: ${commands.length} commands${renderMaxCommands !== undefined ? `, showing ${renderMaxCommands}` : ''}`)
+		}
+	}, [commands, displayWidth, displayHeight, initialState, background, effectiveMode, currentFrame, debug, maxCommands, getCommandsForBytePosition])
 
 	// Animation loop
 	useEffect(() => {
@@ -356,7 +371,7 @@ export function RipArt({
 		)
 	}
 
-	if (!svgContent || !initialState || commands.length === 0) {
+	if (!initialState || commands.length === 0) {
 		return (
 			<div
 				style={{
@@ -391,12 +406,19 @@ export function RipArt({
 			onDrop={onDrop}
 			onMouseMove={effectiveMode === 'animated' && showOverlayControls ? handleMouseMove : undefined}
 		>
-			<div
-				dangerouslySetInnerHTML={{ __html: svgContent }}
+			<canvas
+				ref={canvasRef}
+				width={displayWidth}
+				height={displayHeight}
 				style={{
 					width: displayWidth,
 					height: displayHeight,
-				}}
+					display: 'block',
+					imageRendering: 'pixelated',
+					WebkitImageSmoothingEnabled: 'false',
+					MozImageSmoothingEnabled: 'false',
+					OImageSmoothingEnabled: 'false',
+				} as any}
 			/>
 			{effectiveMode === 'animated' && showOverlayControls && (
 				<AnsiPlayerOverlay

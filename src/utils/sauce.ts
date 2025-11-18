@@ -335,4 +335,3 @@ export function getSauceInfo(sauce: SauceMetadata | undefined) {
 
 	return info
 }
-

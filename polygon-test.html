@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Polygon Fill Test</title>
+    <style>
+        canvas { border: 1px solid black; image-rendering: pixelated; }
+        body { font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>Pixel-Perfect Polygon Fill Test</h1>
+    <p>This tests our new scanline-based polygon fill algorithm</p>
+    
+    <canvas id="testCanvas" width="200" height="200"></canvas>
+    
+    <script>
+        const canvas = document.getElementById('testCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Disable antialiasing for pixel-perfect rendering
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = '#FF0000'; // Red
+        
+        // Test triangle
+        const points = [
+            { x: 50, y: 50 },
+            { x: 150, y: 50 },
+            { x: 100, y: 150 }
+        ];
+        
+        // Use our new fillPolygon function (copied from our implementation)
+        fillPolygon(ctx, points);
+        
+        // Helper functions
+        function fillPolygon(ctx, points) {
+            if (points.length <= 2) return;
+            const rows = new Array(352);
+            
+            for (let i = 1; i < points.length; i++) {
+                scanLine(points[i - 1], points[i], rows);
+            }
+            scanLine(points[points.length - 1], points[0], rows);
+            
+            for (let y = 0; y < rows.length; y++) {
+                const row = rows[y];
+                if (row && row.length > 0) {
+                    row.sort((a, b) => a - b);
+                    let on = false;
+                    let lastX = -1;
+                    for (const x of row) {
+                        if (on) {
+                            const width = x - lastX + 1;
+                            if (width > 0) {
+                                ctx.fillRect(lastX, y - 1, width, 1);
+                            }
+                        }
+                        on = !on;
+                        lastX = x;
+                    }
+                }
+            }
+        }
+        
+        function scanLine(start, end, rows) {
+            const yDelta = Math.abs(end.y - start.y);
+            if (start.y < end.y) {
+                addScanRow(rows, start.x, start.y);
+            }
+            if (yDelta > 0) {
+                const xDelta = (start.y > end.y) ? (start.x - end.x) : (end.x - start.x);
+                const minX = (start.y > end.y) ? end.x : start.x;
+                let posY = Math.min(start.y, end.y);
+                posY++;
+                for (let count = 1; count < yDelta; count++) {
+                    const posX = Math.round((xDelta * count) / yDelta) + minX;
+                    if (posY >= -1 && posY <= 350) {
+                        addScanRow(rows, posX, posY);
+                    }
+                    posY++;
+                }
+            }
+            if (end.y < start.y) {
+                addScanRow(rows, end.x, end.y);
+            }
+        }
+        
+        function addScanRow(rows, x, y) {
+            if (y < -1 || y > 350) return;
+            const rowIndex = y + 1;
+            if (!rows[rowIndex]) {
+                rows[rowIndex] = [];
+            }
+            rows[rowIndex].push(x);
+        }
+    </script>
+</body>
+</html>
