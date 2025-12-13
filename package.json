@@ -17,7 +17,8 @@
 	],
 	"scripts": {
 		"build": "tsup",
-		"dev": "tsup --watch"
+		"dev": "tsup --watch",
+		"demo:dev": "concurrently -k -n lib,demo -c blue,green \"npm run dev\" \"npm --prefix demo run dev\""
 	},
 	"keywords": [
 		"react",
@@ -35,6 +36,7 @@
 	},
 	"devDependencies": {
 		"@types/react": "^18.2.0",
+		"concurrently": "^9.1.0",
 		"tsup": "^8.0.0",
 		"typescript": "^5.0.0"
 	}

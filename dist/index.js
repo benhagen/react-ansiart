@@ -99,13 +99,6 @@ function cp437ByteToChar(byte) {
   }
   return String.fromCharCode(byte);
 }
-function decodeCp437(bytes) {
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    out += cp437ByteToChar(bytes[i]);
-  }
-  return out;
-}
 function buildReverseMap() {
   if (unicodeToCp437Map.size > 0) return;
   for (let i = 0; i < 256; i++) {
@@ -245,7 +238,6 @@ function getFileTypeDescription(dataType, fileType) {
       0: "ASCII Text",
       1: "ANSI Text",
       2: "Ansimation",
-      3: "RIP Script",
       4: "PCBoard",
       5: "Avatar",
       6: "HTML",
@@ -257,7 +249,6 @@ function getFileTypeDescription(dataType, fileType) {
       0: "ASCII Character Art",
       1: "ANSI Character Art",
       2: "Ansimation",
-      3: "RIP Character Art",
       4: "PCBoard Character Art",
       5: "Avatar Character Art",
       6: "HTML Character Art",
@@ -3514,1894 +3505,8 @@ function AnsiArt({
   );
 }
 
-// src/components/RipArt.tsx
-import { useCallback as useCallback4, useEffect as useEffect5, useMemo as useMemo3, useRef as useRef5, useState as useState4 } from "react";
-
-// src/rip/parser.ts
-var DEFAULT_RIP_PALETTE = [0, 1, 2, 3, 4, 5, 7, 20, 56, 57, 58, 59, 60, 61, 62, 63];
-function cloneRipState(state) {
-  return {
-    ...state,
-    cursor: { ...state.cursor },
-    viewport: state.viewport ? { ...state.viewport } : null,
-    textWindow: state.textWindow ? { ...state.textWindow } : null,
-    palette: state.palette ? [...state.palette] : []
-  };
-}
-function createInitialState() {
-  return {
-    color: 7,
-    // Light Gray (default)
-    fillColor: 0,
-    // Black (default)
-    fillStyle: 1 /* Solid */,
-    lineStyle: 0 /* Solid */,
-    fontStyle: 0 /* Default */,
-    viewport: null,
-    cursor: { x: 0, y: 0 },
-    writeMode: 0 /* CopyPut */,
-    palette: [...DEFAULT_RIP_PALETTE],
-    textWindow: null
-  };
-}
-var RipReader = class {
-  constructor(data) {
-    this.data = data;
-    this.position = 0;
-  }
-  isEOF() {
-    return this.position >= this.data.length;
-  }
-  peek() {
-    if (this.isEOF()) return -1;
-    return this.data[this.position];
-  }
-  readByte() {
-    if (this.isEOF()) throw new Error("Unexpected end of file");
-    return this.data[this.position++];
-  }
-  // Read RIP byte with backslash line continuation handling
-  readRipByte() {
-    let b = this.readByte();
-    if (b === 92) {
-      b = this.readByte();
-      while (b === 10 || b === 13) {
-        if (this.isEOF()) break;
-        b = this.readByte();
-      }
-    }
-    return b;
-  }
-  // Read base-36 number (0-9, A-Z)
-  readRipNumber() {
-    const b = this.readRipByte();
-    if (b >= 48 && b <= 57) {
-      return b - 48;
-    }
-    if (b >= 65 && b <= 90) {
-      return b - 55;
-    }
-    return 0;
-  }
-  // Read RIP word (2 base-36 digits: 0-1295)
-  readRipWord() {
-    return this.readRipNumber() * 36 + this.readRipNumber();
-  }
-  // Read RIP int (4 base-36 digits: 0-1679615)
-  readRipInt() {
-    return this.readRipWord() * 1296 + this.readRipWord();
-  }
-  // Read RIP point (2 words: x, y)
-  readRipPoint() {
-    return {
-      x: this.readRipWord(),
-      y: this.readRipWord()
-    };
-  }
-  // Read RIP size (2 words: width, height)
-  readRipSize() {
-    return {
-      width: this.readRipWord(),
-      height: this.readRipWord()
-    };
-  }
-  // Read RIP rectangle (2 points: start, end)
-  // Note: RIP rectangles use inclusive coordinates (both endpoints included)
-  readRipRectangle() {
-    const start = this.readRipPoint();
-    const end = this.readRipPoint();
-    return {
-      x: Math.min(start.x, end.x),
-      y: Math.min(start.y, end.y),
-      width: Math.abs(end.x - start.x) + 1,
-      // +1 because coordinates are inclusive
-      height: Math.abs(end.y - start.y) + 1
-      // +1 because coordinates are inclusive
-    };
-  }
-  // Read RIP string (until |, CR, LF, or EOF)
-  readRipString() {
-    const bytes = [];
-    while (!this.isEOF()) {
-      const next = this.peek();
-      if (next === -1 || next === 13 || next === 10 || next === 124) {
-        break;
-      }
-      bytes.push(this.readRipByte());
-    }
-    while (!this.isEOF()) {
-      const b = this.peek();
-      if (b === 13 || b === 10) {
-        this.readByte();
-      } else {
-        break;
-      }
-    }
-    return decodeCp437(new Uint8Array(bytes));
-  }
-  getPosition() {
-    return this.position;
-  }
-  setPosition(pos) {
-    this.position = pos;
-  }
-};
-function parseCommand(reader, state, debug = false) {
-  if (reader.isEOF()) {
-    if (debug) console.log("[RIP] End of file reached");
-    return null;
-  }
-  const startPos = reader.getPosition();
-  const b = reader.readRipByte();
-  if (b !== 124) {
-    const isCommonWhitespace = b === 32 || b === 9 || b === 10 || b === 13;
-    if (debug && !isCommonWhitespace) {
-      console.log(
-        `[RIP] Skipping non-command byte: 0x${b.toString(16)} (${String.fromCharCode(
-          b
-        )}) at position ${startPos}`
-      );
-    }
-    return null;
-  }
-  let opcode = String.fromCharCode(reader.readRipByte());
-  if (opcode === "1") {
-    const nextByte = reader.readRipByte();
-    const nextChar = String.fromCharCode(nextByte);
-    if ("KBTEtCPIW".includes(nextChar)) {
-      opcode += nextChar;
-    } else {
-      if (debug)
-        console.log(`[RIP] Invalid two-char opcode: 1${nextChar} (0x${nextByte.toString(16)})`);
-      reader.setPosition(reader.getPosition() - 1);
-    }
-  } else if (opcode === "#") {
-    if (debug) console.log("[RIP] End marker (#) found");
-    return null;
-  }
-  switch (opcode) {
-    // Drawing commands
-    case "L": {
-      const start = reader.readRipPoint();
-      const end = reader.readRipPoint();
-      return { type: "Line", opcode: "L", start, end };
-    }
-    case "C": {
-      const center = reader.readRipPoint();
-      const radius = reader.readRipWord();
-      return { type: "Circle", opcode: "C", center, radius };
-    }
-    case "O": {
-      const center = reader.readRipPoint();
-      const startAngle = reader.readRipWord();
-      const endAngle = reader.readRipWord();
-      const radius = reader.readRipSize();
-      return { type: "Oval", opcode: "O", center, radius, startAngle, endAngle };
-    }
-    case "A": {
-      const center = reader.readRipPoint();
-      const startAngle = reader.readRipWord();
-      const endAngle = reader.readRipWord();
-      const radius = reader.readRipWord();
-      return { type: "Arc", opcode: "A", center, radius, startAngle, endAngle };
-    }
-    case "P": {
-      const count = reader.readRipWord();
-      if (count < 2 || count > 512) {
-        if (debug) console.log(`[RIP] Polygon point count out of range: ${count} (must be 2-512)`);
-        return null;
-      }
-      const points = [];
-      for (let i = 0; i < count; i++) {
-        points.push(reader.readRipPoint());
-      }
-      return { type: "Polygon", opcode: "P", points };
-    }
-    case "l":
-    case "PL": {
-      const count = reader.readRipWord();
-      if (count < 2 || count > 512) {
-        if (debug) console.log(`[RIP] PolyLine point count out of range: ${count} (must be 2-512)`);
-        return null;
-      }
-      const points = [];
-      for (let i = 0; i < count; i++) {
-        points.push(reader.readRipPoint());
-      }
-      return { type: "PolyLine", opcode: "l", points };
-    }
-    case "B": {
-      const rect = reader.readRipRectangle();
-      return { type: "Bar", opcode: "B", rect };
-    }
-    case "R":
-    case "DR": {
-      const rect = reader.readRipRectangle();
-      return { type: "DrawRectangle", opcode: "R", rect };
-    }
-    case "Z":
-    case "BE": {
-      const points = [];
-      for (let i = 0; i < 4; i++) {
-        points.push(reader.readRipPoint());
-      }
-      const segments = reader.readRipWord();
-      return { type: "Bezier", opcode: "Z", points, segments };
-    }
-    case "X": {
-      const point = reader.readRipPoint();
-      return { type: "Pixel", opcode: "X", point };
-    }
-    case "F": {
-      const point = reader.readRipPoint();
-      const border = reader.readRipWord();
-      return { type: "Fill", opcode: "F", point, border };
-    }
-    case "p":
-    case "FP": {
-      const count = reader.readRipWord();
-      if (count < 2 || count > 512) {
-        if (debug)
-          console.log(`[RIP] FilledPolygon point count out of range: ${count} (must be 2-512)`);
-        return null;
-      }
-      const points = [];
-      for (let i = 0; i < count; i++) {
-        points.push(reader.readRipPoint());
-      }
-      return { type: "FilledPolygon", opcode: "p", points };
-    }
-    case "o":
-    case "FO": {
-      const center = reader.readRipPoint();
-      const radius = reader.readRipSize();
-      return { type: "FilledOval", opcode: "o", center, radius };
-    }
-    case "I":
-    case "PS": {
-      const center = reader.readRipPoint();
-      const startAngle = reader.readRipWord();
-      const endAngle = reader.readRipWord();
-      const radius = reader.readRipWord();
-      return { type: "PieSlice", opcode: "I", center, radius, startAngle, endAngle };
-    }
-    case "i":
-    case "OPS": {
-      const center = reader.readRipPoint();
-      const startAngle = reader.readRipWord();
-      const endAngle = reader.readRipWord();
-      const radius = reader.readRipSize();
-      return { type: "OvalPieSlice", opcode: "i", center, radius, startAngle, endAngle };
-    }
-    case "V":
-    case "OA": {
-      const center = reader.readRipPoint();
-      const startAngle = reader.readRipWord();
-      const endAngle = reader.readRipWord();
-      const radius = reader.readRipSize();
-      return { type: "OvalArc", opcode: "V", center, radius, startAngle, endAngle };
-    }
-    // State commands
-    case "c": {
-      const value = reader.readRipWord();
-      state.color = value % 16;
-      return { type: "Color", opcode: "c", value: value % 16 };
-    }
-    case "S":
-    case "FS": {
-      const style = reader.readRipWord();
-      const color = reader.readRipWord();
-      state.fillStyle = style;
-      state.fillColor = color % 16;
-      return { type: "FillStyle", opcode: "S", style, color: color % 16 };
-    }
-    case "=":
-    case "LS": {
-      const style = reader.readRipWord();
-      const pattern = reader.readRipInt();
-      const thickness = reader.readRipWord();
-      state.lineStyle = style;
-      return { type: "LineStyle", opcode: "=", style, pattern, thickness };
-    }
-    case "Y":
-    case "FT": {
-      const font = reader.readRipWord();
-      const direction = reader.readRipWord();
-      const characterSize = reader.readRipWord();
-      reader.readRipWord();
-      state.fontStyle = font;
-      return {
-        type: "FontStyle",
-        opcode: "Y",
-        font,
-        direction,
-        characterSize
-      };
-    }
-    case "v": {
-      const x0 = reader.readRipWord();
-      const y0 = reader.readRipWord();
-      const x1 = reader.readRipWord();
-      const y1 = reader.readRipWord();
-      if (x0 === 0 && y0 === 0 && x1 === 0 && y1 === 0) {
-        state.viewport = null;
-        return { type: "ViewPort", opcode: "v", rect: { x: 0, y: 0, width: 0, height: 0 } };
-      }
-      const minX = Math.min(x0, x1);
-      const maxX = Math.max(x0, x1);
-      const minY = Math.min(y0, y1);
-      const maxY = Math.max(y0, y1);
-      const rect = {
-        x: minX,
-        y: minY,
-        width: maxX - minX + 1,
-        height: maxY - minY + 1
-      };
-      state.viewport = rect;
-      return { type: "ViewPort", opcode: "v", rect };
-    }
-    case "g":
-    case "G": {
-      const point = reader.readRipPoint();
-      state.cursor = point;
-      return { type: "GotoXY", opcode: "g", point };
-    }
-    case "m": {
-      const point = reader.readRipPoint();
-      state.cursor = point;
-      return { type: "Move", opcode: "m", point };
-    }
-    case "H": {
-      state.cursor = { x: 0, y: 0 };
-      return { type: "Home", opcode: "H" };
-    }
-    case "W":
-    case "WM": {
-      const mode = reader.readRipWord();
-      state.writeMode = mode;
-      return { type: "WriteMode", opcode: "W", mode };
-    }
-    case "Q":
-    case "SP": {
-      const palette = [];
-      for (let i = 0; i < 16; i++) {
-        const raw = reader.readRipWord();
-        const egaIndex = Math.max(0, Math.min(raw, 63));
-        palette.push(egaIndex);
-      }
-      state.palette = [...palette];
-      return { type: "SetPalette", opcode: "Q", palette: [...palette] };
-    }
-    case "a":
-    case "OP": {
-      const color = reader.readRipWord();
-      const paletteValue = reader.readRipWord();
-      const colorIndex = color % 16;
-      const egaIndex = Math.max(0, Math.min(paletteValue, 63));
-      if (state.palette) {
-        state.palette[colorIndex] = egaIndex;
-      }
-      return { type: "OnePalette", opcode: "a", color: colorIndex, palette: egaIndex };
-    }
-    case "s":
-    case "FPAT": {
-      const pattern = [];
-      for (let i = 0; i < 8; i++) {
-        pattern.push(reader.readRipWord());
-      }
-      const color = reader.readRipWord();
-      state.fillStyle = 12 /* User */;
-      state.fillColor = color % 16;
-      return { type: "FillPattern", opcode: "s", pattern, color: color % 16 };
-    }
-    // Text commands
-    case "1T":
-    case "BT": {
-      const rect = reader.readRipRectangle();
-      const flags = reader.readRipWord();
-      return { type: "BeginText", opcode: "1T", rect, flags };
-    }
-    case "1E":
-    case "ET": {
-      return { type: "EndText", opcode: "1E" };
-    }
-    case "T":
-    case "OT": {
-      const text = reader.readRipString();
-      return { type: "OutText", opcode: "T", text };
-    }
-    case "@":
-    case "OTX": {
-      const point = reader.readRipPoint();
-      const text = reader.readRipString();
-      return { type: "OutTextXY", opcode: "@", point, text };
-    }
-    case "1t":
-    case "RT": {
-      const rect = reader.readRipRectangle();
-      const text = reader.readRipString();
-      return { type: "RegionText", opcode: "1t", rect, text };
-    }
-    case "w":
-    case "TW": {
-      const x0 = reader.readRipWord();
-      const y0 = reader.readRipWord();
-      const x1 = reader.readRipWord();
-      const y1 = reader.readRipWord();
-      const wrap = reader.readRipNumber();
-      const size = reader.readRipNumber();
-      const rect = {
-        x: Math.min(x0, x1),
-        y: Math.min(y0, y1),
-        width: Math.abs(x1 - x0) + 1,
-        height: Math.abs(y1 - y0) + 1
-      };
-      state.textWindow = rect;
-      return { type: "TextWindow", opcode: "w", rect, wrap, size };
-    }
-    // Interactive commands
-    case "U":
-    case "BU": {
-      const rect = reader.readRipRectangle();
-      const hotKey = reader.readRipWord();
-      const flags = reader.readRipNumber();
-      reader.readRipNumber();
-      const text = reader.readRipString();
-      return { type: "Button", opcode: "U", rect, hotKey, flags, text };
-    }
-    case "1B":
-    case "BS": {
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipInt();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      reader.readRipWord();
-      return { type: "ButtonStyle", opcode: "1B" };
-    }
-    case "M":
-    case "MO": {
-      const enabled = reader.readRipWord() !== 0;
-      return { type: "Mouse", opcode: "M", enabled };
-    }
-    case "1K":
-    case "KM": {
-      return { type: "KillMouseFields", opcode: "1K" };
-    }
-    // Erase commands
-    case ">":
-    case "EE": {
-      return { type: "EraseEOL", opcode: ">" };
-    }
-    case "E":
-    case "EV": {
-      return { type: "EraseView", opcode: "E" };
-    }
-    case "e":
-    case "EW": {
-      return { type: "EraseWindow", opcode: "e" };
-    }
-    case "*":
-    case "RW": {
-      return { type: "ResetWindows", opcode: "*" };
-    }
-    // Image commands
-    case "1C":
-    case "GI": {
-      const rect = reader.readRipRectangle();
-      const id = reader.readRipNumber();
-      return { type: "GetImage", opcode: "1C", rect, id };
-    }
-    case "1P":
-    case "PI": {
-      const point = reader.readRipPoint();
-      const writeMode = reader.readRipWord();
-      const id = reader.readRipNumber();
-      return { type: "PutImage", opcode: "1P", point, writeMode, id };
-    }
-    case "1I":
-    case "LI": {
-      const point = reader.readRipPoint();
-      const id = reader.readRipWord();
-      const flags = reader.readRipNumber();
-      const filename = reader.readRipString();
-      return { type: "LoadIcon", opcode: "1I", point, id, flags, filename };
-    }
-    case "1W":
-    case "WI": {
-      const point = reader.readRipPoint();
-      const id = reader.readRipWord();
-      return { type: "WriteIcon", opcode: "1W", point, id };
-    }
-    default:
-      if (debug) console.log(`[RIP] Unknown opcode: |${opcode} at position ${startPos}`);
-      return null;
-  }
-}
-function parseRip(data, debug = false) {
-  if (debug) console.log(`[RIP] Starting parse of ${data.length} bytes`);
-  const reader = new RipReader(data);
-  const initialState = createInitialState();
-  const state = createInitialState();
-  const commands = [];
-  let width = 640;
-  let height = 350;
-  let commandCount = 0;
-  let errorCount = 0;
-  try {
-    while (!reader.isEOF()) {
-      const peek = reader.peek();
-      if (peek === 124) {
-        break;
-      }
-      if (peek === -1) break;
-      reader.readByte();
-    }
-    while (!reader.isEOF()) {
-      try {
-        const command = parseCommand(reader, state, debug);
-        if (!command) {
-          let foundNext = false;
-          while (!reader.isEOF()) {
-            const peek = reader.peek();
-            if (peek === 124) {
-              foundNext = true;
-              break;
-            }
-            if (peek === -1) break;
-            reader.readByte();
-          }
-          if (!foundNext) {
-            break;
-          }
-          continue;
-        }
-        commands.push(command);
-        commandCount++;
-        if (command.type === "ViewPort") {
-          width = Math.max(width, command.rect.x + command.rect.width);
-          height = Math.max(height, command.rect.y + command.rect.height);
-          if (debug) console.log(`[RIP] ViewPort detected: ${width}x${height}`);
-        }
-      } catch (e) {
-        errorCount++;
-        const pos = reader.getPosition();
-        console.error(`[RIP] Error parsing command at position ${pos}:`, e?.message || e);
-        if (debug) {
-          console.error(`[RIP] Error details:`, e);
-          try {
-            while (!reader.isEOF()) {
-              const b = reader.readRipByte();
-              if (b === 124) {
-                reader.setPosition(reader.getPosition() - 1);
-                break;
-              }
-            }
-          } catch (skipError) {
-            console.error("[RIP] Cannot recover from parse error, stopping");
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    }
-  } catch (e) {
-    console.error("[RIP] Fatal parse error:", e?.message || e);
-    if (debug) console.error("[RIP] Fatal error details:", e);
-  }
-  if (debug && errorCount > 0) {
-    console.log(`[RIP] Parse complete: ${commandCount} commands parsed, ${errorCount} errors`);
-  }
-  const finalState = cloneRipState(state);
-  const initialStateClone = cloneRipState(initialState);
-  return {
-    commands,
-    width,
-    height,
-    state: initialStateClone,
-    initialState: initialStateClone,
-    finalState
-  };
-}
-
-// src/utils/egaPalette.ts
-function toHex(component) {
-  return component.toString(16).padStart(2, "0").toUpperCase();
-}
-function egaRed(index) {
-  return 85 * (index >> 1 & 2 | index >> 5 & 1);
-}
-function egaGreen(index) {
-  return 85 * (index & 2 | index >> 4 & 1);
-}
-function egaBlue(index) {
-  return 85 * (index << 1 & 2 | index >> 3 & 1);
-}
-function egaIndexToColor(index) {
-  const red = egaRed(index);
-  const green = egaGreen(index);
-  const blue = egaBlue(index);
-  return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
-}
-var EGA_PALETTE_RGB = Array.from({ length: 64 }, (_, i) => egaIndexToColor(i));
-
-// src/rip/toCanvas.ts
-function cloneRipState2(state) {
-  return {
-    ...state,
-    cursor: { ...state.cursor },
-    viewport: state.viewport ? { ...state.viewport } : null,
-    textWindow: state.textWindow ? { ...state.textWindow } : null,
-    palette: state.palette ? [...state.palette] : []
-  };
-}
-function drawLine(ctx, x1, y1, x2, y2, maxCommands) {
-  const lYDelta = Math.abs(y2 - y1);
-  const lXDelta = Math.abs(x2 - x1);
-  if (lXDelta === 0) {
-    const startY = Math.min(y1, y2);
-    for (let y = 0; y <= lYDelta; y++) {
-      ctx.fillRect(x1, startY + y, 1, 1);
-    }
-  } else if (lYDelta === 0) {
-    const startX = Math.min(x1, x2);
-    for (let x = 0; x <= lXDelta; x++) {
-      ctx.fillRect(startX + x, y1, 1, 1);
-    }
-  } else if (lXDelta >= lYDelta) {
-    let lAdjUp, lAdjDown, lError, lAdvance;
-    let lWholeStep, lStartLength, lEndLength, lCount;
-    let lRunLength;
-    let lStep;
-    let pos;
-    lAdvance = 1;
-    if (y1 < y2) {
-      pos = { x: x1, y: y1 };
-      lStep = x1 > x2 ? -1 : 1;
-    } else {
-      pos = { x: x2, y: y2 };
-      lStep = x2 > x1 ? -1 : 1;
-    }
-    lWholeStep = Math.floor(lXDelta / lYDelta) * lStep;
-    lAdjUp = lXDelta % lYDelta;
-    lAdjDown = lYDelta * 2;
-    lError = lAdjUp - lAdjDown;
-    lAdjUp *= 2;
-    lStartLength = Math.floor(lWholeStep / 2) + lStep;
-    lEndLength = lStartLength;
-    if (lAdjUp === 0 && (lWholeStep & 1) === 0) {
-      lStartLength -= lStep;
-    }
-    if ((lWholeStep & 1) !== 0) {
-      lError += lYDelta;
-    }
-    for (let i = 0; i < Math.abs(lStartLength); i++) {
-      ctx.fillRect(pos.x + i * Math.sign(lStartLength), pos.y, 1, 1);
-    }
-    pos.x += lStartLength;
-    pos.y += lAdvance;
-    for (lCount = 0; lCount < lYDelta - 1; lCount++) {
-      lRunLength = lWholeStep;
-      if ((lError += lAdjUp) > 0) {
-        lRunLength += lStep;
-        lError -= lAdjDown;
-      }
-      for (let i = 0; i < Math.abs(lRunLength); i++) {
-        ctx.fillRect(pos.x + i * Math.sign(lRunLength), pos.y, 1, 1);
-      }
-      pos.x += lRunLength;
-      pos.y += lAdvance;
-    }
-    for (let i = 0; i < Math.abs(lEndLength); i++) {
-      ctx.fillRect(pos.x + i * Math.sign(lEndLength), pos.y, 1, 1);
-    }
-  } else {
-    let lAdjUp, lAdjDown, lError, lAdvance;
-    let lWholeStep, lStartLength, lEndLength, lCount;
-    let lRunLength;
-    let pos;
-    if (y1 < y2) {
-      pos = { x: x1, y: y1 };
-      lAdvance = x1 > x2 ? -1 : 1;
-    } else {
-      pos = { x: x2, y: y2 };
-      lAdvance = x2 > x1 ? -1 : 1;
-    }
-    lWholeStep = Math.floor(lYDelta / lXDelta);
-    lAdjUp = lYDelta % lXDelta;
-    lAdjDown = lXDelta * 2;
-    lError = lAdjUp - lAdjDown;
-    lAdjUp *= 2;
-    lStartLength = Math.floor(lWholeStep / 2) + 1;
-    lEndLength = lStartLength;
-    if (lAdjUp === 0 && (lWholeStep & 1) === 0) {
-      lStartLength--;
-    }
-    if ((lWholeStep & 1) !== 0) {
-      lError += lXDelta;
-    }
-    for (let i = 0; i < lStartLength; i++) {
-      ctx.fillRect(pos.x, pos.y + i, 1, 1);
-    }
-    pos.y += lStartLength;
-    pos.x += lAdvance;
-    for (lCount = 0; lCount < lXDelta - 1; lCount++) {
-      lRunLength = lWholeStep;
-      if ((lError += lAdjUp) > 0) {
-        lRunLength++;
-        lError -= lAdjDown;
-      }
-      for (let i = 0; i < lRunLength; i++) {
-        ctx.fillRect(pos.x, pos.y + i, 1, 1);
-      }
-      pos.y += lRunLength;
-      pos.x += lAdvance;
-    }
-    for (let i = 0; i < lEndLength; i++) {
-      ctx.fillRect(pos.x, pos.y + i, 1, 1);
-    }
-  }
-}
-function drawEllipse(ctx, x, y, startAngle, endAngle, radiusx, radiusy) {
-  if (startAngle > endAngle) {
-    ;
-    [startAngle, endAngle] = [endAngle, startAngle];
-  }
-  radiusx = Math.max(1, radiusx);
-  radiusy = Math.max(1, radiusy);
-  const diameterx = radiusx * 2;
-  const diametery = radiusy * 2;
-  const b1 = diametery & 1;
-  let stopx = 4 * (1 - diameterx) * diametery * diametery;
-  let stopy = 4 * (b1 + 1) * diameterx * diameterx;
-  let err = stopx + stopy + b1 * diameterx * diameterx;
-  let xoffset = radiusx;
-  let yoffset = 0;
-  const incx = 8 * diameterx * diameterx;
-  const incy = 8 * diametery * diametery;
-  const aspect = radiusx / radiusy;
-  const horizontal_angle = radiusx < radiusy ? 90 - 45 * aspect : 45 / aspect;
-  do {
-    const e2 = 2 * err;
-    const angle = Math.atan(yoffset * aspect / xoffset) * (180 / Math.PI);
-    if (angle >= startAngle && angle <= endAngle) {
-      symmetryPlot(ctx, x, y, xoffset, yoffset, angle <= horizontal_angle);
-      if (Math.abs(angle - horizontal_angle) < 1) {
-        symmetryPlot(ctx, x, y, xoffset, yoffset, !(angle <= horizontal_angle));
-      }
-    }
-    if (e2 <= stopy) {
-      yoffset++;
-      err += stopy += incx;
-    }
-    if (e2 >= stopx) {
-      xoffset--;
-      err += stopx += incy;
-    }
-  } while (xoffset >= 0);
-}
-function symmetryPlot(ctx, x, y, xoffset, yoffset, horizontal) {
-  if (horizontal) {
-    ctx.fillRect(x + xoffset, y + yoffset, 1, 1);
-    ctx.fillRect(x - xoffset, y + yoffset, 1, 1);
-    ctx.fillRect(x + xoffset, y - yoffset, 1, 1);
-    ctx.fillRect(x - xoffset, y - yoffset, 1, 1);
-  } else {
-    ctx.fillRect(x + yoffset, y + xoffset, 1, 1);
-    ctx.fillRect(x - yoffset, y + xoffset, 1, 1);
-    ctx.fillRect(x + yoffset, y - xoffset, 1, 1);
-    ctx.fillRect(x - yoffset, y - xoffset, 1, 1);
-  }
-}
-function fillPolygon(ctx, points) {
-  if (points.length <= 2) return;
-  const rows = new Array(352);
-  for (let i = 1; i < points.length; i++) {
-    scanLine(points[i - 1], points[i], rows);
-  }
-  scanLine(points[points.length - 1], points[0], rows);
-  for (let y = 0; y < rows.length; y++) {
-    const row = rows[y];
-    if (row && row.length > 0) {
-      row.sort((a, b) => a - b);
-      let on = false;
-      let lastX = -1;
-      for (const x of row) {
-        if (on) {
-          const width = x - lastX + 1;
-          if (width > 0) {
-            ctx.fillRect(lastX, y - 1, width, 1);
-          }
-        }
-        on = !on;
-        lastX = x;
-      }
-    }
-  }
-}
-function scanLine(start, end, rows) {
-  const yDelta = Math.abs(end.y - start.y);
-  if (start.y < end.y) {
-    addScanRow(rows, start.x, start.y);
-  }
-  if (yDelta > 0) {
-    const xDelta = start.y > end.y ? start.x - end.x : end.x - start.x;
-    const minX = start.y > end.y ? end.x : start.x;
-    let posY = Math.min(start.y, end.y);
-    posY++;
-    for (let count = 1; count < yDelta; count++) {
-      const posX = Math.round(xDelta * count / yDelta) + minX;
-      if (posY >= -1 && posY <= 350) {
-        addScanRow(rows, posX, posY);
-      }
-      posY++;
-    }
-  }
-  if (end.y < start.y) {
-    addScanRow(rows, end.x, end.y);
-  }
-}
-function addScanRow(rows, x, y) {
-  if (y < -1 || y > 350) return;
-  const rowIndex = y + 1;
-  if (!rows[rowIndex]) {
-    rows[rowIndex] = [];
-  }
-  rows[rowIndex].push(x);
-}
-function getColor(index, palette) {
-  if (palette && palette[index] !== void 0) {
-    const egaIndex2 = Math.max(0, Math.min(palette[index], EGA_PALETTE_RGB.length - 1));
-    return EGA_PALETTE_RGB[egaIndex2];
-  }
-  const egaIndex = Math.max(0, Math.min(index, EGA_PALETTE_RGB.length - 1));
-  return EGA_PALETTE_RGB[egaIndex];
-}
-var FILL_PATTERNS = [
-  // 0: Background Fill (Empty)
-  [0, 0, 0, 0, 0, 0, 0, 0],
-  // 1: Solid Fill
-  [255, 255, 255, 255, 255, 255, 255, 255],
-  // 2: Line Fill
-  [255, 255, 0, 0, 0, 0, 0, 0],
-  // 3: Light Slash Fill
-  [1, 2, 4, 8, 16, 32, 64, 128],
-  // 4: Normal Slash Fill
-  [224, 193, 131, 7, 14, 28, 56, 112],
-  // 5: Light Backslash Fill (spec shows this as "Light Backslash")
-  [240, 120, 60, 30, 15, 135, 195, 225],
-  // 6: Light Backslash Fill (alternate pattern from spec)
-  [165, 210, 105, 180, 90, 45, 150, 75],
-  // 7: Light Hatch Fill
-  [255, 136, 136, 136, 255, 136, 136, 136],
-  // 8: Heavy Cross Hatch Fill
-  [129, 66, 36, 24, 24, 36, 66, 129],
-  // 9: Interleaving Line Fill
-  [204, 51, 204, 51, 204, 51, 204, 51],
-  // 10 (0A): Widely Spaced Dot Fill
-  [128, 0, 8, 0, 128, 0, 8, 0],
-  // 11 (0B): Closely Spaced Dot Fill
-  [136, 0, 34, 0, 136, 0, 34, 0],
-  // 12: User (will be set dynamically)
-  [170, 85, 170, 85, 170, 85, 170, 85]
-];
-function createFillPattern(ctx, style, fillColor, palette, userPattern) {
-  if (style === 0 /* Empty */) {
-    return null;
-  }
-  const patternCanvas = document.createElement("canvas");
-  patternCanvas.width = 8;
-  patternCanvas.height = 8;
-  const patternCtx = patternCanvas.getContext("2d");
-  const fillColorStr = getColor(fillColor, palette);
-  if (style === 1 /* Solid */) {
-    patternCtx.fillStyle = fillColorStr;
-    patternCtx.fillRect(0, 0, 8, 8);
-  } else if (style === 12 /* User */ && userPattern) {
-    patternCtx.fillStyle = fillColorStr;
-    for (let row = 0; row < 8; row++) {
-      const byte = userPattern[row] || 0;
-      for (let col = 0; col < 8; col++) {
-        const bit = 7 - col;
-        if (byte & 1 << bit) {
-          patternCtx.fillRect(col, row, 1, 1);
-        }
-      }
-    }
-  } else {
-    const pattern = FILL_PATTERNS[style] || FILL_PATTERNS[1 /* Solid */];
-    patternCtx.fillStyle = fillColorStr;
-    for (let row = 0; row < 8; row++) {
-      const byte = pattern[row] || 0;
-      for (let col = 0; col < 8; col++) {
-        const bit = 7 - col;
-        if (byte & 1 << bit) {
-          patternCtx.fillRect(col, row, 1, 1);
-        }
-      }
-    }
-  }
-  return ctx.createPattern(patternCanvas, "repeat");
-}
-function setLineStyle(ctx, style) {
-  switch (style) {
-    case 0 /* Solid */:
-      ctx.setLineDash([]);
-      break;
-    case 1 /* Dotted */:
-      ctx.setLineDash([2, 2]);
-      break;
-    case 2 /* Center */:
-      ctx.setLineDash([8, 4, 2, 4]);
-      break;
-    case 3 /* Dashed */:
-      ctx.setLineDash([8, 4]);
-      break;
-    default:
-      ctx.setLineDash([]);
-  }
-}
-function floodFill(ctx, startX, startY, fillColor, fillPattern, borderColor, width, height) {
-  const fillMatch = fillColor.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
-  if (!fillMatch) return;
-  const fillR = parseInt(fillMatch[1], 16);
-  const fillG = parseInt(fillMatch[2], 16);
-  const fillB = parseInt(fillMatch[3], 16);
-  const borderMatch = borderColor.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
-  if (!borderMatch) return;
-  const borderR = parseInt(borderMatch[1], 16);
-  const borderG = parseInt(borderMatch[2], 16);
-  const borderB = parseInt(borderMatch[3], 16);
-  if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
-  ctx.beginPath();
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.fill();
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const startIdx = (startY * width + startX) * 4;
-  const startR = imageData.data[startIdx];
-  const startG = imageData.data[startIdx + 1];
-  const startB = imageData.data[startIdx + 2];
-  console.log(
-    `[RIP] DEBUG Fill point (${startX}, ${startY}) actual color: rgb(${startR}, ${startG}, ${startB})`
-  );
-  console.log(`[RIP] DEBUG Border color: rgb(${borderR}, ${borderG}, ${borderB})`);
-  if (startR === borderR && startG === borderG && startB === borderB) {
-    console.log(`[RIP] DEBUG Fill skipped: start pixel matches border color`);
-    return;
-  }
-  const isBorder = (x, y) => {
-    if (x < 0 || x >= width || y < 0 || y >= height) return true;
-    const idx = (y * width + x) * 4;
-    return imageData.data[idx] === borderR && imageData.data[idx + 1] === borderG && imageData.data[idx + 2] === borderB;
-  };
-  const findLine = (x, y) => {
-    if (isBorder(x, y)) {
-      return null;
-    }
-    let startx = x;
-    let endx = x;
-    for (endx = x; endx < width; endx++) {
-      if (isBorder(endx, y)) break;
-    }
-    endx--;
-    for (startx = x - 1; startx >= 0; startx--) {
-      if (isBorder(startx, y)) break;
-    }
-    startx++;
-    if (startx === endx && (startx === 0 || endx === width - 1)) {
-      return null;
-    }
-    return { x1: startx, x2: endx, y };
-  };
-  const alreadyDrawn = (x, y) => {
-    for (const li of fillLines[y]) {
-      if (x >= li.x1 && x <= li.x2) return true;
-    }
-    return false;
-  };
-  const fillLineSegment = (x1, x2, y) => {
-    for (let x = x1; x <= x2; x++) {
-      const idx = (y * width + x) * 4;
-      imageData.data[idx] = fillR;
-      imageData.data[idx + 1] = fillG;
-      imageData.data[idx + 2] = fillB;
-    }
-    if (fillPattern) {
-      ctx.fillStyle = fillPattern;
-    } else {
-      ctx.fillStyle = fillColor;
-    }
-    ctx.fillRect(x1, y, x2 - x1 + 1, 1);
-  };
-  const fillLines = [];
-  for (let i = 0; i < height; i++) {
-    fillLines[i] = [];
-  }
-  const pointStack = [];
-  const initialLine = findLine(startX, startY);
-  if (initialLine) {
-    fillLines[initialLine.y].push(initialLine);
-    fillLineSegment(initialLine.x1, initialLine.x2, initialLine.y);
-    pointStack.push({ ...initialLine, dir: 1 });
-    pointStack.push({ ...initialLine, dir: -1 });
-    while (pointStack.length > 0) {
-      const fli = pointStack.pop();
-      const cury = fli.y + fli.dir;
-      if (cury < 0 || cury >= height) continue;
-      for (let cx = fli.x1; cx <= fli.x2; cx++) {
-        if (isBorder(cx, cury)) continue;
-        if (alreadyDrawn(cx, cury)) continue;
-        const li = findLine(cx, cury);
-        if (li) {
-          fillLines[li.y].push(li);
-          fillLineSegment(li.x1, li.x2, li.y);
-          cx = li.x2;
-          pointStack.push({ x1: li.x1, x2: li.x2, y: li.y, dir: fli.dir });
-          if (!(fillR === 0 && fillG === 0 && fillB === 0)) {
-            if (li.x2 > fli.x2) {
-              pointStack.push({ x1: fli.x2 + 1, x2: li.x2, y: li.y, dir: -fli.dir });
-            }
-            if (li.x1 < fli.x1) {
-              pointStack.push({ x1: li.x1, x2: fli.x1 - 1, y: li.y, dir: -fli.dir });
-            }
-          }
-        }
-      }
-    }
-  }
-}
-function isViewportEnabled(viewport) {
-  if (!viewport) return true;
-  return !(viewport.x === 0 && viewport.y === 0 && viewport.width === 0 && viewport.height === 0);
-}
-function drawCommand(ctx, command, state, _imageData, canvasWidth, canvasHeight, userPattern, maxCommands) {
-  const viewportCommands = [
-    "Line",
-    "Circle",
-    "Oval",
-    "Arc",
-    "Polygon",
-    "PolyLine",
-    "Bar",
-    "DrawRectangle",
-    "Bezier",
-    "Pixel",
-    "Fill",
-    "FilledPolygon",
-    "FilledOval",
-    "PieSlice",
-    "OvalPieSlice",
-    "OvalArc",
-    "OutText",
-    "OutTextXY",
-    "RegionText",
-    "Button"
-  ];
-  if (viewportCommands.includes(command.type)) {
-    if (!isViewportEnabled(state.viewport)) {
-      return;
-    }
-  }
-  const color = getColor(state.color, state.palette);
-  const fillColor = getColor(state.fillColor, state.palette);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1;
-  setLineStyle(ctx, state.lineStyle);
-  ctx.fillStyle = color;
-  const fillPattern = createFillPattern(
-    ctx,
-    state.fillStyle,
-    state.fillColor,
-    state.palette,
-    userPattern
-  );
-  switch (command.type) {
-    case "Line": {
-      drawLine(ctx, command.start.x, command.start.y, command.end.x, command.end.y, maxCommands);
-      break;
-    }
-    case "Circle": {
-      const ASPECT = 350 / 480 * 1.06;
-      const ry = Math.round(command.radius * ASPECT);
-      const rx = command.radius;
-      drawEllipse(ctx, command.center.x, command.center.y, 0, 360, rx, ry);
-      break;
-    }
-    case "Oval": {
-      const rx = command.radius.width;
-      const ry = command.radius.height;
-      if (command.startAngle === 0 && command.endAngle === 360) {
-        drawEllipse(ctx, command.center.x, command.center.y, 0, 360, rx, ry);
-      } else {
-        drawEllipse(
-          ctx,
-          command.center.x,
-          command.center.y,
-          command.startAngle,
-          command.endAngle,
-          rx,
-          ry
-        );
-      }
-      break;
-    }
-    case "Arc": {
-      const ASPECT = 350 / 480 * 1.06;
-      const ry = Math.round(command.radius * ASPECT);
-      const rx = command.radius;
-      drawEllipse(
-        ctx,
-        command.center.x,
-        command.center.y,
-        command.startAngle,
-        command.endAngle,
-        rx,
-        ry
-      );
-      break;
-    }
-    case "Polygon": {
-      if (command.points.length < 2) break;
-      console.log(`[RIP] Drawing polygon with ${command.points.length} points, color: ${color}`);
-      for (let i = 0; i < command.points.length; i++) {
-        const start = command.points[i];
-        const end = command.points[(i + 1) % command.points.length];
-        console.log(
-          `[RIP] Drawing polygon line ${i}: (${start.x}, ${start.y}) -> (${end.x}, ${end.y})`
-        );
-        drawLine(ctx, start.x, start.y, end.x, end.y, maxCommands);
-      }
-      break;
-    }
-    case "PolyLine": {
-      if (command.points.length < 2) break;
-      for (let i = 0; i < command.points.length - 1; i++) {
-        const start = command.points[i];
-        const end = command.points[i + 1];
-        drawLine(ctx, start.x, start.y, end.x, end.y, maxCommands);
-      }
-      break;
-    }
-    case "Bar": {
-      const fillColorStr = getColor(state.fillColor, state.palette);
-      ctx.fillStyle = fillPattern || fillColorStr;
-      ctx.fillRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
-      if (state.color !== 0) {
-        ctx.strokeRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
-      }
-      break;
-    }
-    case "DrawRectangle": {
-      ctx.strokeRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
-      break;
-    }
-    case "Bezier": {
-      if (command.points.length < 4) break;
-      ctx.beginPath();
-      ctx.moveTo(command.points[0].x, command.points[0].y);
-      for (let i = 1; i < command.points.length; i += 3) {
-        if (i + 2 < command.points.length) {
-          ctx.bezierCurveTo(
-            command.points[i].x,
-            command.points[i].y,
-            command.points[i + 1].x,
-            command.points[i + 1].y,
-            command.points[i + 2].x,
-            command.points[i + 2].y
-          );
-        }
-      }
-      ctx.stroke();
-      break;
-    }
-    case "Pixel": {
-      ctx.fillStyle = color;
-      ctx.fillRect(command.point.x, command.point.y, 1, 1);
-      break;
-    }
-    case "Fill": {
-      if (command.point.x < 0 || command.point.x >= canvasWidth || command.point.y < 0 || command.point.y >= canvasHeight) {
-        console.warn("[RIP] Fill point out of bounds, skipping:", command.point);
-        break;
-      }
-      const borderColor = getColor(command.border & 15, state.palette);
-      console.log(
-        `[RIP] DEBUG Fill applied: point=(${command.point.x}, ${command.point.y}), border=${command.border}, fillColor=${fillColor}, fillStyle=${state.fillStyle}`
-      );
-      floodFill(
-        ctx,
-        command.point.x,
-        command.point.y,
-        fillColor,
-        fillPattern,
-        borderColor,
-        canvasWidth,
-        canvasHeight
-      );
-      break;
-    }
-    case "FilledPolygon": {
-      if (command.points.length < 3) break;
-      const fillColorStr = getColor(state.fillColor, state.palette);
-      ctx.fillStyle = fillPattern || fillColorStr;
-      fillPolygon(ctx, command.points);
-      if (state.color !== 0) {
-        for (let i = 0; i < command.points.length - 1; i++) {
-          const start = command.points[i];
-          const end = command.points[i + 1];
-          drawLine(ctx, start.x, start.y, end.x, end.y, maxCommands);
-        }
-        const first = command.points[0];
-        const last = command.points[command.points.length - 1];
-        drawLine(ctx, last.x, last.y, first.x, first.y, maxCommands);
-      }
-      break;
-    }
-    case "FilledOval": {
-      ctx.beginPath();
-      ctx.ellipse(
-        command.center.x,
-        command.center.y,
-        command.radius.width,
-        command.radius.height,
-        0,
-        0,
-        Math.PI * 2
-      );
-      const fillColorStr = getColor(state.fillColor, state.palette);
-      ctx.fillStyle = fillPattern || fillColorStr;
-      ctx.fill();
-      if (state.color !== 0) {
-        ctx.stroke();
-      }
-      break;
-    }
-    case "PieSlice": {
-      const ASPECT = 0.772;
-      const radiusX = command.radius;
-      const radiusY = Math.trunc(command.radius * ASPECT);
-      const startRad = command.startAngle * Math.PI / 180;
-      const endRad = command.endAngle * Math.PI / 180;
-      ctx.beginPath();
-      ctx.moveTo(command.center.x, command.center.y);
-      ctx.lineTo(
-        command.center.x + radiusX * Math.cos(startRad),
-        command.center.y - radiusY * Math.sin(startRad)
-      );
-      ctx.ellipse(command.center.x, command.center.y, radiusX, radiusY, 0, startRad, endRad);
-      ctx.closePath();
-      const fillColorStr = getColor(state.fillColor, state.palette);
-      ctx.fillStyle = fillPattern || fillColorStr;
-      ctx.fill();
-      if (state.color !== 0) {
-        ctx.stroke();
-      }
-      break;
-    }
-    case "OvalPieSlice": {
-      const startRad = command.startAngle * Math.PI / 180;
-      const endRad = command.endAngle * Math.PI / 180;
-      ctx.beginPath();
-      ctx.moveTo(command.center.x, command.center.y);
-      ctx.lineTo(
-        command.center.x + command.radius.width * Math.cos(startRad),
-        command.center.y - command.radius.height * Math.sin(startRad)
-      );
-      ctx.ellipse(
-        command.center.x,
-        command.center.y,
-        command.radius.width,
-        command.radius.height,
-        0,
-        startRad,
-        endRad
-      );
-      ctx.closePath();
-      const fillColorStr = getColor(state.fillColor, state.palette);
-      ctx.fillStyle = fillPattern || fillColorStr;
-      ctx.fill();
-      if (state.color !== 0) {
-        ctx.stroke();
-      }
-      break;
-    }
-    case "OvalArc": {
-      const startRad = command.startAngle * Math.PI / 180;
-      const endRad = command.endAngle * Math.PI / 180;
-      ctx.beginPath();
-      ctx.ellipse(
-        command.center.x,
-        command.center.y,
-        command.radius.width,
-        command.radius.height,
-        0,
-        startRad,
-        endRad
-      );
-      ctx.stroke();
-      break;
-    }
-    case "OutText": {
-      ctx.fillStyle = color;
-      ctx.font = "12px monospace";
-      ctx.textBaseline = "top";
-      ctx.fillText(command.text, state.cursor.x, state.cursor.y);
-      break;
-    }
-    case "OutTextXY": {
-      ctx.fillStyle = color;
-      ctx.font = "12px monospace";
-      ctx.textBaseline = "top";
-      ctx.fillText(command.text, command.point.x, command.point.y);
-      break;
-    }
-    case "RegionText": {
-      ctx.fillStyle = color;
-      ctx.font = "12px monospace";
-      ctx.textBaseline = "top";
-      ctx.fillText(command.text, command.rect.x, command.rect.y);
-      break;
-    }
-    case "Button": {
-      const fillColorStr = getColor(state.fillColor, state.palette);
-      ctx.fillStyle = fillPattern || fillColorStr;
-      ctx.fillRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
-      if (state.color !== 0) {
-        ctx.strokeRect(command.rect.x, command.rect.y, command.rect.width, command.rect.height);
-      }
-      ctx.fillStyle = color;
-      ctx.font = "12px monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(
-        command.text,
-        command.rect.x + command.rect.width / 2,
-        command.rect.y + command.rect.height / 2
-      );
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      break;
-    }
-    // State commands don't draw anything
-    case "Color":
-    case "FillStyle":
-    case "LineStyle":
-    case "FontStyle":
-    case "ViewPort":
-    case "GotoXY":
-    case "Move":
-    case "Home":
-    case "WriteMode":
-    case "SetPalette":
-    case "OnePalette":
-    case "FillPattern":
-    case "BeginText":
-    case "EndText":
-    case "TextWindow":
-    case "ButtonStyle":
-    case "Mouse":
-    case "KillMouseFields":
-    case "EraseEOL":
-    case "EraseView":
-    case "EraseWindow":
-      break;
-    case "ResetWindows":
-      break;
-    case "GetImage":
-    case "PutImage":
-    case "LoadIcon":
-    case "WriteIcon":
-      break;
-    default:
-      break;
-  }
-}
-function ripToCanvas(canvas, commands, width, height, initialState, background = "#000000", maxCommands) {
-  console.log(
-    `[RIP] ripToCanvas called: ${commands.length} commands, maxCommands=${maxCommands}, canvas=${width}x${height}`
-  );
-  if (maxCommands !== void 0) {
-    console.log(`[RIP] DEBUG Canvas setup: ${width}x${height}, background: ${background}`);
-  }
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d", {
-    willReadFrequently: true,
-    alpha: false,
-    // Disable alpha channel for better color matching
-    desynchronized: true
-    // Reduce latency
-  });
-  if (!ctx) return;
-  ctx.imageSmoothingEnabled = false;
-  ctx.imageSmoothingQuality = "low";
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = background;
-  ctx.fillRect(0, 0, width, height);
-  const limitedCommands = maxCommands !== void 0 ? commands.slice(0, maxCommands) : commands;
-  const state = cloneRipState2(initialState);
-  let userPattern = void 0;
-  let fillCommandsProcessed = 0;
-  let fillCommandsSkipped = 0;
-  for (let i = 0; i < limitedCommands.length; i++) {
-    const command = limitedCommands[i];
-    console.log(`[RIP] Command ${i}: ${command.type} (${command.opcode})`, command, state);
-    switch (command.type) {
-      case "Color":
-        console.log(`[RIP] Color command: changing from ${state.color} to ${command.value}`);
-        state.color = command.value;
-        break;
-      case "FillStyle":
-        state.fillStyle = command.style;
-        state.fillColor = command.color;
-        break;
-      case "LineStyle":
-        state.lineStyle = command.style;
-        break;
-      case "FontStyle":
-        state.fontStyle = command.font;
-        break;
-      case "ViewPort":
-        state.viewport = command.rect;
-        break;
-      case "GotoXY":
-      case "Move":
-        state.cursor = command.point;
-        break;
-      case "Home":
-        state.cursor = { x: 0, y: 0 };
-        break;
-      case "WriteMode":
-        state.writeMode = command.mode;
-        break;
-      case "SetPalette":
-        state.palette = [...command.palette];
-        break;
-      case "OnePalette":
-        if (state.palette) {
-          state.palette[command.color] = command.palette;
-        }
-        break;
-      case "FillPattern":
-        state.fillStyle = 12 /* User */;
-        state.fillColor = command.color;
-        userPattern = command.pattern;
-        break;
-      case "TextWindow":
-        state.textWindow = command.rect;
-        break;
-      case "ResetWindows":
-        state.palette = Array.from({ length: 16 }, (_, i2) => {
-          const defaultMapping = [0, 1, 2, 3, 4, 5, 7, 20, 56, 57, 58, 59, 60, 61, 62, 63];
-          return defaultMapping[i2] || i2;
-        });
-        state.viewport = null;
-        state.textWindow = null;
-        state.cursor = { x: 0, y: 0 };
-        state.color = 7;
-        state.fillColor = 0;
-        state.fillStyle = 1 /* Solid */;
-        state.lineStyle = 0 /* Solid */;
-        break;
-    }
-    const wasFillCommand = command.type === "Fill";
-    drawCommand(ctx, command, state, null, width, height, userPattern, maxCommands);
-    if (wasFillCommand) {
-      fillCommandsProcessed++;
-      if (fillCommandsProcessed % 100 === 0) {
-        console.log(`[RIP] Processed ${fillCommandsProcessed} fill commands`);
-      }
-    }
-  }
-  console.log(`[RIP] Rendering complete: ${fillCommandsProcessed} fill commands processed`);
-}
-
-// src/components/RipArt.tsx
-import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
-function RipArt({
-  url,
-  mode = "auto",
-  width = "auto",
-  height = "auto",
-  background = "#000000",
-  allowDrop = true,
-  showOverlayControls = false,
-  showPerformanceOverlay = false,
-  debug = false,
-  maxCommands,
-  fps = 30,
-  bytesPerSecond = 960,
-  autoStart = true
-}) {
-  const [ripData, setRipData] = useState4(null);
-  const [error, setError] = useState4(null);
-  const [isDragging, setIsDragging] = useState4(false);
-  const [fileName, setFileName] = useState4(null);
-  const [detectedWidth, setDetectedWidth] = useState4(640);
-  const [detectedHeight, setDetectedHeight] = useState4(350);
-  const [commands, setCommands] = useState4([]);
-  const [initialState, setInitialState] = useState4(null);
-  const [detectedMode, setDetectedMode] = useState4("final");
-  const [currentFrame, setCurrentFrame] = useState4(0);
-  const [isPlaying, setIsPlaying] = useState4(autoStart);
-  const [isOverlayVisible, setIsOverlayVisible] = useState4(false);
-  const [currentSpeed, setCurrentSpeed] = useState4(() => bytesPerSecond);
-  const animationFrameRef = useRef5(null);
-  const lastFrameTimeRef = useRef5(0);
-  const currentBytePositionRef = useRef5(0);
-  const totalBytesRef = useRef5(0);
-  const overlayTimeoutRef = useRef5(null);
-  const canvasRef = useRef5(null);
-  useEffect5(() => {
-    if (mode === "auto" && commands.length > 0) {
-      const viewportCount = commands.filter((c) => c.type === "ViewPort").length;
-      const isAnimated = viewportCount > 1 || commands.length > 100;
-      setDetectedMode(isAnimated ? "animated" : "final");
-    } else if (mode !== "auto") {
-      setDetectedMode(mode);
-    }
-  }, [mode, commands]);
-  const effectiveMode = useMemo3(() => {
-    if (mode === "auto") {
-      return detectedMode;
-    }
-    return mode;
-  }, [mode, detectedMode]);
-  useEffect5(() => {
-    if (!url) return;
-    const urlToFetch = url;
-    let cancelled = false;
-    async function load() {
-      setError(null);
-      try {
-        const res = await fetch(urlToFetch);
-        if (!res.ok) throw new Error(`Failed to fetch ${urlToFetch}: ${res.status}`);
-        const buf = new Uint8Array(await res.arrayBuffer());
-        if (!cancelled) {
-          setRipData(buf);
-          setFileName(null);
-          totalBytesRef.current = buf.length;
-        }
-      } catch (e) {
-        if (!cancelled) setError(String(e?.message || e));
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-  const onDragEnter = (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    setIsDragging(true);
-  };
-  const onDragOver = (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    setIsDragging(true);
-  };
-  const onDragLeave = (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    setIsDragging(false);
-  };
-  const onDrop = async (e) => {
-    if (!allowDrop) return;
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) {
-      console.warn("[RipArt] No file in drop event");
-      return;
-    }
-    console.log(`[RipArt] File dropped: ${file.name}, size: ${file.size} bytes`);
-    try {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      console.log(`[RipArt] File loaded: ${buf.length} bytes`);
-      setRipData(buf);
-      setFileName(file.name);
-      totalBytesRef.current = buf.length;
-      setError(null);
-    } catch (err) {
-      const errorMsg = String(err?.message || err);
-      console.error(`[RipArt] Error loading file:`, errorMsg);
-      setError(errorMsg);
-    }
-  };
-  useEffect5(() => {
-    if (!ripData) return;
-    try {
-      if (debug) console.log(`[RipArt] Parsing RIP file: ${fileName || url || "dropped file"}, ${ripData.length} bytes`);
-      const result = parseRip(ripData, debug);
-      setCommands(result.commands);
-      setInitialState(result.initialState ?? result.state);
-      setDetectedWidth(result.width);
-      setDetectedHeight(result.height);
-      currentBytePositionRef.current = 0;
-      setCurrentFrame(0);
-    } catch (e) {
-      const errorMsg = String(e?.message || e);
-      console.error(`[RipArt] Parse failed:`, errorMsg);
-      if (debug) console.error(`[RipArt] Error details:`, e);
-      setError(errorMsg);
-    }
-  }, [ripData, debug, fileName, url]);
-  const displayWidth = useMemo3(() => {
-    if (width === "auto") {
-      return detectedWidth;
-    }
-    return width;
-  }, [width, detectedWidth]);
-  const displayHeight = useMemo3(() => {
-    if (height === "auto") {
-      return detectedHeight;
-    }
-    return height;
-  }, [height, detectedHeight]);
-  const getCommandsForBytePosition = useCallback4(
-    (bytePos) => {
-      if (totalBytesRef.current === 0) return commands.length;
-      const ratio = Math.min(bytePos / totalBytesRef.current, 1);
-      return Math.floor(ratio * commands.length);
-    },
-    [commands]
-  );
-  useEffect5(() => {
-    console.log(`[RipArt] Render effect triggered: canvas=${!!canvasRef.current}, initialState=${!!initialState}, commands=${commands.length}`);
-    if (!canvasRef.current || !initialState || commands.length === 0) {
-      console.log(`[RipArt] Skipping render: canvas=${!!canvasRef.current}, initialState=${!!initialState}, commands=${commands.length}`);
-      return;
-    }
-    const canvas = canvasRef.current;
-    console.log(`[RipArt] Rendering to canvas: ${displayWidth}x${displayHeight}, maxCommands=${maxCommands}`);
-    let renderMaxCommands = maxCommands;
-    if (effectiveMode === "animated" && renderMaxCommands === void 0) {
-      renderMaxCommands = getCommandsForBytePosition(currentBytePositionRef.current);
-    }
-    ripToCanvas(
-      canvas,
-      commands,
-      displayWidth,
-      displayHeight,
-      initialState,
-      background,
-      renderMaxCommands
-      // Use maxCommands prop for debugging
-    );
-    if (debug) {
-      console.log(`[RipArt] Rendered to canvas: ${commands.length} commands${renderMaxCommands !== void 0 ? `, showing ${renderMaxCommands}` : ""}`);
-    }
-  }, [commands, displayWidth, displayHeight, initialState, background, effectiveMode, currentFrame, debug, maxCommands, getCommandsForBytePosition]);
-  useEffect5(() => {
-    if (effectiveMode !== "animated" || !isPlaying) {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      return;
-    }
-    const animate = (timestamp) => {
-      if (lastFrameTimeRef.current === 0) {
-        lastFrameTimeRef.current = timestamp;
-      }
-      const deltaTime = (timestamp - lastFrameTimeRef.current) / 1e3;
-      const bytesToAdvance = Math.floor(deltaTime * currentSpeed);
-      if (bytesToAdvance > 0) {
-        currentBytePositionRef.current = Math.min(
-          currentBytePositionRef.current + bytesToAdvance,
-          totalBytesRef.current
-        );
-        setCurrentFrame((prev) => prev + 1);
-        lastFrameTimeRef.current = timestamp;
-      }
-      animationFrameRef.current = requestAnimationFrame(animate);
-    };
-    animationFrameRef.current = requestAnimationFrame(animate);
-    lastFrameTimeRef.current = 0;
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    };
-  }, [effectiveMode, isPlaying, currentSpeed]);
-  const handlePlayPause = useCallback4(() => {
-    if (currentBytePositionRef.current >= totalBytesRef.current) {
-      currentBytePositionRef.current = 0;
-      setCurrentFrame(0);
-    }
-    setIsPlaying((prev) => !prev);
-  }, []);
-  const handleRestart = useCallback4(() => {
-    currentBytePositionRef.current = 0;
-    setCurrentFrame(0);
-    setIsPlaying(true);
-  }, []);
-  const handleSeek = useCallback4((bytePosition) => {
-    currentBytePositionRef.current = Math.max(0, Math.min(bytePosition, totalBytesRef.current));
-    setCurrentFrame((prev) => prev + 1);
-  }, []);
-  const handleSpeedChange = useCallback4((newBytesPerSecond) => {
-    setCurrentSpeed(newBytesPerSecond);
-  }, []);
-  const handleAdvanceByte = useCallback4(() => {
-    currentBytePositionRef.current = Math.min(
-      currentBytePositionRef.current + 1,
-      totalBytesRef.current
-    );
-    setCurrentFrame((prev) => prev + 1);
-  }, []);
-  const handleRewindByte = useCallback4(() => {
-    currentBytePositionRef.current = Math.max(currentBytePositionRef.current - 1, 0);
-    setCurrentFrame((prev) => prev + 1);
-  }, []);
-  const handleMouseMove = useCallback4(() => {
-    setIsOverlayVisible(true);
-    if (overlayTimeoutRef.current) {
-      clearTimeout(overlayTimeoutRef.current);
-    }
-    overlayTimeoutRef.current = window.setTimeout(() => {
-      setIsOverlayVisible(false);
-    }, 3e3);
-  }, []);
-  useEffect5(() => {
-    return () => {
-      if (overlayTimeoutRef.current) {
-        window.clearTimeout(overlayTimeoutRef.current);
-      }
-    };
-  }, []);
-  const rootStyle = useMemo3(
-    () => ({
-      ...isDragging ? { outline: "2px dashed #888", outlineOffset: "-2px" } : {}
-    }),
-    [isDragging]
-  );
-  if (error) {
-    return /* @__PURE__ */ jsx6(
-      "div",
-      {
-        style: {
-          ...rootStyle,
-          padding: "16px",
-          color: "#FF5555",
-          background: "#000",
-          fontFamily: "monospace"
-        },
-        onDragEnter,
-        onDragOver,
-        onDragLeave,
-        onDrop,
-        children: error
-      }
-    );
-  }
-  if (!ripData) {
-    return /* @__PURE__ */ jsx6(
-      "div",
-      {
-        style: {
-          ...rootStyle,
-          padding: "16px",
-          color: "#AAA",
-          background: "#000",
-          fontFamily: "monospace"
-        },
-        onDragEnter,
-        onDragOver,
-        onDragLeave,
-        onDrop,
-        children: url ? "Loading\u2026" : "Drop a .rip file here or provide a URL"
-      }
-    );
-  }
-  if (!initialState || commands.length === 0) {
-    return /* @__PURE__ */ jsx6(
-      "div",
-      {
-        style: {
-          ...rootStyle,
-          padding: "16px",
-          color: "#FFAA00",
-          background: "#000",
-          fontFamily: "monospace"
-        },
-        onDragEnter,
-        onDragOver,
-        onDragLeave,
-        onDrop,
-        children: commands.length === 0 ? `No commands parsed from file${fileName ? `: ${fileName}` : ""}. ${debug ? "Check console for details." : "Try enabling debug mode."}` : "Processing\u2026"
-      }
-    );
-  }
-  return /* @__PURE__ */ jsxs5(
-    "div",
-    {
-      style: {
-        ...rootStyle,
-        position: "relative",
-        display: "inline-block"
-      },
-      onDragEnter,
-      onDragOver,
-      onDragLeave,
-      onDrop,
-      onMouseMove: effectiveMode === "animated" && showOverlayControls ? handleMouseMove : void 0,
-      children: [
-        /* @__PURE__ */ jsx6(
-          "canvas",
-          {
-            ref: canvasRef,
-            width: displayWidth,
-            height: displayHeight,
-            style: {
-              width: displayWidth,
-              height: displayHeight,
-              display: "block",
-              imageRendering: "pixelated",
-              WebkitImageSmoothingEnabled: "false",
-              MozImageSmoothingEnabled: "false",
-              OImageSmoothingEnabled: "false"
-            }
-          }
-        ),
-        effectiveMode === "animated" && showOverlayControls && /* @__PURE__ */ jsx6(
-          AnsiPlayerOverlay,
-          {
-            isPlaying,
-            currentBytes: currentBytePositionRef.current,
-            totalBytes: totalBytesRef.current,
-            currentSpeed,
-            isVisible: isOverlayVisible,
-            onPlayPause: handlePlayPause,
-            onRestart: handleRestart,
-            onSeek: handleSeek,
-            onSpeedChange: handleSpeedChange,
-            onAdvanceByte: handleAdvanceByte,
-            onRewindByte: handleRewindByte,
-            onMouseMove: handleMouseMove
-          }
-        )
-      ]
-    }
-  );
-}
-
 // src/components/PlasmaBackgroundLayout.tsx
-import { useCallback as useCallback5, useEffect as useEffect6, useMemo as useMemo4, useRef as useRef6, useState as useState5 } from "react";
+import { useCallback as useCallback4, useEffect as useEffect5, useMemo as useMemo3, useRef as useRef5, useState as useState4 } from "react";
 
 // src/generators/asciiPerlinPlasmaGenerator.ts
 var DEFAULT_CHARS = [
@@ -5874,7 +3979,7 @@ function clearFireState() {
 }
 
 // src/components/PlasmaBackgroundLayout.tsx
-import { jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
+import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
 function PlasmaBackgroundLayout({
   children,
   mode = "fixed",
@@ -5896,16 +4001,16 @@ function PlasmaBackgroundLayout({
   fps = 30,
   bitmapFontUrl
 }) {
-  const containerRef = useRef6(null);
-  const scrollableRef = useRef6(null);
-  const [viewportBounds, setViewportBounds] = useState5({ top: 0, height: 0 });
-  const [viewportSize, setViewportSize] = useState5({ width: 0, height: 0 });
-  const [containerHeight, setContainerHeight] = useState5(0);
-  const [scrollTop, setScrollTop] = useState5(0);
-  const [maxScrollTop, setMaxScrollTop] = useState5(0);
-  const [isMounted, setIsMounted] = useState5(false);
-  const [bitmapFont, setBitmapFont] = useState5(null);
-  useEffect6(() => {
+  const containerRef = useRef5(null);
+  const scrollableRef = useRef5(null);
+  const [viewportBounds, setViewportBounds] = useState4({ top: 0, height: 0 });
+  const [viewportSize, setViewportSize] = useState4({ width: 0, height: 0 });
+  const [containerHeight, setContainerHeight] = useState4(0);
+  const [scrollTop, setScrollTop] = useState4(0);
+  const [maxScrollTop, setMaxScrollTop] = useState4(0);
+  const [isMounted, setIsMounted] = useState4(false);
+  const [bitmapFont, setBitmapFont] = useState4(null);
+  useEffect5(() => {
     if (!bitmapFontUrl) {
       setBitmapFont(null);
       return;
@@ -5926,7 +4031,7 @@ function PlasmaBackgroundLayout({
       cancelled = true;
     };
   }, [bitmapFontUrl]);
-  useEffect6(() => {
+  useEffect5(() => {
     if (typeof window === "undefined") return;
     const updateViewportSize = () => {
       setViewportSize({
@@ -5942,7 +4047,7 @@ function PlasmaBackgroundLayout({
     window.addEventListener("resize", updateViewportSize);
     return () => window.removeEventListener("resize", updateViewportSize);
   }, []);
-  useEffect6(() => {
+  useEffect5(() => {
     if (mode !== "scrollable" || typeof window === "undefined" || !isMounted) {
       return;
     }
@@ -6043,7 +4148,7 @@ function PlasmaBackgroundLayout({
       }
     };
   }, [mode, isMounted]);
-  const mergedPlasmaOptions = useMemo4(() => {
+  const mergedPlasmaOptions = useMemo3(() => {
     const options = {};
     if (chars) options.chars = chars;
     if (timeScale !== void 0) options.timeScale = timeScale;
@@ -6053,7 +4158,7 @@ function PlasmaBackgroundLayout({
     if (bgColor) options.bgColor = bgColor;
     return options;
   }, [chars, timeScale, octaves, seed, fgColor, bgColor]);
-  const mergedFireOptions = useMemo4(() => {
+  const mergedFireOptions = useMemo3(() => {
     const options = {};
     if (chars) options.chars = chars;
     if (darkenAmount !== void 0) options.darkenAmount = darkenAmount;
@@ -6062,7 +4167,7 @@ function PlasmaBackgroundLayout({
     if (bgColor) options.bgColor = bgColor;
     return options;
   }, [chars, darkenAmount, sparkRange, seed, bgColor]);
-  const fixedFrameGenerator = useCallback5(
+  const fixedFrameGenerator = useCallback4(
     (frame, columns, rows) => {
       if (generatorType === "fire") {
         return generateAsciiFireFrame(frame, columns, rows, mergedFireOptions);
@@ -6072,10 +4177,10 @@ function PlasmaBackgroundLayout({
     },
     [generatorType, mergedPlasmaOptions, mergedFireOptions]
   );
-  const viewYRef = useRef6(0);
-  const virtualRowsRef = useRef6(0);
-  const virtualColumnsRef = useRef6(0);
-  const scrollableFrameGenerator = useMemo4(() => {
+  const viewYRef = useRef5(0);
+  const virtualRowsRef = useRef5(0);
+  const virtualColumnsRef = useRef5(0);
+  const scrollableFrameGenerator = useMemo3(() => {
     if (generatorType === "fire") {
       return (frame, reqColumns, reqRows) => {
         const fireOptionsWithDimensions = {
@@ -6118,7 +4223,7 @@ function PlasmaBackgroundLayout({
   const cellWidthPx = bitmapFont?.width || 8;
   const cellHeightPx = bitmapFont?.height || 16;
   if (mode === "fixed") {
-    return /* @__PURE__ */ jsxs6(
+    return /* @__PURE__ */ jsxs5(
       "div",
       {
         ref: containerRef,
@@ -6128,7 +4233,7 @@ function PlasmaBackgroundLayout({
           width: "100%"
         },
         children: [
-          /* @__PURE__ */ jsx7(
+          /* @__PURE__ */ jsx6(
             "div",
             {
               style: {
@@ -6144,7 +4249,7 @@ function PlasmaBackgroundLayout({
                 const columns = Math.max(1, Math.ceil(viewportSize.width / cellWidthPx));
                 const rows = Math.max(1, Math.ceil(viewportSize.height / cellHeightPx));
                 if (!bitmapFont) return null;
-                return /* @__PURE__ */ jsx7(
+                return /* @__PURE__ */ jsx6(
                   AnsiVirtualDisplay,
                   {
                     columns,
@@ -6160,7 +4265,7 @@ function PlasmaBackgroundLayout({
               })()
             }
           ),
-          /* @__PURE__ */ jsx7(
+          /* @__PURE__ */ jsx6(
             "div",
             {
               ref: scrollableRef,
@@ -6181,7 +4286,7 @@ function PlasmaBackgroundLayout({
     );
   }
   if (!isMounted) {
-    return /* @__PURE__ */ jsx7(
+    return /* @__PURE__ */ jsx6(
       "div",
       {
         ref: containerRef,
@@ -6190,7 +4295,7 @@ function PlasmaBackgroundLayout({
           width: "100%",
           minHeight: "100vh"
         },
-        children: /* @__PURE__ */ jsx7(
+        children: /* @__PURE__ */ jsx6(
           "div",
           {
             ref: scrollableRef,
@@ -6223,7 +4328,7 @@ function PlasmaBackgroundLayout({
   virtualRowsRef.current = virtualRows;
   virtualColumnsRef.current = virtualColumns;
   const pixelOffsetY = scrollTop % cellHeightPx;
-  return /* @__PURE__ */ jsxs6(
+  return /* @__PURE__ */ jsxs5(
     "div",
     {
       ref: containerRef,
@@ -6233,7 +4338,7 @@ function PlasmaBackgroundLayout({
         minHeight: "100vh"
       },
       children: [
-        /* @__PURE__ */ jsx7(
+        /* @__PURE__ */ jsx6(
           "div",
           {
             style: {
@@ -6245,7 +4350,7 @@ function PlasmaBackgroundLayout({
               zIndex: 0,
               pointerEvents: "none"
             },
-            children: bitmapFont && /* @__PURE__ */ jsx7(
+            children: bitmapFont && /* @__PURE__ */ jsx6(
               AnsiVirtualDisplay,
               {
                 columns: visibleColumns,
@@ -6265,7 +4370,7 @@ function PlasmaBackgroundLayout({
             )
           }
         ),
-        /* @__PURE__ */ jsx7(
+        /* @__PURE__ */ jsx6(
           "div",
           {
             ref: scrollableRef,
@@ -6288,15 +4393,15 @@ function PlasmaBackgroundLayout({
 }
 
 // src/components/FontCharacterChart.tsx
-import { useEffect as useEffect7, useMemo as useMemo5, useRef as useRef7, useState as useState6 } from "react";
-import { jsx as jsx8, jsxs as jsxs7 } from "react/jsx-runtime";
+import { useEffect as useEffect6, useMemo as useMemo4, useRef as useRef6, useState as useState5 } from "react";
+import { jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
 function FontCharacterChart({ bitmapFontUrl }) {
-  const [bitmapFont, setBitmapFont] = useState6(null);
-  const [loading, setLoading] = useState6(true);
-  const [error, setError] = useState6(null);
-  const [sorted, setSorted] = useState6(false);
-  const canvasRefs = useRef7(/* @__PURE__ */ new Map());
-  useEffect7(() => {
+  const [bitmapFont, setBitmapFont] = useState5(null);
+  const [loading, setLoading] = useState5(true);
+  const [error, setError] = useState5(null);
+  const [sorted, setSorted] = useState5(false);
+  const canvasRefs = useRef6(/* @__PURE__ */ new Map());
+  useEffect6(() => {
     let cancelled = false;
     async function loadFont() {
       setLoading(true);
@@ -6349,7 +4454,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
     }
     return setBits / totalBits * 100;
   }
-  const characterInfo = useMemo5(() => {
+  const characterInfo = useMemo4(() => {
     if (!bitmapFont) return [];
     const info = [];
     for (let charCode = 32; charCode <= 255; charCode++) {
@@ -6359,11 +4464,11 @@ function FontCharacterChart({ bitmapFontUrl }) {
     }
     return info;
   }, [bitmapFont]);
-  const displayedCharacters = useMemo5(() => {
+  const displayedCharacters = useMemo4(() => {
     if (!sorted) return characterInfo;
     return [...characterInfo].sort((a, b) => b.darkness - a.darkness);
   }, [characterInfo, sorted]);
-  useEffect7(() => {
+  useEffect6(() => {
     if (!bitmapFont) return;
     displayedCharacters.forEach(({ charCode }) => {
       const canvas = canvasRefs.current.get(charCode);
@@ -6383,20 +4488,20 @@ function FontCharacterChart({ bitmapFontUrl }) {
     }
   }
   if (loading) {
-    return /* @__PURE__ */ jsx8("div", { children: "Loading font..." });
+    return /* @__PURE__ */ jsx7("div", { children: "Loading font..." });
   }
   if (error) {
-    return /* @__PURE__ */ jsxs7("div", { children: [
+    return /* @__PURE__ */ jsxs6("div", { children: [
       "Error: ",
       error
     ] });
   }
   if (!bitmapFont) {
-    return /* @__PURE__ */ jsx8("div", { children: "No font loaded" });
+    return /* @__PURE__ */ jsx7("div", { children: "No font loaded" });
   }
-  return /* @__PURE__ */ jsxs7("div", { style: { padding: "20px" }, children: [
-    /* @__PURE__ */ jsx8("div", { style: { marginBottom: "20px" }, children: /* @__PURE__ */ jsx8("button", { onClick: () => setSorted(!sorted), children: sorted ? "Show Original Order" : "Sort by Darkness (Darkest to Lightest)" }) }),
-    /* @__PURE__ */ jsx8(
+  return /* @__PURE__ */ jsxs6("div", { style: { padding: "20px" }, children: [
+    /* @__PURE__ */ jsx7("div", { style: { marginBottom: "20px" }, children: /* @__PURE__ */ jsx7("button", { onClick: () => setSorted(!sorted), children: sorted ? "Show Original Order" : "Sort by Darkness (Darkest to Lightest)" }) }),
+    /* @__PURE__ */ jsx7(
       "div",
       {
         style: {
@@ -6404,7 +4509,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
           gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))",
           gap: "10px"
         },
-        children: displayedCharacters.map(({ charCode, character, darkness }) => /* @__PURE__ */ jsxs7(
+        children: displayedCharacters.map(({ charCode, character, darkness }) => /* @__PURE__ */ jsxs6(
           "div",
           {
             onClick: () => copyToClipboard(character),
@@ -6420,7 +4525,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
             },
             title: `Click to copy: ${character}`,
             children: [
-              /* @__PURE__ */ jsx8(
+              /* @__PURE__ */ jsx7(
                 "canvas",
                 {
                   ref: (el) => {
@@ -6435,7 +4540,7 @@ function FontCharacterChart({ bitmapFontUrl }) {
                   }
                 }
               ),
-              /* @__PURE__ */ jsxs7("div", { style: { marginTop: "8px", fontSize: "12px", color: "#888" }, children: [
+              /* @__PURE__ */ jsxs6("div", { style: { marginTop: "8px", fontSize: "12px", color: "#888" }, children: [
                 darkness.toFixed(1),
                 "%"
               ] })
@@ -6665,6 +4770,208 @@ function convertFrameDataToAnsi(frame, columns, rows, palette = "ansi16") {
   }
   return { lines, columns };
 }
+
+// src/generators/asciiSonarFrameGenerator.ts
+var DEFAULTS = {
+  frequency: 0.9,
+  intensity: 1,
+  fps: 30,
+  fgColor: "#ffffff",
+  bgColor: "#000000",
+  dotChar: ".",
+  speed: 14,
+  bandWidth: 1.25,
+  decay: 0.75,
+  baseAlpha: 0.03,
+  alphaSteps: 32,
+  aspectY: 2,
+  maxRings: 24
+};
+function clamp(v, min, max) {
+  return v < min ? min : v > max ? max : v;
+}
+function clamp01(v) {
+  return clamp(v, 0, 1);
+}
+function parseColorToRgb(color, fallback) {
+  const c = color.trim().toLowerCase();
+  if (c.startsWith("#")) {
+    const hex = c.slice(1);
+    if (hex.length === 3) {
+      const r = parseInt(hex[0] + hex[0], 16);
+      const g = parseInt(hex[1] + hex[1], 16);
+      const b = parseInt(hex[2] + hex[2], 16);
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return { r, g, b };
+    }
+    if (hex.length === 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return { r, g, b };
+    }
+    return fallback;
+  }
+  const m = c.match(/^rgba?\((.*)\)$/);
+  if (m) {
+    const parts = m[1].split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      const r = Number(parts[0]);
+      const g = Number(parts[1]);
+      const b = Number(parts[2]);
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+        return {
+          r: clamp(Math.round(r), 0, 255),
+          g: clamp(Math.round(g), 0, 255),
+          b: clamp(Math.round(b), 0, 255)
+        };
+      }
+    }
+    return fallback;
+  }
+  return fallback;
+}
+function makeRgbaTable(rgb, steps) {
+  const s = Math.max(2, Math.floor(steps));
+  const table = new Array(s);
+  for (let i = 0; i < s; i++) {
+    const a = i / (s - 1);
+    table[i] = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${a.toFixed(3)})`;
+  }
+  return table;
+}
+function gaussianBand(distMinusRadius, invSigma) {
+  const t = distMinusRadius * invSigma;
+  return Math.exp(-(t * t));
+}
+var distanceFieldCache = /* @__PURE__ */ new Map();
+function getDistanceField(columns, rows, centerX, centerY, aspectY) {
+  const key = `${columns}:${rows}:${centerX.toFixed(3)}:${centerY.toFixed(3)}:${aspectY.toFixed(3)}`;
+  const existing = distanceFieldCache.get(key);
+  if (existing) return existing;
+  const field = new Float32Array(columns * rows);
+  let i = 0;
+  for (let y = 0; y < rows; y++) {
+    const dy = (y - centerY) * aspectY;
+    for (let x = 0; x < columns; x++) {
+      const dx = x - centerX;
+      field[i++] = Math.sqrt(dx * dx + dy * dy);
+    }
+  }
+  distanceFieldCache.set(key, field);
+  return field;
+}
+function generateAsciiSonarFrame(frame, columns, rows, options = {}) {
+  const frequency = options.frequency ?? DEFAULTS.frequency;
+  const intensity = options.intensity ?? DEFAULTS.intensity;
+  const fps = options.fps ?? DEFAULTS.fps;
+  const fgColor = options.fgColor ?? DEFAULTS.fgColor;
+  const bgColor = options.bgColor ?? DEFAULTS.bgColor;
+  const dotChar = options.dotChar ?? DEFAULTS.dotChar;
+  const speed = options.speed ?? DEFAULTS.speed;
+  const bandWidth = options.bandWidth ?? DEFAULTS.bandWidth;
+  const decay = options.decay ?? DEFAULTS.decay;
+  const baseAlpha = options.baseAlpha ?? DEFAULTS.baseAlpha;
+  const alphaSteps = options.alphaSteps ?? DEFAULTS.alphaSteps;
+  const aspectY = options.aspectY ?? DEFAULTS.aspectY;
+  const maxRings = options.maxRings ?? DEFAULTS.maxRings;
+  const safeFps = fps > 0 ? fps : DEFAULTS.fps;
+  const safeFrequency = frequency > 0 ? frequency : DEFAULTS.frequency;
+  const safeSpeed = speed > 0 ? speed : DEFAULTS.speed;
+  const safeBandWidth = bandWidth > 0 ? bandWidth : DEFAULTS.bandWidth;
+  const safeDecay = decay >= 0 ? decay : DEFAULTS.decay;
+  const safeIntensity = Math.max(0, intensity);
+  const safeBaseAlpha = clamp01(baseAlpha);
+  const steps = Math.max(2, Math.floor(alphaSteps));
+  const ringCap = Math.max(1, Math.floor(maxRings));
+  const centerX = options.centerX ?? (columns - 1) / 2;
+  const centerY = options.centerY ?? (rows - 1) / 2;
+  const rgb = parseColorToRgb(fgColor, { r: 255, g: 255, b: 255 });
+  const rgbaTable = makeRgbaTable(rgb, steps);
+  const tSeconds = frame / safeFps;
+  const period = 1 / safeFrequency;
+  const kMax = Math.floor(tSeconds / period);
+  const rings = [];
+  for (let k = kMax; k >= 0 && rings.length < ringCap; k--) {
+    const age = tSeconds - k * period;
+    if (age < 0) continue;
+    const radius = age * safeSpeed;
+    const amp = Math.exp(-age * safeDecay);
+    rings.push({ radius, amp });
+  }
+  const invSigma = 1 / safeBandWidth;
+  const distField = getDistanceField(columns, rows, centerX, centerY, aspectY);
+  const lines = [];
+  let idx = 0;
+  for (let y = 0; y < rows; y++) {
+    const line = [];
+    for (let x = 0; x < columns; x++) {
+      const dist = distField[idx++];
+      let sum = 0;
+      for (let r = 0; r < rings.length; r++) {
+        const ring = rings[r];
+        sum += gaussianBand(dist - ring.radius, invSigma) * ring.amp;
+      }
+      const alpha = clamp01(safeBaseAlpha + safeIntensity * sum);
+      const aIndex = Math.max(0, Math.min(steps - 1, Math.round(alpha * (steps - 1))));
+      line.push({ ch: dotChar, fg: rgbaTable[aIndex], bg: bgColor, bold: false });
+    }
+    lines.push(line);
+  }
+  return { lines, columns };
+}
+function createAsciiSonarSampler(frame, options = {}) {
+  const frequency = options.frequency ?? DEFAULTS.frequency;
+  const intensity = options.intensity ?? DEFAULTS.intensity;
+  const fps = options.fps ?? DEFAULTS.fps;
+  const fgColor = options.fgColor ?? DEFAULTS.fgColor;
+  const bgColor = options.bgColor ?? DEFAULTS.bgColor;
+  const dotChar = options.dotChar ?? DEFAULTS.dotChar;
+  const speed = options.speed ?? DEFAULTS.speed;
+  const bandWidth = options.bandWidth ?? DEFAULTS.bandWidth;
+  const decay = options.decay ?? DEFAULTS.decay;
+  const baseAlpha = options.baseAlpha ?? DEFAULTS.baseAlpha;
+  const alphaSteps = options.alphaSteps ?? DEFAULTS.alphaSteps;
+  const aspectY = options.aspectY ?? DEFAULTS.aspectY;
+  const maxRings = options.maxRings ?? DEFAULTS.maxRings;
+  const safeFps = fps > 0 ? fps : DEFAULTS.fps;
+  const safeFrequency = frequency > 0 ? frequency : DEFAULTS.frequency;
+  const safeSpeed = speed > 0 ? speed : DEFAULTS.speed;
+  const safeBandWidth = bandWidth > 0 ? bandWidth : DEFAULTS.bandWidth;
+  const safeDecay = decay >= 0 ? decay : DEFAULTS.decay;
+  const safeIntensity = Math.max(0, intensity);
+  const safeBaseAlpha = clamp01(baseAlpha);
+  const steps = Math.max(2, Math.floor(alphaSteps));
+  const ringCap = Math.max(1, Math.floor(maxRings));
+  const centerX = options.centerX ?? 0;
+  const centerY = options.centerY ?? 0;
+  const rgb = parseColorToRgb(fgColor, { r: 255, g: 255, b: 255 });
+  const rgbaTable = makeRgbaTable(rgb, steps);
+  const tSeconds = frame / safeFps;
+  const period = 1 / safeFrequency;
+  const kMax = Math.floor(tSeconds / period);
+  const rings = [];
+  for (let k = kMax; k >= 0 && rings.length < ringCap; k--) {
+    const age = tSeconds - k * period;
+    if (age < 0) continue;
+    const radius = age * safeSpeed;
+    const amp = Math.exp(-age * safeDecay);
+    rings.push({ radius, amp });
+  }
+  const invSigma = 1 / safeBandWidth;
+  return (x, y) => {
+    const dx = x - centerX;
+    const dy = (y - centerY) * aspectY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    let sum = 0;
+    for (let r = 0; r < rings.length; r++) {
+      const ring = rings[r];
+      sum += gaussianBand(dist - ring.radius, invSigma) * ring.amp;
+    }
+    const alpha = clamp01(safeBaseAlpha + safeIntensity * sum);
+    const aIndex = Math.max(0, Math.min(steps - 1, Math.round(alpha * (steps - 1))));
+    return { ch: dotChar, fg: rgbaTable[aIndex], bg: bgColor, bold: false };
+  };
+}
 export {
   ANSI_COLORS_RGB,
   AnsiArt,
@@ -6672,7 +4979,6 @@ export {
   AnsiVirtualDisplay,
   FontCharacterChart,
   PlasmaBackgroundLayout,
-  RipArt,
   clearFireState,
   clearFontCache,
   convertFrameDataToAnsi,
@@ -6680,11 +4986,13 @@ export {
   createAnsiFrameGenerator,
   createAsciiFireSampler,
   createAsciiPerlinPlasmaSampler,
+  createAsciiSonarSampler,
   detectAnimation,
   drawPerformanceOverlay,
   extractFontFromFON,
   generateAsciiFireFrame,
   generateAsciiPerlinPlasmaFrame,
+  generateAsciiSonarFrame,
   generateEvenlySpacedPalette,
   getPalette,
   getSauceInfo,
@@ -6692,12 +5000,10 @@ export {
   loadRawBitmapFont,
   parseAnsi,
   parseAscii,
-  parseRip,
   parseSauce,
   renderGlyph,
   renderText,
   rgbToAnsiColor,
-  rgbToPaletteColor,
-  ripToCanvas
+  rgbToPaletteColor
 };
 //# sourceMappingURL=index.js.map

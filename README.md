@@ -1,11 +1,10 @@
 # react-ansiart
 
-React components for rendering ANSI art files (.ANS, .ASC) and RIP vector graphics (.RIP), and creating animated virtual displays. Includes support for CP437 character encoding, cursor control codes, progressive animation playback, and procedural frame generation with Perlin noise effects.
+React components for rendering ANSI art files (.ANS, .ASC) and creating animated virtual displays. Includes support for CP437 character encoding, cursor control codes, progressive animation playback, and procedural frame generation with Perlin noise effects.
 
 ## Features
 
 - **ANSI Art Rendering**: Displays .ANS and .ASC files with proper cursor control code support
-- **RIP Vector Graphics**: Renders RIP (RIPscrip) vector graphics files, converting them to modern SVG format with full command support
 - **Flexible Rendering Modes**: Choose between `final` (complete render) or `animated` (progressive playback) modes
 - **Flexible Sizing**: Auto-detect dimensions or use fixed sizes with `columns` and `rows` props supporting `'auto'` values
 - **Virtual Display**: Create animated procedural displays using frame generation functions
@@ -17,7 +16,7 @@ React components for rendering ANSI art files (.ANS, .ASC) and RIP vector graphi
 - **Plasma Effect**: Default animated plasma generator using multi-octave Perlin noise
 - **Plasma Background Layout**: Full-page layout component with scrollable plasma background
 - **Font Character Chart**: Visualize and explore bitmap font characters
-- **Drag & Drop**: Drop .ans, .asc, or .rip files directly onto the component
+- **Drag & Drop**: Drop .ans or .asc files directly onto the component
 - **Performance Monitoring**: Optional performance overlay for debugging
 
 ## Installation
@@ -187,104 +186,6 @@ Different combinations of `columns` and `rows`:
 />
 ```
 
-## RIP Vector Graphics
-
-The `RipArt` component renders RIP (RIPscrip) vector graphics files, converting them to modern SVG format. RIP was a popular vector graphics format used on BBS systems in the 1990s.
-
-### Basic Example - Auto-Detected Size, Final Mode
-
-The simplest usage - displays complete RIP graphics with auto-detected dimensions:
-
-```tsx
-import { RipArt } from 'react-ansiart'
-
-function App() {
-	return <RipArt url='/rip/example.rip' mode='final' width='auto' height='auto' />
-}
-```
-
-### Fixed Size, Final Mode
-
-Display RIP graphics with fixed dimensions:
-
-```tsx
-import { RipArt } from 'react-ansiart'
-
-function App() {
-	return <RipArt url='/rip/art.rip' mode='final' width={640} height={350} background='#000000' />
-}
-```
-
-### Animated Playback with Overlay Controls
-
-Progressive animation with YouTube-style overlay controls:
-
-```tsx
-import { RipArt } from 'react-ansiart'
-
-function App() {
-	return (
-		<RipArt
-			url='/rip/animated.rip'
-			mode='animated'
-			width='auto'
-			height='auto'
-			showOverlayControls={true}
-			bytesPerSecond={960} // 9600 baud (960 bytes/sec)
-			fps={30}
-		/>
-	)
-}
-```
-
-### Auto-Detection Mode
-
-Automatically detect if the RIP file contains animation:
-
-```tsx
-import { RipArt } from 'react-ansiart'
-
-function App() {
-	return (
-		<RipArt
-			url='/rip/file.rip'
-			mode='auto' // Automatically detects animation
-			width='auto' // Auto-detect from viewport
-			height='auto' // Auto-detect from viewport
-			showOverlayControls={true}
-		/>
-	)
-}
-```
-
-### Drag and Drop
-
-Drop `.rip` files directly onto the component:
-
-```tsx
-import { RipArt } from 'react-ansiart'
-
-function App() {
-	return (
-		<RipArt
-			allowDrop={true} // Enable drag-and-drop (default)
-		/>
-	)
-}
-```
-
-### Custom Background
-
-Set a custom background color:
-
-```tsx
-import { RipArt } from 'react-ansiart'
-
-function App() {
-	return <RipArt url='/rip/art.rip' background='#1a1a1a' width={640} height={480} />
-}
-```
-
 ## Virtual Display
 
 The `AnsiVirtualDisplay` component creates an animated virtual display that generates frames using a callback function. It's perfect for creating procedural animations, demos, and effects rendered in ANSI style.
@@ -402,22 +303,6 @@ function App() {
 | `bytesPerSecond`         | `number`                | `960`        | Bytes per second for animation speed (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec                     |
 | `allowDrop`              | `boolean`               | `true`       | Enable drag-and-drop file loading                                                                                                        |
 | `debugCursorCodes`       | `boolean`               | `false`      | Log ANSI cursor control codes to console for debugging                                                                                   |
-
-### RipArt Props
-
-| Prop                     | Type                              | Default     | Description                                                                                                                        |
-| ------------------------ | --------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `url`                    | `string`                          | -           | URL or path to RIP file (optional if using drag-and-drop)                                                                          |
-| `mode`                   | `'animated' \| 'final' \| 'auto'` | `'auto'`    | Rendering mode: `'final'` displays complete art, `'animated'` shows progressive playback, `'auto'` detects animation automatically |
-| `width`                  | `number \| 'auto'`                | `'auto'`    | Canvas width in pixels or `'auto'` to detect from viewport                                                                         |
-| `height`                 | `number \| 'auto'`                | `'auto'`    | Canvas height in pixels or `'auto'` to detect from viewport                                                                        |
-| `background`             | `string`                          | `'#000000'` | Background color (any valid CSS color)                                                                                             |
-| `allowDrop`              | `boolean`                         | `true`      | Enable drag-and-drop file loading                                                                                                  |
-| `showOverlayControls`    | `boolean`                         | `false`     | Show YouTube-style overlay controls with seek, speed adjustment, and frame navigation (only for animated mode)                     |
-| `showPerformanceOverlay` | `boolean`                         | `false`     | Show performance metrics overlay for debugging                                                                                     |
-| `fps`                    | `number`                          | `30`        | Frames per second (only used in animated mode)                                                                                     |
-| `bytesPerSecond`         | `number`                          | `960`       | Bytes per second for animation speed (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec               |
-| `autoStart`              | `boolean`                         | `true`      | Start animation automatically on file load (only applies to animated mode)                                                         |
 
 ### AnsiVirtualDisplay Props
 

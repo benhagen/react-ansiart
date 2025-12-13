@@ -1,9 +1,6 @@
 export { AnsiArt } from './components/AnsiArt'
 export type { AnsiArtProps } from './components/AnsiArt'
 
-export { RipArt } from './components/RipArt'
-export type { RipArtProps } from './components/RipArt'
-
 export { AnsiVirtualDisplay } from './components/AnsiVirtualDisplay'
 export type { AnsiVirtualDisplayProps } from './components/AnsiVirtualDisplay'
 
@@ -35,20 +32,6 @@ export type { PaletteMode } from './utils/rgbToAnsi'
 
 export { detectAnimation, parseAnsi, parseAscii } from './ansi/parser'
 export type { CharacterEncoding } from './ansi/parser'
-export { parseRip } from './rip/parser'
-export { ripToCanvas } from './rip/toCanvas'
-export type {
-	AnyRipCommand,
-	Direction,
-	FillStyle,
-	FontStyle,
-	LineStyle,
-	Point,
-	Rectangle,
-	RipState,
-	Size,
-	WriteMode,
-} from './rip/types'
 export { getSauceInfo, parseSauce } from './utils/sauce'
 export type { SauceMetadata } from './utils/sauce'
 
@@ -62,6 +45,12 @@ export type {
 	AsciiPerlinPlasmaOptions,
 	OctaveConfig,
 } from './generators/asciiPerlinPlasmaGenerator'
+
+export {
+	createAsciiSonarSampler,
+	generateAsciiSonarFrame,
+} from './generators/asciiSonarFrameGenerator'
+export type { AsciiSonarOptions } from './generators/asciiSonarFrameGenerator'
 
 export {
 	clearFireState,
