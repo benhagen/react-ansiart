@@ -4972,6 +4972,509 @@ function createAsciiSonarSampler(frame, options = {}) {
     return { ch: dotChar, fg: rgbaTable[aIndex], bg: bgColor, bold: false };
   };
 }
+
+// src/utils/egaPalette.ts
+function toHex(component) {
+  return component.toString(16).padStart(2, "0").toUpperCase();
+}
+function egaRed(index) {
+  return 85 * (index >> 1 & 2 | index >> 5 & 1);
+}
+function egaGreen(index) {
+  return 85 * (index & 2 | index >> 4 & 1);
+}
+function egaBlue(index) {
+  return 85 * (index << 1 & 2 | index >> 3 & 1);
+}
+function egaIndexToColor(index) {
+  const red = egaRed(index);
+  const green = egaGreen(index);
+  const blue = egaBlue(index);
+  return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+var EGA_PALETTE_RGB = Array.from({ length: 64 }, (_, i) => egaIndexToColor(i));
+
+// src/generators/asciiDatamoshGenerator.ts
+var DEFAULTS2 = {
+  seed: 1337,
+  bgColor: "#000000",
+  keyframeIntervalFrames: 24,
+  blockOpsPerFrame: 10,
+  minBlockSize: 3,
+  maxBlockSize: 18,
+  maxShift: 12,
+  tearChance: 0.5,
+  paletteShiftChance: 0.65,
+  noiseFillChance: 0.35,
+  baseChars: " \u2591\u2592\u2593\u2588",
+  noiseChars: "\u2588\u2593\u2592\u2591\u2580\u2584\u25A0\u25A1\u25B2\u25BC\u25C6\u25C7\u2573#@$%&*+;:,. ",
+  wrap: true
+};
+function clampInt(v, min, max) {
+  if (!Number.isFinite(v)) return min;
+  const n = Math.floor(v);
+  return n < min ? min : n > max ? max : n;
+}
+function clamp012(v) {
+  if (!Number.isFinite(v)) return 0;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+function wrapIndex(v, size) {
+  const m = v % size;
+  return m < 0 ? m + size : m;
+}
+function hash2D(x, y, seed) {
+  let h = x * 2654435761 ^ y * 2246822507 ^ seed;
+  h ^= h >>> 16;
+  h = Math.imul(h, 2146121005);
+  h ^= h >>> 15;
+  h = Math.imul(h, 2221713035);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+function smoothstep(t) {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
+function makeRng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = Math.imul(state, 1664525) + 1013904223 >>> 0;
+    return state / 4294967295;
+  };
+}
+function createCellArrays(columns, rows, bgColor) {
+  const n = columns * rows;
+  return {
+    chars: new Array(n).fill(" "),
+    fg: new Array(n).fill("#FFFFFF"),
+    bg: bgColor,
+    bold: new Array(n).fill(false)
+  };
+}
+function fillKeyframeBase(frame, columns, rows, options, cells) {
+  const { seed, baseChars, bgColor } = options;
+  const ramp = Array.from(baseChars.length ? baseChars : DEFAULTS2.baseChars);
+  const rampLen = ramp.length;
+  cells.bg = bgColor;
+  const t = frame * 0.06;
+  let i = 0;
+  for (let y = 0; y < rows; y++) {
+    const yf = y / Math.max(1, rows - 1);
+    for (let x = 0; x < columns; x++) {
+      const xf = x / Math.max(1, columns - 1);
+      const h = hash2D(x, y, seed ^ 2882400001);
+      const grain = ((h & 1023) / 1023 - 0.5) * 0.18;
+      const bandA = Math.sin((xf * 9 + yf * 4) * Math.PI * 2 + t * 0.9);
+      const bandB = Math.sin((xf * 3 - yf * 7) * Math.PI * 2 - t * 0.6);
+      const bandC = Math.sin((xf * 2 + yf * 2) * Math.PI * 2 + t * 0.25);
+      const v = (bandA * 0.45 + bandB * 0.35 + bandC * 0.2) * 0.5 + 0.5 + grain;
+      const v01 = v < 0 ? 0 : v > 1 ? 1 : v;
+      const vSmooth = smoothstep(v01);
+      const chIndex = Math.min(rampLen - 1, Math.floor(vSmooth * (rampLen - 1e-3)));
+      const hueish = (xf * 0.35 + yf * 0.25 + t * 0.05 + (h >>> 10 & 255) / 255 * 0.15) % 1;
+      const idx = Math.min(63, Math.max(0, Math.floor(hueish * 64)));
+      cells.chars[i] = ramp[chIndex];
+      cells.fg[i] = EGA_PALETTE_RGB[idx];
+      cells.bold[i] = false;
+      i++;
+    }
+  }
+}
+function copyRect(src, dst, columns, rows, x0, y0, w, h, dx, dy, wrap) {
+  for (let by = 0; by < h; by++) {
+    const sy = y0 + by;
+    const dyRow = y0 + by + dy;
+    const srcY = wrap ? wrapIndex(sy, rows) : sy;
+    const dstY = wrap ? wrapIndex(dyRow, rows) : dyRow;
+    if (!wrap && (srcY < 0 || srcY >= rows || dstY < 0 || dstY >= rows)) continue;
+    for (let bx = 0; bx < w; bx++) {
+      const sx = x0 + bx;
+      const dxCol = x0 + bx + dx;
+      const srcX = wrap ? wrapIndex(sx, columns) : sx;
+      const dstX = wrap ? wrapIndex(dxCol, columns) : dxCol;
+      if (!wrap && (srcX < 0 || srcX >= columns || dstX < 0 || dstX >= columns)) continue;
+      const si = srcY * columns + srcX;
+      const di = dstY * columns + dstX;
+      dst.chars[di] = src.chars[si];
+      dst.fg[di] = src.fg[si];
+      dst.bold[di] = src.bold[si];
+    }
+  }
+}
+function horizontalTear(src, dst, columns, rows, y0, h, shift, wrap) {
+  for (let by = 0; by < h; by++) {
+    const y = y0 + by;
+    const yy = wrap ? wrapIndex(y, rows) : y;
+    if (!wrap && (yy < 0 || yy >= rows)) continue;
+    for (let x = 0; x < columns; x++) {
+      const sx = x;
+      const dx = x + shift;
+      const srcX = sx;
+      const dstX = wrap ? wrapIndex(dx, columns) : dx;
+      if (!wrap && (dstX < 0 || dstX >= columns)) continue;
+      const si = yy * columns + srcX;
+      const di = yy * columns + dstX;
+      dst.chars[di] = src.chars[si];
+      dst.fg[di] = src.fg[si];
+      dst.bold[di] = src.bold[si];
+    }
+  }
+}
+function noiseFillRect(dst, columns, rows, x0, y0, w, h, seed, frame, noiseChars, wrap) {
+  const chars = Array.from(noiseChars.length ? noiseChars : DEFAULTS2.noiseChars);
+  const cLen = chars.length;
+  for (let by = 0; by < h; by++) {
+    const y = y0 + by;
+    const yy = wrap ? wrapIndex(y, rows) : y;
+    if (!wrap && (yy < 0 || yy >= rows)) continue;
+    for (let bx = 0; bx < w; bx++) {
+      const x = x0 + bx;
+      const xx = wrap ? wrapIndex(x, columns) : x;
+      if (!wrap && (xx < 0 || xx >= columns)) continue;
+      const i = yy * columns + xx;
+      const h2 = hash2D(x, y, seed ^ frame * 2654435761);
+      const ch = chars[h2 % cLen];
+      const color = EGA_PALETTE_RGB[(h2 >>> 8) % 64];
+      dst.chars[i] = ch;
+      dst.fg[i] = color;
+      dst.bold[i] = (h2 >>> 14 & 1) === 1;
+    }
+  }
+}
+function paletteShiftRect(src, dst, columns, rows, x0, y0, w, h, shift, wrap) {
+  const egaIndexByColor = /* @__PURE__ */ new Map();
+  for (let i = 0; i < 64; i++) {
+    egaIndexByColor.set(EGA_PALETTE_RGB[i], i);
+  }
+  for (let by = 0; by < h; by++) {
+    const y = y0 + by;
+    const yy = wrap ? wrapIndex(y, rows) : y;
+    if (!wrap && (yy < 0 || yy >= rows)) continue;
+    for (let bx = 0; bx < w; bx++) {
+      const x = x0 + bx;
+      const xx = wrap ? wrapIndex(x, columns) : x;
+      if (!wrap && (xx < 0 || xx >= columns)) continue;
+      const i = yy * columns + xx;
+      const fg = src.fg[i];
+      const idx = egaIndexByColor.get(fg);
+      if (idx === void 0) {
+        dst.fg[i] = fg;
+        continue;
+      }
+      dst.fg[i] = EGA_PALETTE_RGB[wrapIndex(idx + shift, 64)];
+    }
+  }
+}
+var datamoshStateMap = /* @__PURE__ */ new Map();
+function getStateKey(columns, rows, options) {
+  return JSON.stringify({
+    columns,
+    rows,
+    seed: options.seed,
+    bgColor: options.bgColor,
+    keyframeIntervalFrames: options.keyframeIntervalFrames,
+    blockOpsPerFrame: options.blockOpsPerFrame,
+    minBlockSize: options.minBlockSize,
+    maxBlockSize: options.maxBlockSize,
+    maxShift: options.maxShift,
+    tearChance: options.tearChance,
+    paletteShiftChance: options.paletteShiftChance,
+    noiseFillChance: options.noiseFillChance,
+    baseChars: options.baseChars,
+    noiseChars: options.noiseChars,
+    wrap: options.wrap
+  });
+}
+function resolveOptions(options) {
+  return {
+    seed: Number.isFinite(options.seed) ? options.seed : DEFAULTS2.seed,
+    bgColor: (options.bgColor ?? DEFAULTS2.bgColor).toString(),
+    keyframeIntervalFrames: clampInt(
+      options.keyframeIntervalFrames ?? DEFAULTS2.keyframeIntervalFrames,
+      1,
+      600
+    ),
+    blockOpsPerFrame: clampInt(options.blockOpsPerFrame ?? DEFAULTS2.blockOpsPerFrame, 0, 200),
+    minBlockSize: clampInt(options.minBlockSize ?? DEFAULTS2.minBlockSize, 1, 200),
+    maxBlockSize: clampInt(options.maxBlockSize ?? DEFAULTS2.maxBlockSize, 1, 400),
+    maxShift: clampInt(options.maxShift ?? DEFAULTS2.maxShift, 0, 200),
+    tearChance: clamp012(options.tearChance ?? DEFAULTS2.tearChance),
+    paletteShiftChance: clamp012(options.paletteShiftChance ?? DEFAULTS2.paletteShiftChance),
+    noiseFillChance: clamp012(options.noiseFillChance ?? DEFAULTS2.noiseFillChance),
+    baseChars: (options.baseChars ?? DEFAULTS2.baseChars).toString(),
+    noiseChars: (options.noiseChars ?? DEFAULTS2.noiseChars).toString(),
+    wrap: options.wrap ?? DEFAULTS2.wrap
+  };
+}
+function advanceState(frame, columns, rows, opts, state) {
+  if (frame < state.lastFrame) {
+    state.lastFrame = -1;
+    state.lastKeyframe = -1;
+  }
+  const interval = Math.max(1, opts.keyframeIntervalFrames);
+  const shouldKeyframe = state.lastKeyframe < 0 || frame === 0 || frame % interval === 0;
+  if (frame <= state.lastFrame) return;
+  if (shouldKeyframe) {
+    fillKeyframeBase(
+      frame,
+      columns,
+      rows,
+      {
+        seed: opts.seed,
+        baseChars: opts.baseChars,
+        bgColor: opts.bgColor
+      },
+      state.cells
+    );
+    state.lastKeyframe = frame;
+    state.lastFrame = frame;
+    return;
+  }
+  const rng = makeRng((opts.seed ^ frame * 2654435761) >>> 0);
+  const minB = Math.min(opts.minBlockSize, opts.maxBlockSize);
+  const maxB = Math.max(opts.minBlockSize, opts.maxBlockSize);
+  const maxShift = opts.maxShift;
+  const wrap = opts.wrap;
+  const readCells = {
+    chars: state.cells.chars.slice(),
+    fg: state.cells.fg.slice(),
+    bg: state.cells.bg,
+    bold: state.cells.bold.slice()
+  };
+  const ops = opts.blockOpsPerFrame;
+  for (let op = 0; op < ops; op++) {
+    const w = clampInt(lerp(minB, maxB, rng()), 1, columns);
+    const h = clampInt(lerp(minB, maxB, rng()), 1, rows);
+    const x0 = clampInt(rng() * columns, 0, columns - 1);
+    const y0 = clampInt(rng() * rows, 0, rows - 1);
+    const dx = clampInt((rng() * 2 - 1) * maxShift, -maxShift, maxShift);
+    const dy = clampInt((rng() * 2 - 1) * maxShift, -maxShift, maxShift);
+    copyRect(readCells, state.cells, columns, rows, x0, y0, w, h, dx, dy, wrap);
+  }
+  if (rng() < opts.tearChance) {
+    const bandH = clampInt(lerp(1, Math.max(2, Math.floor(rows * 0.15)), rng()), 1, rows);
+    const y0 = clampInt(rng() * rows, 0, rows - 1);
+    const shift = clampInt((rng() * 2 - 1) * maxShift, -maxShift, maxShift);
+    const read2 = {
+      chars: state.cells.chars.slice(),
+      fg: state.cells.fg.slice(),
+      bg: state.cells.bg,
+      bold: state.cells.bold.slice()
+    };
+    horizontalTear(read2, state.cells, columns, rows, y0, bandH, shift, wrap);
+  }
+  if (rng() < opts.paletteShiftChance) {
+    const shifts = [3, 5, 7, 11, -3, -5, -7, -11];
+    const shift = shifts[clampInt(rng() * shifts.length, 0, shifts.length - 1)];
+    const w = clampInt(lerp(minB, maxB, rng()), 1, columns);
+    const h = clampInt(lerp(minB, maxB, rng()), 1, rows);
+    const x0 = clampInt(rng() * columns, 0, columns - 1);
+    const y0 = clampInt(rng() * rows, 0, rows - 1);
+    const read2 = {
+      chars: state.cells.chars.slice(),
+      fg: state.cells.fg.slice(),
+      bg: state.cells.bg,
+      bold: state.cells.bold.slice()
+    };
+    paletteShiftRect(read2, state.cells, columns, rows, x0, y0, w, h, shift, wrap);
+  }
+  if (rng() < opts.noiseFillChance) {
+    const w = clampInt(lerp(minB, maxB, rng()), 1, columns);
+    const h = clampInt(lerp(minB, maxB, rng()), 1, rows);
+    const x0 = clampInt(rng() * columns, 0, columns - 1);
+    const y0 = clampInt(rng() * rows, 0, rows - 1);
+    noiseFillRect(state.cells, columns, rows, x0, y0, w, h, opts.seed, frame, opts.noiseChars, wrap);
+  }
+  state.lastFrame = frame;
+}
+function generateAsciiDatamoshFrame(frame, columns, rows, options = {}) {
+  const opts = resolveOptions(options);
+  const stateKey = getStateKey(columns, rows, opts);
+  let state = datamoshStateMap.get(stateKey);
+  if (!state) {
+    state = {
+      cells: createCellArrays(columns, rows, opts.bgColor),
+      lastFrame: -1,
+      lastKeyframe: -1
+    };
+    datamoshStateMap.set(stateKey, state);
+  }
+  advanceState(frame, columns, rows, opts, state);
+  const lines = [];
+  let i = 0;
+  for (let y = 0; y < rows; y++) {
+    const line = [];
+    for (let x = 0; x < columns; x++) {
+      line.push({
+        ch: state.cells.chars[i],
+        fg: state.cells.fg[i],
+        bg: state.cells.bg,
+        bold: state.cells.bold[i]
+      });
+      i++;
+    }
+    lines.push(line);
+  }
+  return { lines, columns };
+}
+function createAsciiDatamoshSampler(frame, options = {}) {
+  const virtualColumns = clampInt(options.virtualColumns ?? 200, 1, 2e3);
+  const virtualRows = clampInt(options.virtualRows ?? 120, 1, 2e3);
+  const opts = resolveOptions(options);
+  const stateKey = getStateKey(virtualColumns, virtualRows, opts);
+  let state = datamoshStateMap.get(stateKey);
+  if (!state) {
+    state = {
+      cells: createCellArrays(virtualColumns, virtualRows, opts.bgColor),
+      lastFrame: -1,
+      lastKeyframe: -1
+    };
+    datamoshStateMap.set(stateKey, state);
+  }
+  advanceState(frame, virtualColumns, virtualRows, opts, state);
+  return (x, y) => {
+    const xx = wrapIndex(x, virtualColumns);
+    const yy = wrapIndex(y, virtualRows);
+    const i = yy * virtualColumns + xx;
+    return {
+      ch: state.cells.chars[i],
+      fg: state.cells.fg[i],
+      bg: state.cells.bg,
+      bold: state.cells.bold[i]
+    };
+  };
+}
+function clearDatamoshState() {
+  datamoshStateMap.clear();
+}
+
+// src/generators/asciiMetaballsGenerator.ts
+var DEFAULTS3 = {
+  seed: 1337,
+  fgColor: "#55FFFF",
+  bgColor: "#000000",
+  chars: Array.from(" .,:;+=xX$&#@"),
+  balls: 6,
+  speed: 0.085,
+  radiusMin: 2.5,
+  radiusMax: 9.5,
+  intensity: 0.55,
+  aspectY: 2
+};
+function clampInt2(v, min, max) {
+  if (!Number.isFinite(v)) return min;
+  const n = Math.floor(v);
+  return n < min ? min : n > max ? max : n;
+}
+function hash32(x) {
+  let h = x >>> 0;
+  h ^= h >>> 16;
+  h = Math.imul(h, 2146121005);
+  h ^= h >>> 15;
+  h = Math.imul(h, 2221713035);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+function rand01(seed, salt) {
+  return hash32(seed ^ salt) / 4294967295;
+}
+function lerp2(a, b, t) {
+  return a + (b - a) * t;
+}
+function buildBalls(columns, rows, options) {
+  const n = clampInt2(options.balls, 1, 48);
+  const balls = new Array(n);
+  const seed = options.seed;
+  for (let i = 0; i < n; i++) {
+    const s = i * 9973;
+    const baseX = rand01(seed, s + 11) * (columns - 1);
+    const baseY = rand01(seed, s + 23) * (rows - 1);
+    const orbitX = lerp2(columns * 0.06, columns * 0.35, rand01(seed, s + 31));
+    const orbitY = lerp2(rows * 0.06, rows * 0.35, rand01(seed, s + 37));
+    const phase = rand01(seed, s + 41) * Math.PI * 2;
+    const freq = lerp2(0.6, 1.8, rand01(seed, s + 53));
+    const radius = lerp2(options.radiusMin, options.radiusMax, rand01(seed, s + 59));
+    balls[i] = { baseX, baseY, orbitX, orbitY, phase, freq, radius };
+  }
+  return balls;
+}
+function resolveOptions2(options) {
+  return {
+    seed: Number.isFinite(options.seed) ? options.seed : DEFAULTS3.seed,
+    fgColor: (options.fgColor ?? DEFAULTS3.fgColor).toString(),
+    bgColor: (options.bgColor ?? DEFAULTS3.bgColor).toString(),
+    chars: options.chars?.length ? options.chars : DEFAULTS3.chars,
+    balls: clampInt2(options.balls ?? DEFAULTS3.balls, 1, 48),
+    speed: Number.isFinite(options.speed) ? options.speed : DEFAULTS3.speed,
+    radiusMin: Number.isFinite(options.radiusMin) ? options.radiusMin : DEFAULTS3.radiusMin,
+    radiusMax: Number.isFinite(options.radiusMax) ? options.radiusMax : DEFAULTS3.radiusMax,
+    intensity: Number.isFinite(options.intensity) ? options.intensity : DEFAULTS3.intensity,
+    aspectY: Number.isFinite(options.aspectY) ? options.aspectY : DEFAULTS3.aspectY
+  };
+}
+function computeCell(x, y, time, columns, rows, options, balls, charLookup) {
+  const aspectY = options.aspectY > 0 ? options.aspectY : DEFAULTS3.aspectY;
+  let field = 0;
+  const eps = 0.65;
+  for (let i = 0; i < balls.length; i++) {
+    const b = balls[i];
+    const bx = b.baseX + Math.cos(time * b.freq + b.phase) * b.orbitX;
+    const by = b.baseY + Math.sin(time * (b.freq * 0.9) + b.phase) * b.orbitY;
+    const dx = x - bx;
+    const dy = (y - by) * aspectY;
+    const d2 = dx * dx + dy * dy + eps;
+    field += b.radius * b.radius / d2;
+  }
+  const k = options.intensity >= 0 ? options.intensity : DEFAULTS3.intensity;
+  const v01 = 1 - Math.exp(-k * field);
+  const idx = clampInt2(v01 * 255, 0, 255);
+  const ch = charLookup[idx];
+  const fg = options.fgColor;
+  if (idx < 10) {
+    return { ch: " ", fg, bg: options.bgColor, bold: false };
+  }
+  return { ch, fg, bg: options.bgColor, bold: false };
+}
+function generateAsciiMetaballsFrame(frame, columns, rows, options = {}) {
+  const opts = resolveOptions2(options);
+  const time = frame * opts.speed;
+  const balls = buildBalls(columns, rows, opts);
+  const chars = opts.chars.length ? opts.chars : DEFAULTS3.chars;
+  const charLookup = new Array(256);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    charLookup[i] = chars[Math.floor(t * (chars.length - 1e-3))];
+  }
+  const lines = [];
+  for (let y = 0; y < rows; y++) {
+    const line = [];
+    for (let x = 0; x < columns; x++) {
+      line.push(computeCell(x, y, time, columns, rows, opts, balls, charLookup));
+    }
+    lines.push(line);
+  }
+  return { lines, columns };
+}
+function createAsciiMetaballsSampler(frame, options = {}) {
+  const opts = resolveOptions2(options);
+  const time = frame * opts.speed;
+  const virtualColumns = 200;
+  const virtualRows = 120;
+  const balls = buildBalls(virtualColumns, virtualRows, opts);
+  const chars = opts.chars.length ? opts.chars : DEFAULTS3.chars;
+  const charLookup = new Array(256);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    charLookup[i] = chars[Math.floor(t * (chars.length - 1e-3))];
+  }
+  return (x, y) => {
+    return computeCell(x, y, time, virtualColumns, virtualRows, opts, balls, charLookup);
+  };
+}
 export {
   ANSI_COLORS_RGB,
   AnsiArt,
@@ -4979,18 +5482,23 @@ export {
   AnsiVirtualDisplay,
   FontCharacterChart,
   PlasmaBackgroundLayout,
+  clearDatamoshState,
   clearFireState,
   clearFontCache,
   convertFrameDataToAnsi,
   createAnsiArtFrameGenerator,
   createAnsiFrameGenerator,
+  createAsciiDatamoshSampler,
   createAsciiFireSampler,
+  createAsciiMetaballsSampler,
   createAsciiPerlinPlasmaSampler,
   createAsciiSonarSampler,
   detectAnimation,
   drawPerformanceOverlay,
   extractFontFromFON,
+  generateAsciiDatamoshFrame,
   generateAsciiFireFrame,
+  generateAsciiMetaballsFrame,
   generateAsciiPerlinPlasmaFrame,
   generateAsciiSonarFrame,
   generateEvenlySpacedPalette,

@@ -1,7 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { RipArt } from 'react-ansiart'
+import { AnsiArt } from 'react-ansiart'
+
+const FONT_URL = '/ansi/fonts/Bm437_IBM_VGA_8x16.FON'
 
 export default function RipPage() {
 	const [mode, setMode] = useState<'auto' | 'final' | 'animated'>('auto')
@@ -11,6 +13,7 @@ export default function RipPage() {
 	const [fps, setFps] = useState(30)
 
 	const url = '/rip/DG-NEO1.RIP'
+	const effectiveMode = mode === 'auto' ? 'final' : mode
 
 	return (
 		<div>
@@ -26,7 +29,11 @@ export default function RipPage() {
 				<div className='row'>
 					<label className='muted'>
 						Mode:{' '}
-						<select value={mode} onChange={e => setMode(e.target.value as any)} style={{ marginLeft: 8 }}>
+						<select
+							value={mode}
+							onChange={e => setMode(e.target.value as any)}
+							style={{ marginLeft: 8 }}
+						>
 							<option value='auto'>auto</option>
 							<option value='final'>final</option>
 							<option value='animated'>animated</option>
@@ -73,11 +80,12 @@ export default function RipPage() {
 
 			<div className='panel'>
 				<h3 style={{ marginTop: 0 }}>Render</h3>
-				<RipArt
-					url={url}
-					mode={mode}
-					width='auto'
-					height='auto'
+				<AnsiArt
+					src={url}
+					mode={effectiveMode}
+					columns='auto'
+					rows='auto'
+					bitmapFontUrl={FONT_URL}
 					showOverlayControls={showOverlayControls}
 					showPerformanceOverlay={showPerformanceOverlay}
 					bytesPerSecond={bytesPerSecond}
@@ -88,5 +96,3 @@ export default function RipPage() {
 		</div>
 	)
 }
-
-

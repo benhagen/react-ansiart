@@ -60,6 +60,19 @@ export {
 export type { AsciiFireOptions } from './generators/asciiFireGenerator'
 
 export {
+	clearDatamoshState,
+	createAsciiDatamoshSampler,
+	generateAsciiDatamoshFrame,
+} from './generators/asciiDatamoshGenerator'
+export type { AsciiDatamoshOptions } from './generators/asciiDatamoshGenerator'
+
+export {
+	createAsciiMetaballsSampler,
+	generateAsciiMetaballsFrame,
+} from './generators/asciiMetaballsGenerator'
+export type { AsciiMetaballsOptions } from './generators/asciiMetaballsGenerator'
+
+export {
 	createAnsiArtFrameGenerator,
 	createAnsiFrameGenerator,
 } from './generators/ansiFrameGenerator'

@@ -55,3 +55,6 @@ npm link
 cd /Users/benhagen/syncthing/development/react-ansiart/demo
 npm link react-ansiart
 ```
+
+
+
