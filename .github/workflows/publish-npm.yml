@@ -1,38 +1,38 @@
 name: Build and publish to GitHub Packages
 
 on:
-	push:
-		tags:
-			- 'v*'
+  push:
+    tags:
+      - 'v*'
 
 permissions:
-	contents: read
-	packages: write
+  contents: read
+  packages: write
 
 jobs:
-	publish:
-		runs-on: ubuntu-latest
-		steps:
-			- name: Checkout
-				uses: actions/checkout@v4
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-			- name: Setup Node.js
-				uses: actions/setup-node@v4
-				with:
-					node-version: '20'
-					registry-url: 'https://npm.pkg.github.com'
-					scope: '@${{ github.repository_owner }}'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@${{ github.repository_owner }}'
 
-			- name: Install dependencies
-				run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-			- name: Build
-				run: npm run build
+      - name: Build
+        run: npm run build
 
-			- name: Set scoped package name for GitHub Packages
-				run: npm pkg set name="@${{ github.repository_owner }}/react-ansiart"
+      - name: Set scoped package name for GitHub Packages
+        run: npm pkg set name="@${{ github.repository_owner }}/react-ansiart"
 
-			- name: Publish to GitHub Packages
-				run: npm publish --access restricted
-				env:
-					NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish to GitHub Packages
+        run: npm publish --access restricted
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
