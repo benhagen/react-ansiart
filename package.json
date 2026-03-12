@@ -9,6 +9,30 @@
 		".": {
 			"import": "./dist/index.js",
 			"types": "./dist/index.d.ts"
+		},
+		"./components/*": {
+			"import": "./dist/components/*.js",
+			"types": "./dist/components/*.d.ts"
+		},
+		"./generators/*": {
+			"import": "./dist/generators/*.js",
+			"types": "./dist/generators/*.d.ts"
+		},
+		"./ansi/*": {
+			"import": "./dist/ansi/*.js",
+			"types": "./dist/ansi/*.d.ts"
+		},
+		"./font/*": {
+			"import": "./dist/font/*.js",
+			"types": "./dist/font/*.d.ts"
+		},
+		"./utils/*": {
+			"import": "./dist/utils/*.js",
+			"types": "./dist/utils/*.d.ts"
+		},
+		"./types/*": {
+			"import": "./dist/types/*.js",
+			"types": "./dist/types/*.d.ts"
 		}
 	},
 	"files": [
@@ -18,7 +42,8 @@
 	"scripts": {
 		"build": "tsup",
 		"dev": "tsup --watch",
-		"demo:dev": "concurrently -k -n lib,demo -c blue,green \"npm run dev\" \"npm --prefix demo run dev\""
+		"demo:dev": "concurrently -k -n lib,demo -c blue,green \"npm run dev\" \"npm --prefix demo run dev\"",
+		"lint": "eslint src/"
 	},
 	"keywords": [
 		"react",
@@ -40,7 +65,11 @@
 	"devDependencies": {
 		"@types/react": "^18.2.0",
 		"concurrently": "^9.1.0",
+		"eslint": "^9.39.4",
+		"eslint-plugin-react": "^7.37.5",
+		"eslint-plugin-react-hooks": "^7.0.1",
 		"tsup": "^8.0.0",
-		"typescript": "^5.0.0"
+		"typescript": "^5.0.0",
+		"typescript-eslint": "^8.57.0"
 	}
 }

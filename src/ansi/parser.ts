@@ -9,9 +9,11 @@ import {
 	COMMENT_SIZE,
 	type SauceMetadata,
 } from '../utils/sauce'
+import type { AnsiCell, AnsiScreen } from './types'
 
-// Re-export for backward compatibility
+// Re-export types for backward compatibility
 export type { SauceMetadata }
+export type { AnsiCell, AnsiScreen }
 export { parseSauce, getSauceInfo }
 
 // ============================================================================
@@ -22,32 +24,6 @@ export { parseSauce, getSauceInfo }
  * Character encoding options for ANSI file parsing
  */
 export type CharacterEncoding = 'cp437' | 'cp850' | 'cp1252' | 'iso-8859-1' | 'utf-8'
-
-/**
- * Represents a single character cell in an ANSI screen
- */
-export type AnsiCell = {
-	/** Character to display */
-	ch: string
-	/** Foreground color: ANSI color index (0-15) or CSS color string (e.g., "rgb(255, 0, 0)") */
-	fg: number | string
-	/** Background color: ANSI color index (0-15) or CSS color string (e.g., "rgb(0, 0, 0)") */
-	bg: number | string
-	/** Whether the character is bold */
-	bold: boolean
-}
-
-/**
- * Complete ANSI screen representation
- */
-export type AnsiScreen = {
-	/** Two-dimensional array of character cells: lines[row][column] */
-	lines: AnsiCell[][]
-	/** Number of columns (character width) */
-	columns: number
-	/** Optional SAUCE metadata if present in the file */
-	sauce?: SauceMetadata
-}
 
 
 /**
@@ -635,42 +611,33 @@ function handleEraseDisplay(ctx: CsiHandlerContext) {
 	}
 }
 
+function getLineWidth(ctx: CsiHandlerContext): number {
+	if (ctx.state.isDynamic) {
+		return ctx.state.maxCol !== undefined
+			? Math.max(ctx.state.maxCol + 1, DEFAULT_COLUMNS)
+			: DEFAULT_COLUMNS
+	}
+	return ctx.columns
+}
+
 function handleScrollUp(ctx: CsiHandlerContext) {
-	// Scroll up - shift screen up
 	const n = Math.max(1, ctx.get(0, 1))
+	const colWidth = getLineWidth(ctx)
 	for (let scroll = 0; scroll < n; scroll++) {
 		if (ctx.state.lines.length > 0) {
-			ctx.state.lines.shift() // Remove first line
-			// Add new empty line at bottom
-			if (ctx.state.isDynamic) {
-				const colWidth =
-					ctx.state.maxCol !== undefined
-						? Math.max(ctx.state.maxCol + 1, DEFAULT_COLUMNS)
-						: DEFAULT_COLUMNS
-				ctx.state.lines.push(createEmptyLine(colWidth))
-			} else {
-				ctx.state.lines.push(createEmptyLine(ctx.columns))
-			}
+			ctx.state.lines.shift()
+			ctx.state.lines.push(createEmptyLine(colWidth))
 		}
 	}
 }
 
 function handleScrollDown(ctx: CsiHandlerContext) {
-	// Scroll down - shift screen down
 	const n = Math.max(1, ctx.get(0, 1))
+	const colWidth = getLineWidth(ctx)
 	for (let scroll = 0; scroll < n; scroll++) {
 		if (ctx.state.lines.length > 0) {
-			ctx.state.lines.pop() // Remove last line
-			// Add new empty line at top
-			if (ctx.state.isDynamic) {
-				const colWidth =
-					ctx.state.maxCol !== undefined
-						? Math.max(ctx.state.maxCol + 1, DEFAULT_COLUMNS)
-						: DEFAULT_COLUMNS
-				ctx.state.lines.unshift(createEmptyLine(colWidth))
-			} else {
-				ctx.state.lines.unshift(createEmptyLine(ctx.columns))
-			}
+			ctx.state.lines.pop()
+			ctx.state.lines.unshift(createEmptyLine(colWidth))
 		}
 	}
 }

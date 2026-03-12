@@ -1,4 +1,4 @@
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 import { EGA_PALETTE_RGB } from '../utils/egaPalette'
 
 export interface AsciiDatamoshOptions {
@@ -311,6 +311,7 @@ function paletteShiftRect(
 
 type DatamoshState = {
 	cells: CellArrays
+	readCells: CellArrays | null // Pre-allocated read buffer for double-buffering
 	lastFrame: number
 	lastKeyframe: number
 }
@@ -364,6 +365,15 @@ function resolveOptions(options: AsciiDatamoshOptions): Required<AsciiDatamoshOp
 	}
 }
 
+function snapshotCells(cells: CellArrays): CellArrays {
+	return {
+		chars: cells.chars.slice(),
+		fg: cells.fg.slice(),
+		bg: cells.bg,
+		bold: cells.bold.slice(),
+	}
+}
+
 function advanceState(
 	frame: number,
 	columns: number,
@@ -409,13 +419,20 @@ function advanceState(
 	const maxShift = opts.maxShift
 	const wrap = opts.wrap
 
-	// Read snapshot for this frame’s ops.
-	const readCells: CellArrays = {
-		chars: state.cells.chars.slice(),
-		fg: state.cells.fg.slice(),
-		bg: state.cells.bg,
-		bold: state.cells.bold.slice(),
+	// Reuse pre-allocated read buffer instead of allocating new arrays each frame
+	if (!state.readCells) {
+		state.readCells = snapshotCells(state.cells)
+	} else {
+		// Copy into existing arrays
+		const n = state.cells.chars.length
+		for (let i = 0; i < n; i++) {
+			state.readCells.chars[i] = state.cells.chars[i]
+			state.readCells.fg[i] = state.cells.fg[i]
+			state.readCells.bold[i] = state.cells.bold[i]
+		}
+		state.readCells.bg = state.cells.bg
 	}
+	const readCells = state.readCells
 
 	const ops = opts.blockOpsPerFrame
 	for (let op = 0; op < ops; op++) {
@@ -431,21 +448,22 @@ function advanceState(
 		copyRect(readCells, state.cells, columns, rows, x0, y0, w, h, dx, dy, wrap)
 	}
 
-	// Horizontal tearing (scanline band shift)
+	// Horizontal tearing (scanline band shift) — reuse readCells buffer
 	if (rng() < opts.tearChance) {
 		const bandH = clampInt(lerp(1, Math.max(2, Math.floor(rows * 0.15)), rng()), 1, rows)
 		const y0 = clampInt(rng() * rows, 0, rows - 1)
 		const shift = clampInt((rng() * 2 - 1) * maxShift, -maxShift, maxShift)
-		const read2: CellArrays = {
-			chars: state.cells.chars.slice(),
-			fg: state.cells.fg.slice(),
-			bg: state.cells.bg,
-			bold: state.cells.bold.slice(),
+		// Refresh readCells with current state before tear
+		const n = state.cells.chars.length
+		for (let i = 0; i < n; i++) {
+			readCells.chars[i] = state.cells.chars[i]
+			readCells.fg[i] = state.cells.fg[i]
+			readCells.bold[i] = state.cells.bold[i]
 		}
-		horizontalTear(read2, state.cells, columns, rows, y0, bandH, shift, wrap)
+		horizontalTear(readCells, state.cells, columns, rows, y0, bandH, shift, wrap)
 	}
 
-	// Palette shift blocks
+	// Palette shift blocks — reuse readCells buffer
 	if (rng() < opts.paletteShiftChance) {
 		const shifts = [3, 5, 7, 11, -3, -5, -7, -11]
 		const shift = shifts[clampInt(rng() * shifts.length, 0, shifts.length - 1)]
@@ -453,13 +471,14 @@ function advanceState(
 		const h = clampInt(lerp(minB, maxB, rng()), 1, rows)
 		const x0 = clampInt(rng() * columns, 0, columns - 1)
 		const y0 = clampInt(rng() * rows, 0, rows - 1)
-		const read2: CellArrays = {
-			chars: state.cells.chars.slice(),
-			fg: state.cells.fg.slice(),
-			bg: state.cells.bg,
-			bold: state.cells.bold.slice(),
+		// Refresh readCells with current state before palette shift
+		const n2 = state.cells.chars.length
+		for (let i = 0; i < n2; i++) {
+			readCells.chars[i] = state.cells.chars[i]
+			readCells.fg[i] = state.cells.fg[i]
+			readCells.bold[i] = state.cells.bold[i]
 		}
-		paletteShiftRect(read2, state.cells, columns, rows, x0, y0, w, h, shift, wrap)
+		paletteShiftRect(readCells, state.cells, columns, rows, x0, y0, w, h, shift, wrap)
 	}
 
 	// Noise fill blocks
@@ -487,6 +506,7 @@ export function generateAsciiDatamoshFrame(
 	if (!state) {
 		state = {
 			cells: createCellArrays(columns, rows, opts.bgColor),
+			readCells: null,
 			lastFrame: -1,
 			lastKeyframe: -1,
 		}
@@ -536,6 +556,7 @@ export function createAsciiDatamoshSampler(
 	if (!state) {
 		state = {
 			cells: createCellArrays(virtualColumns, virtualRows, opts.bgColor),
+			readCells: null,
 			lastFrame: -1,
 			lastKeyframe: -1,
 		}

@@ -1,42 +1,51 @@
+'use client'
+
 import Link from 'next/link'
+import { PlasmaBackgroundLayout } from 'react-ansiart'
+
+const DEMO_LINKS = [
+	{
+		href: '/ansi-art',
+		title: 'ANSI Art',
+		desc: 'Load and animate .ANS files with authentic VGA rendering',
+	},
+	{
+		href: '/generators',
+		title: 'Generators',
+		desc: 'Procedural plasma, fire, sonar, datamosh, and metaballs',
+	},
+	{
+		href: '/backgrounds',
+		title: 'Backgrounds',
+		desc: 'Full-page animated PlasmaBackgroundLayout',
+	},
+	{
+		href: '/font-chart',
+		title: 'Font Chart',
+		desc: 'CP437 bitmap font character grid',
+	},
+]
 
 export default function HomePage() {
 	return (
-		<div>
-			<div className='panel'>
-				<h2 style={{ marginTop: 0 }}>Welcome</h2>
-				<p className='muted' style={{ marginBottom: 0 }}>
-					This Next.js app is a small playground to demo and debug <code>react-ansiart</code>.
-				</p>
+		<PlasmaBackgroundLayout mode="fixed" fps={24}>
+			<div className="hero-wrapper">
+				<div className="hero-card">
+					<h1 className="hero-title">react-ansiart</h1>
+					<p className="hero-subtitle">
+						React components for rendering ANSI art with authentic VGA bitmap fonts,
+						procedural generators, and smooth animation.
+					</p>
+					<div className="hero-grid">
+						{DEMO_LINKS.map((link) => (
+							<Link key={link.href} href={link.href} className="hero-link">
+								<div className="hero-link-title">{link.title}</div>
+								<div className="hero-link-desc">{link.desc}</div>
+							</Link>
+						))}
+					</div>
+				</div>
 			</div>
-
-			<div className='panel'>
-				<h3 style={{ marginTop: 0 }}>Demos</h3>
-				<ul style={{ margin: 0, paddingLeft: 18 }}>
-					<li>
-						<Link href='/ansi'>ANSI Art</Link> (final / animated / overlays)
-					</li>
-					<li>
-						<Link href='/virtual-display'>Virtual Display</Link> (procedural generator)
-					</li>
-				</ul>
-			</div>
-
-			<div className='panel'>
-				<h3 style={{ marginTop: 0 }}>Quick notes</h3>
-				<ul style={{ margin: 0, paddingLeft: 18 }}>
-					<li>
-						ANSI files live in <code>demo/public/ansi</code> and are fetched by URL (e.g.{' '}
-						<code>/ansi/example.ans</code>).
-					</li>
-					<li>
-						The bitmap font is fetched from <code>/ansi/fonts/Bm437_IBM_VGA_8x16.FON</code>.
-					</li>
-				</ul>
-			</div>
-		</div>
+		</PlasmaBackgroundLayout>
 	)
 }
-
-
-

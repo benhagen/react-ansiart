@@ -1,7 +1,7 @@
-import { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 import { charToCp437Byte } from '../utils/cp437'
 import { BitmapFont, renderGlyph } from '../font/bitmapFont'
-import type { CharacterFrameGenerator, DisplayFrameGenerator, PixelFrameGenerator } from '../types/types'
+import type { CharacterFrameGenerator, CharacterFrameGeneratorWithMetadata, DisplayFrameGenerator, GeneratorCapabilities, PixelFrameGenerator } from '../types/types'
 import { drawPerformanceOverlay, type PerformanceStats } from '../utils/performanceOverlay'
 
 const DOS_COLORS: Record<number, string> = {
@@ -73,6 +73,10 @@ export class AnsiVirtualDisplayEngine {
 	private offscreenCanvas: HTMLCanvasElement | null = null
 	private offscreenCtx: CanvasRenderingContext2D | null = null
 	private lastRenderedViewY: number = -1
+	// Dirty-cell tracking: store previous frame's cell state to skip unchanged cells
+	private previousCells: Array<{ ch: string; fg: number | string; bg: number | string; bold: boolean }> | null = null
+	private previousCellsCols: number = 0
+	private previousCellsRows: number = 0
 
 	constructor(canvas: HTMLCanvasElement, config: DisplayConfigWithInitialState) {
 		this.canvas = canvas
@@ -93,12 +97,10 @@ export class AnsiVirtualDisplayEngine {
 		if (this.isPlaying) return
 		this.isPlaying = true
 		// Clear manual byte position when resuming playback so time-based progression works
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.clearManualBytePosition === 'function') {
-			// Sync frame counter before clearing manual position
-			this._syncFrameToBytePosition(generator)
-			generator.clearManualBytePosition()
-			// Immediately render the current frame to show the correct position
+		const gen = this._getGeneratorMetadata()
+		if (gen?.clearManualBytePosition) {
+			this._syncFrameToBytePosition(gen)
+			gen.clearManualBytePosition()
 			this._generateAndRender()
 		}
 		this._startAnimation()
@@ -114,10 +116,7 @@ export class AnsiVirtualDisplayEngine {
 		this.currentFrame = 0
 		this.isPlaying = true
 		// Clear manual byte position when restarting
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.clearManualBytePosition === 'function') {
-			generator.clearManualBytePosition()
-		}
+		this._getGeneratorMetadata()?.clearManualBytePosition?.()
 		this._generateAndRender()
 		if (this.isPlaying) {
 			this._startAnimation()
@@ -174,15 +173,15 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	getCurrentBytePosition(): number {
+		const gen = this._getGeneratorMetadata()
 		// First try to get byte position from generator (for manual stepping)
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.getCurrentBytePosition === 'function') {
-			return generator.getCurrentBytePosition()
+		if (gen?.getCurrentBytePosition) {
+			return gen.getCurrentBytePosition()
 		}
 
 		// Fall back to calculating from elapsed time and speed
-		if (generator && typeof generator.getCurrentSpeed === 'function') {
-			const bytesPerSecond = generator.getCurrentSpeed()
+		if (gen?.getCurrentSpeed) {
+			const bytesPerSecond = gen.getCurrentSpeed()
 			const elapsedSeconds = this.currentFrame / this.config.fps
 			const totalBytes = this.getTotalBytes()
 			return Math.min(Math.floor(elapsedSeconds * bytesPerSecond), totalBytes)
@@ -191,22 +190,17 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	getTotalBytes(): number {
-		const generator = this.config.frameGenerator as any
-		if (
-			generator &&
-			generator.capabilities &&
-			typeof generator.capabilities.getTotalBytes === 'function'
-		) {
-			return generator.capabilities.getTotalBytes()
+		const gen = this._getGeneratorMetadata()
+		if (gen?.capabilities?.getTotalBytes) {
+			return gen.capabilities.getTotalBytes()
 		}
 		return 0
 	}
 
 	seekToBytePosition(bytePosition: number): void {
-		// Convert byte position to frame number based on current speed
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.getCurrentSpeed === 'function') {
-			const bytesPerSecond = generator.getCurrentSpeed()
+		const gen = this._getGeneratorMetadata()
+		if (gen?.getCurrentSpeed) {
+			const bytesPerSecond = gen.getCurrentSpeed()
 			if (bytesPerSecond > 0) {
 				const targetSeconds = bytePosition / bytesPerSecond
 				const targetFrame = Math.floor(targetSeconds * this.config.fps)
@@ -230,40 +224,31 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	setSpeed(bytesPerSecond: number): void {
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.setSpeed === 'function') {
-			generator.setSpeed(bytesPerSecond)
-		}
+		this._getGeneratorMetadata()?.setSpeed?.(bytesPerSecond)
 	}
 
 	advanceByte(): void {
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.advanceByte === 'function') {
-			generator.advanceByte()
-			// Update the frame counter to match the new byte position
-			this._syncFrameToBytePosition(generator)
+		const gen = this._getGeneratorMetadata()
+		if (gen?.advanceByte) {
+			gen.advanceByte()
+			this._syncFrameToBytePosition(gen)
 			this._generateAndRender()
 		}
 	}
 
 	rewindByte(): void {
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.rewindByte === 'function') {
-			generator.rewindByte()
-			// Update the frame counter to match the new byte position
-			this._syncFrameToBytePosition(generator)
+		const gen = this._getGeneratorMetadata()
+		if (gen?.rewindByte) {
+			gen.rewindByte()
+			this._syncFrameToBytePosition(gen)
 			this._generateAndRender()
 		}
 	}
 
 	getMaxFrames(): number {
-		const generator = this.config.frameGenerator as any
-		if (
-			generator &&
-			generator.capabilities &&
-			typeof generator.capabilities.getTotalFrames === 'function'
-		) {
-			return generator.capabilities.getTotalFrames()
+		const gen = this._getGeneratorMetadata()
+		if (gen?.capabilities?.getTotalFrames) {
+			return gen.capabilities.getTotalFrames()
 		}
 		return 0
 	}
@@ -278,16 +263,23 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	getCurrentBytesPerSecond(): number {
-		const generator = this.config.frameGenerator as any
-		if (generator && typeof generator.getCurrentSpeed === 'function') {
-			return generator.getCurrentSpeed()
+		const gen = this._getGeneratorMetadata()
+		if (gen?.getCurrentSpeed) {
+			return gen.getCurrentSpeed()
 		}
 		return 0
 	}
 
-	getGeneratorCapabilities(): any {
-		const generator = this.config.frameGenerator as any
-		return generator?.capabilities || null
+	getGeneratorCapabilities(): GeneratorCapabilities | null {
+		return this._getGeneratorMetadata()?.capabilities ?? null
+	}
+
+	private _getGeneratorMetadata(): CharacterFrameGeneratorWithMetadata | null {
+		const generator = this.config.frameGenerator
+		if (typeof generator === 'function') {
+			return generator as CharacterFrameGeneratorWithMetadata
+		}
+		return null
 	}
 
 	private _startAnimation(): void {
@@ -303,15 +295,11 @@ export class AnsiVirtualDisplayEngine {
 		}
 	}
 
-	private _syncFrameToBytePosition(generator: any): void {
+	private _syncFrameToBytePosition(gen: CharacterFrameGeneratorWithMetadata): void {
 		// Sync the engine's frame counter to match the generator's current byte position
-		if (
-			generator &&
-			typeof generator.getCurrentBytePosition === 'function' &&
-			typeof generator.getCurrentSpeed === 'function'
-		) {
-			const currentBytePos = generator.getCurrentBytePosition()
-			const bytesPerSecond = generator.getCurrentSpeed()
+		if (gen.getCurrentBytePosition && gen.getCurrentSpeed) {
+			const currentBytePos = gen.getCurrentBytePosition()
+			const bytesPerSecond = gen.getCurrentSpeed()
 			if (bytesPerSecond > 0) {
 				this.currentFrame = Math.floor((currentBytePos / bytesPerSecond) * this.config.fps)
 			}
@@ -364,9 +352,8 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	private _isFinalMode(): boolean {
-		// Final mode generators have capabilities.supportsSeek === false
-		const generator = this.config.frameGenerator as any
-		return generator && generator.capabilities && generator.capabilities.supportsSeek === false
+		const gen = this._getGeneratorMetadata()
+		return gen?.capabilities?.supportsSeek === false
 	}
 
 	private _generateAndRender(): void {
@@ -427,6 +414,9 @@ export class AnsiVirtualDisplayEngine {
 		this.canvas.height = Math.max(1, Math.floor(cssHeight * dpr))
 		this.canvas.style.width = `${cssWidth}px`
 		this.canvas.style.height = `${cssHeight}px`
+
+		// Invalidate dirty-cell tracking on resize
+		this.previousCells = null
 	}
 
 	private _render(): void {
@@ -465,16 +455,49 @@ export class AnsiVirtualDisplayEngine {
 			})!
 		}
 
-		// Render to offscreen canvas (happens whenever screen changes from _generateAndRender)
+		// Render to offscreen canvas with dirty-cell tracking
 		const offCtx = this.offscreenCtx!
-		offCtx.fillStyle = this.config.background
-		offCtx.fillRect(0, 0, cssWidth, bufferedHeight)
+		const totalCells = screenRows * screenCols
+		const prev = this.previousCells
+		const canDiff = prev !== null && this.previousCellsCols === screenCols && this.previousCellsRows === screenRows
 
+		if (!canDiff) {
+			// Full redraw needed (first frame, resize, etc.)
+			offCtx.fillStyle = this.config.background
+			offCtx.fillRect(0, 0, cssWidth, bufferedHeight)
+		}
+
+		// Allocate or resize previous cells buffer
+		if (!prev || prev.length !== totalCells) {
+			this.previousCells = new Array(totalCells)
+			for (let i = 0; i < totalCells; i++) {
+				this.previousCells[i] = { ch: '', fg: -1, bg: -1, bold: false }
+			}
+		}
+
+		let cellIdx = 0
 		for (let r = 0; r < screenRows; r++) {
 			const cells = this.screen.lines[r]
-			if (!cells) continue
+			if (!cells) {
+				cellIdx += screenCols
+				continue
+			}
 			for (let c = 0; c < cells.length; c++) {
 				const cell = cells[c]
+				const prevCell = this.previousCells![cellIdx]
+
+				// Skip if cell hasn't changed (dirty-cell check)
+				if (
+					canDiff &&
+					prevCell.ch === cell.ch &&
+					prevCell.fg === cell.fg &&
+					prevCell.bg === cell.bg &&
+					prevCell.bold === cell.bold
+				) {
+					cellIdx++
+					continue
+				}
+
 				const x = c * charWidth
 				const y = r * charHeight
 				// Handle bold for numeric ANSI colors
@@ -483,8 +506,17 @@ export class AnsiVirtualDisplayEngine {
 				const bgColor = colorToCss(cell.bg, '#000000')
 				const charCode = charToCp437Byte(cell.ch)
 				renderGlyph(offCtx, this.bitmapFont, charCode, x, y, fgColor, bgColor)
+
+				// Update previous cell state
+				prevCell.ch = cell.ch
+				prevCell.fg = cell.fg
+				prevCell.bg = cell.bg
+				prevCell.bold = cell.bold
+				cellIdx++
 			}
 		}
+		this.previousCellsCols = screenCols
+		this.previousCellsRows = screenRows
 
 		// Apply pixel offset for smooth scrolling (sub-character precision)
 		const pixelOffsetY = this.config.pixelOffsetY ?? 0

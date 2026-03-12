@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cp437ByteToChar } from '../utils/cp437'
 import { BitmapFont, loadRawBitmapFont, renderGlyph } from '../font/bitmapFont'
 import { extractFontFromFON } from '../font/fonExtractor'
+import { getEmbeddedVgaFont } from '../font/embeddedVgaFont'
 
 export type FontCharacterChartProps = {
-	bitmapFontUrl: string
+	bitmapFontUrl?: string
 }
 
 type CharacterInfo = {
@@ -24,13 +25,20 @@ export function FontCharacterChart({ bitmapFontUrl }: FontCharacterChartProps) {
 
 	// Load font on mount
 	useEffect(() => {
+		if (!bitmapFontUrl) {
+			// No URL provided — use embedded VGA font
+			setBitmapFont(getEmbeddedVgaFont())
+			setLoading(false)
+			return
+		}
+
 		let cancelled = false
 		async function loadFont() {
 			setLoading(true)
 			setError(null)
 			try {
 				// Try extracting from FON file first
-				const fontResult = await extractFontFromFON(bitmapFontUrl)
+				const fontResult = await extractFontFromFON(bitmapFontUrl!)
 				if (fontResult) {
 					const { bitmapData, width, height } = fontResult
 					const bytesPerGlyph = height
@@ -43,7 +51,7 @@ export function FontCharacterChart({ bitmapFontUrl }: FontCharacterChartProps) {
 					}
 				} else {
 					// Fallback to direct loading
-					const font = await loadRawBitmapFont(bitmapFontUrl, 8, 16)
+					const font = await loadRawBitmapFont(bitmapFontUrl!, 8, 16)
 					if (!cancelled) {
 						setBitmapFont(font)
 					}
@@ -128,8 +136,8 @@ export function FontCharacterChart({ bitmapFontUrl }: FontCharacterChartProps) {
 	async function copyToClipboard(character: string) {
 		try {
 			await navigator.clipboard.writeText(character)
-		} catch (err) {
-			console.error('Failed to copy to clipboard:', err)
+		} catch {
+			// Clipboard API may not be available in all contexts
 		}
 	}
 

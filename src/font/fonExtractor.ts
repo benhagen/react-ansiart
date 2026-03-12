@@ -8,7 +8,6 @@ export type FontExtractionResult = {
 }
 
 export async function extractFontFromFON(url: string): Promise<FontExtractionResult | null> {
-	console.log('[fonExtractor] Extracting from:', url)
 	const response = await fetch(url)
 	if (!response.ok) throw new Error(`Failed to load FON: ${response.status}`)
 	const buffer = await response.arrayBuffer()
@@ -53,7 +52,6 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 
 		if (typeId === 0x8008) {
 			// Found font resource
-			console.log('[fonExtractor] Found font resource, count:', count)
 			if (count > 0) {
 				// Get first font resource
 				const fontResOffset = (bytes[pos] | (bytes[pos + 1] << 8)) << alignShift
@@ -72,17 +70,6 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 				const dfPixHeight = fntData[0x58] | (fntData[0x59] << 8)
 				const dfFirstChar = fntData[0x5f]
 				const dfLastChar = fntData[0x60]
-				console.log(
-					'[fonExtractor] Font:',
-					dfPixWidth,
-					'x',
-					dfPixHeight,
-					'chars',
-					dfFirstChar,
-					'-',
-					dfLastChar
-				)
-
 				// For fixed-width VGA fonts: bitmap is stored sequentially after header + character table
 				const charTableStart = 117
 				const charCount = dfLastChar - dfFirstChar + 1
@@ -163,14 +150,12 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 				}
 
 				bitmapOffset = bestOffset
-				console.log('[fonExtractor] Bitmap offset:', bitmapOffset, 'score:', bestScore)
 
 				// Calculate expected bitmap size (256 glyphs * height bytes per glyph)
 				const expectedBitmapSize = 256 * bytesPerGlyph
 
 				// Check if bitmap is within FNT data
 				if (fntData.length >= bitmapOffset + expectedBitmapSize) {
-					console.log('[fonExtractor] Success: extracted bitmap')
 					return {
 						bitmapData: fntData.slice(bitmapOffset, bitmapOffset + expectedBitmapSize),
 						width: dfPixWidth,
@@ -182,7 +167,6 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 				// Try reading from the main file at fontResOffset + bitmapOffset
 				const absoluteBitmapOffset = fontResOffset + bitmapOffset
 				if (bytes.length >= absoluteBitmapOffset + expectedBitmapSize) {
-					console.log('[fonExtractor] Success: extracted bitmap (absolute offset)')
 					return {
 						bitmapData: bytes.slice(
 							absoluteBitmapOffset,
@@ -193,7 +177,6 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 					}
 				}
 
-				console.log('[fonExtractor] Failed: bitmap not found')
 				return null
 			}
 		}
@@ -202,6 +185,5 @@ export async function extractFontFromFON(url: string): Promise<FontExtractionRes
 		pos += count * 12
 	}
 
-	console.log('[fonExtractor] Failed: no font resource found')
 	return null
 }

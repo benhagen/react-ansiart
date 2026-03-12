@@ -1,4 +1,4 @@
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 
 // Default character set for fire effect
 const DEFAULT_CHARS = [' ', '.', ':', ';', '+', '=', 'x', 'X', '$', '&', '#', '@']
@@ -65,6 +65,22 @@ function generateFirePalette(): string[] {
 // Pre-compute the fire palette
 const FIRE_PALETTE = generateFirePalette()
 
+// Memoized char lookup tables keyed by chars array reference or content
+let lastFireChars: string[] | null = null
+let lastFireCharLookup: string[] | null = null
+
+function getFireCharLookup(chars: string[]): string[] {
+	if (lastFireChars === chars && lastFireCharLookup) return lastFireCharLookup
+	const charCount = chars.length
+	const lookup = new Array(256)
+	for (let i = 0; i < 256; i++) {
+		lookup[i] = chars[Math.floor((i / 255) * (charCount - 0.001))]
+	}
+	lastFireChars = chars
+	lastFireCharLookup = lookup
+	return lookup
+}
+
 export interface AsciiFireOptions {
 	/** Array of characters to use for ASCII rendering (brightness-based) */
 	chars?: string[]
@@ -115,6 +131,10 @@ interface FireState {
 	lastFrame: number
 }
 
+interface FireStateWithReadBuffer extends FireState {
+	readBuffer?: Uint8Array
+}
+
 const fireStateMap = new Map<string, FireState>()
 
 /**
@@ -140,14 +160,8 @@ export function generateAsciiFireFrame(
 	// Use the smaller of natural height or requested rows
 	const actualBufferHeight = Math.min(naturalHeight, rows)
 
-	const charCount = chars.length
-
-	// Pre-compute character lookup table based on brightness
-	const charLookup = new Array(256)
-	for (let i = 0; i < 256; i++) {
-		const normalizedValue = i / 255
-		charLookup[i] = chars[Math.floor(normalizedValue * (charCount - 0.001))]
-	}
+	// Pre-compute character lookup table (memoized)
+	const charLookup = getFireCharLookup(chars)
 
 	// Create unique state key for this generator configuration
 	// Include naturalHeight in state key to ensure consistent buffer sizing
@@ -186,9 +200,16 @@ export function generateAsciiFireFrame(
 	// Create random number generator for this frame
 	const random = createRandom(seed + frame)
 
-	// Copy current buffer to read from previous frame's state
-	// This must be done BEFORE we modify fireBuffer
-	const readBuffer = new Uint8Array(fireBuffer)
+	// Double-buffer swap: use a second pre-allocated buffer instead of copying
+	// Get or create the read buffer for this state
+	let readBuffer = (state as FireStateWithReadBuffer).readBuffer
+	if (!readBuffer || readBuffer.length !== fireBuffer.length) {
+		readBuffer = new Uint8Array(fireBuffer.length)
+		;(state as FireStateWithReadBuffer).readBuffer = readBuffer
+	}
+	// Copy current state to read buffer (swap would be ideal but fire writes
+	// non-sequentially so we need the full previous state)
+	readBuffer.set(fireBuffer)
 
 	// Fill bottom row (offscreen fuel row) with random palette indices
 	const bufferRows = actualBufferHeight + 1 // Extra row for fuel
@@ -258,6 +279,7 @@ export function generateAsciiFireFrame(
 // Module-level state storage for sampler buffers
 interface SamplerState {
 	buffer: Uint8Array
+	readBuffer?: Uint8Array
 	bufferCols: number
 	bufferRows: number
 	lastFrame: number
@@ -284,14 +306,8 @@ export function createAsciiFireSampler(frame: number, options: AsciiFireOptions 
 		worldWidth, // Optional: width of virtual world in scrollable mode
 	} = options
 
-	const charCount = chars.length
-
-	// Pre-compute character lookup table
-	const charLookup = new Array(256)
-	for (let i = 0; i < 256; i++) {
-		const normalizedValue = i / 255
-		charLookup[i] = chars[Math.floor(normalizedValue * (charCount - 0.001))]
-	}
+	// Pre-compute character lookup table (memoized)
+	const charLookup = getFireCharLookup(chars)
 
 	// Calculate natural fire height based on degradation physics
 	const naturalHeight = calculateNaturalFireHeight(darkenAmount, sparkRange)
@@ -398,9 +414,13 @@ export function createAsciiFireSampler(frame: number, options: AsciiFireOptions 
 	// Process only when frame advances forward (frame > lastFrame)
 	// If frame < lastFrame, the reset logic above already handled it
 	if (frame > samplerState.lastFrame) {
-		// Copy current buffer to read from previous frame's state
-		// This must be done BEFORE we modify virtualBuffer
-		const readBuffer = new Uint8Array(virtualBuffer)
+		// Reuse pre-allocated read buffer instead of allocating new one each frame
+		let readBuffer = samplerState.readBuffer
+		if (!readBuffer || readBuffer.length !== virtualBuffer.length) {
+			readBuffer = new Uint8Array(virtualBuffer.length)
+			samplerState.readBuffer = readBuffer
+		}
+		readBuffer.set(virtualBuffer)
 
 		// Create random number generator
 		const random = createRandom(seed + frame)

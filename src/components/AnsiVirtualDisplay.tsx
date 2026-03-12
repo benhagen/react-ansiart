@@ -1,11 +1,12 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { SauceMetadata } from '../ansi/parser'
+import type { SauceMetadata } from '../utils/sauce'
 import { AnsiPlayerOverlay } from './AnsiPlayerOverlay'
 import { AnsiVirtualDisplayEngine } from '../engines/AnsiVirtualDisplayEngine'
 import { BitmapFont } from '../font/bitmapFont'
 import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
+import { getEmbeddedVgaFont } from '../font/embeddedVgaFont'
 import type { DisplayFrameGenerator, GeneratorCapabilities } from '../types/types'
 
 export type AnsiVirtualDisplayProps = {
@@ -16,7 +17,8 @@ export type AnsiVirtualDisplayProps = {
 	background?: string // default: '#000'. Accepts any valid CSS color (hex, rgb, rgba, hsl, named colors, etc.)
 	bitmapFont?: BitmapFont // Pre-loaded font (avoids duplicate loading)
 	bitmapFontUrl?: string // path to .FON or raw bitmap font file (required if bitmapFont not provided)
-	showControls?: boolean // show simple play/pause controls (deprecated in favor of showOverlayControls)
+	/** @deprecated Use `showOverlayControls` instead */
+	showControls?: boolean
 	showOverlayControls?: boolean // show YouTube-style overlay controls (only for supported generators)
 	showPerformanceOverlay?: boolean // show performance stats overlay
 	fillContainer?: boolean // fill the container width instead of fit-content
@@ -199,7 +201,7 @@ export function AnsiVirtualDisplay({
 		engineRef.current.setBitmapFont(bitmapFont)
 	}, [bitmapFont])
 
-	// Use provided font or load from URL
+	// Use provided font, load from URL, or fall back to embedded font
 	useEffect(() => {
 		if (providedBitmapFont) {
 			setBitmapFont(providedBitmapFont)
@@ -207,7 +209,8 @@ export function AnsiVirtualDisplay({
 		}
 
 		if (!bitmapFontUrl) {
-			setBitmapFont(null)
+			// No URL provided — use embedded VGA font
+			setBitmapFont(getEmbeddedVgaFont())
 			return
 		}
 
@@ -305,6 +308,8 @@ export function AnsiVirtualDisplay({
 	}, [])
 
 	// Update current byte position periodically for overlay
+	// Only triggers React re-render when the value actually changes
+	const lastPolledBytesRef = useRef(-1)
 	useEffect(() => {
 		if (!supportsOverlayControls || !isPlaying) return
 
@@ -319,8 +324,11 @@ export function AnsiVirtualDisplay({
 					engineRef.current.pause()
 					setIsPlaying(false)
 					setCurrentBytes(total) // Cap at total
-				} else {
+					lastPolledBytesRef.current = total
+				} else if (bytes !== lastPolledBytesRef.current) {
+					// Only update state (triggering re-render) when bytes actually changed
 					setCurrentBytes(bytes)
+					lastPolledBytesRef.current = bytes
 				}
 			}
 		}, 100) // Update 10 times per second
@@ -365,68 +373,71 @@ export function AnsiVirtualDisplay({
 		}
 	}, [fillContainer, background])
 
+	const canvasContainerStyle: React.CSSProperties = useMemo(() => ({
+		position: 'relative',
+		display: 'inline-block',
+		width: fillContainer ? '100%' : 'fit-content',
+	}), [fillContainer])
+
+	const controlsBarStyle: React.CSSProperties = useMemo(() => ({
+		display: 'flex',
+		gap: '8px',
+		marginBottom: '8px',
+		alignItems: 'center',
+	}), [])
+
+	const buttonStyle: React.CSSProperties = useMemo(() => ({
+		padding: '6px 12px',
+		color: '#AAA',
+		border: '1px solid #555',
+		cursor: 'pointer',
+		fontSize: '14px',
+		fontFamily: 'monospace',
+	}), [])
+
+	const debugOverlayStyle: React.CSSProperties = useMemo(() => ({
+		position: 'absolute',
+		top: 0,
+		left: 0,
+		background: 'rgba(0, 0, 0, 0.8)',
+		color: '#0f0',
+		padding: '4px 8px',
+		fontSize: '10px',
+		fontFamily: 'monospace',
+		pointerEvents: 'none',
+	}), [])
+
 	return (
 		<div>
 			{/* Simple controls (only show if overlay controls are disabled) */}
 			{showControls && !supportsOverlayControls && (
-				<div
-					style={{
-						display: 'flex',
-						gap: '8px',
-						marginBottom: '8px',
-						alignItems: 'center',
-					}}
-				>
-					<button
-						onClick={handlePlayPause}
-						style={{
-							padding: '6px 12px',
-							background: '#333',
-							color: '#AAA',
-							border: '1px solid #555',
-							cursor: 'pointer',
-							fontSize: '14px',
-							fontFamily: 'monospace',
-						}}
-						onMouseEnter={e => {
-							e.currentTarget.style.background = '#444'
-						}}
-						onMouseLeave={e => {
-							e.currentTarget.style.background = '#333'
-						}}
-					>
-						{isPlaying ? '⏸ Pause' : '▶ Play'}
-					</button>
-					<button
-						onClick={handleRestart}
-						style={{
-							padding: '6px 12px',
-							background: '#333',
-							color: '#AAA',
-							border: '1px solid #555',
-							cursor: 'pointer',
-							fontSize: '14px',
-							fontFamily: 'monospace',
-						}}
-						onMouseEnter={e => {
-							e.currentTarget.style.background = '#444'
-						}}
-						onMouseLeave={e => {
-							e.currentTarget.style.background = '#333'
-						}}
-					>
-						⏮ Restart
-					</button>
-				</div>
+				<>
+					<style>{`
+						.ansi-simple-btn { background: #333; }
+						.ansi-simple-btn:hover { background: #444 !important; }
+					`}</style>
+					<div style={controlsBarStyle}>
+						<button
+							className='ansi-simple-btn'
+							onClick={handlePlayPause}
+							style={buttonStyle}
+						>
+							{isPlaying ? '⏸ Pause' : '▶ Play'}
+						</button>
+						<button
+							className='ansi-simple-btn'
+							onClick={handleRestart}
+							style={buttonStyle}
+						>
+							⏮ Restart
+						</button>
+					</div>
+				</>
 			)}
 
 			{/* Canvas with overlay controls */}
 			<div
-				style={{
-					position: 'relative',
-					display: 'inline-block',
-					width: fillContainer ? '100%' : 'fit-content',
-				}}
+				style={canvasContainerStyle}
 				onMouseMove={handleMouseMove}
 				onMouseLeave={handleMouseLeave}
 			>
@@ -453,19 +464,7 @@ export function AnsiVirtualDisplay({
 				)}
 				{/* Debug info - only show when overlay is visible */}
 				{supportsOverlayControls && isOverlayVisible && typeof window !== 'undefined' && (
-					<div
-						style={{
-							position: 'absolute',
-							top: 0,
-							left: 0,
-							background: 'rgba(0, 0, 0, 0.8)',
-							color: '#0f0',
-							padding: '4px 8px',
-							fontSize: '10px',
-							fontFamily: 'monospace',
-							pointerEvents: 'none',
-						}}
-					>
+					<div style={debugOverlayStyle}>
 						Bytes: {currentBytes} / {totalBytes} | Speed: {currentSpeed} bytes/sec
 					</div>
 				)}

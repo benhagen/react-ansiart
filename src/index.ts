@@ -18,6 +18,7 @@ export type { BitmapFont } from './font/bitmapFont'
 export { loadBitmapFontFromUrl } from './font/bitmapFontLoader'
 export { extractFontFromFON, type FontExtractionResult } from './font/fonExtractor'
 export { clearFontCache } from './font/fontCache'
+export { getEmbeddedVgaFont } from './font/embeddedVgaFont'
 
 export { drawPerformanceOverlay, type PerformanceStats } from './utils/performanceOverlay'
 
@@ -30,6 +31,7 @@ export {
 } from './utils/rgbToAnsi'
 export type { PaletteMode } from './utils/rgbToAnsi'
 
+export type { AnsiCell, AnsiScreen } from './ansi/types'
 export { detectAnimation, parseAnsi, parseAscii } from './ansi/parser'
 export type { CharacterEncoding } from './ansi/parser'
 export { getSauceInfo, parseSauce } from './utils/sauce'

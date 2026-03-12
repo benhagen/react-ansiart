@@ -1,4 +1,5 @@
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
+import { buildCharLookup } from './charLookup'
 
 export interface AsciiMetaballsOptions {
 	/** Random seed. Default: 1337 */
@@ -113,6 +114,18 @@ function buildBalls(
 	return balls
 }
 
+// Cache for buildBalls results to avoid per-frame allocation
+let lastBallsCacheKey = ''
+let lastBallsResult: BallParams[] | null = null
+
+function getCachedBalls(columns: number, rows: number, opts: Required<AsciiMetaballsOptions>): BallParams[] {
+	const key = `${columns}:${rows}:${opts.seed}:${opts.balls}:${opts.radiusMin}:${opts.radiusMax}`
+	if (key === lastBallsCacheKey && lastBallsResult) return lastBallsResult
+	lastBallsResult = buildBalls(columns, rows, opts)
+	lastBallsCacheKey = key
+	return lastBallsResult
+}
+
 function resolveOptions(options: AsciiMetaballsOptions): Required<AsciiMetaballsOptions> {
 	return {
 		seed: Number.isFinite(options.seed as number) ? (options.seed as number) : DEFAULTS.seed,
@@ -187,15 +200,11 @@ export function generateAsciiMetaballsFrame(
 	const opts = resolveOptions(options)
 	const time = frame * opts.speed
 
-	const balls = buildBalls(columns, rows, opts)
+	const balls = getCachedBalls(columns, rows, opts)
 
 	// Character lookup table (0..255)
 	const chars = opts.chars.length ? opts.chars : DEFAULTS.chars
-	const charLookup = new Array(256)
-	for (let i = 0; i < 256; i++) {
-		const t = i / 255
-		charLookup[i] = chars[Math.floor(t * (chars.length - 0.001))]
-	}
+	const charLookup = buildCharLookup(chars)
 
 	const lines: AnsiScreen['lines'] = []
 	for (let y = 0; y < rows; y++) {
@@ -220,11 +229,7 @@ export function createAsciiMetaballsSampler(frame: number, options: AsciiMetabal
 	const balls = buildBalls(virtualColumns, virtualRows, opts)
 
 	const chars = opts.chars.length ? opts.chars : DEFAULTS.chars
-	const charLookup = new Array(256)
-	for (let i = 0; i < 256; i++) {
-		const t = i / 255
-		charLookup[i] = chars[Math.floor(t * (chars.length - 0.001))]
-	}
+	const charLookup = buildCharLookup(chars)
 
 	return (x: number, y: number) => {
 		return computeCell(x, y, time, virtualColumns, virtualRows, opts, balls, charLookup)

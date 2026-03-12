@@ -1,41 +1,39 @@
-import type { Metadata } from 'next'
+'use client'
+
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import './globals.css'
 
-export const metadata: Metadata = {
-	title: 'react-ansiart demo',
-	description: 'Demo + debug app for react-ansiart',
-}
+const NAV_LINKS = [
+	{ href: '/', label: 'Home' },
+	{ href: '/ansi-art', label: 'ANSI Art' },
+	{ href: '/generators', label: 'Generators' },
+	{ href: '/backgrounds', label: 'Backgrounds' },
+	{ href: '/font-chart', label: 'Font Chart' },
+]
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+	const pathname = usePathname()
+
 	return (
-		<html lang='en'>
+		<html lang="en">
 			<body>
-				<div className='layout'>
-					<aside className='sidebar'>
-						<h1>react-ansiart demo</h1>
-						<nav className='nav'>
-							<Link href='/'>Home</Link>
-							<Link href='/ansi'>ANSI</Link>
-							<Link href='/virtual-display'>Virtual Display</Link>
-						</nav>
-						<div className='divider' />
-						<div className='muted' style={{ fontSize: 12, lineHeight: 1.5 }}>
-							<div>
-								<strong>Assets:</strong> served from <code>demo/public</code>
-							</div>
-							<div>
-								<strong>Library:</strong> imported via <code>file:..</code> (root <code>dist/</code>
-								)
-							</div>
-						</div>
-					</aside>
-					<main className='content'>{children}</main>
-				</div>
+				<nav className="navbar">
+					<span className="navbar-brand">react-ansiart</span>
+					<div className="navbar-links">
+						{NAV_LINKS.map((link) => (
+							<Link
+								key={link.href}
+								href={link.href}
+								className={pathname === link.href ? 'active' : ''}
+							>
+								{link.label}
+							</Link>
+						))}
+					</div>
+				</nav>
+				<div className="page-body">{children}</div>
 			</body>
 		</html>
 	)
 }
-
-
-

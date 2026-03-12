@@ -54,9 +54,8 @@ export function getCachedFont(url: string): BitmapFont | null {
 			rawBitmapData,
 			// Don't restore glyphCache - it's runtime-only
 		}
-	} catch (e) {
+	} catch {
 		// If anything goes wrong (parse error, corrupted data, etc.), return null
-		console.warn('[fontCache] Failed to read cached font:', e)
 		return null
 	}
 }
@@ -91,12 +90,10 @@ export function setCachedFont(url: string, font: BitmapFont): void {
 		}
 
 		window.localStorage.setItem(cacheKey, JSON.stringify(data))
-	} catch (e: any) {
+	} catch (e: unknown) {
 		// Handle quota exceeded or other storage errors gracefully
-		if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+		if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
 			console.warn('[fontCache] localStorage quota exceeded, cannot cache font')
-		} else {
-			console.warn('[fontCache] Failed to cache font:', e)
 		}
 		// Silently fail - don't break font loading if caching fails
 	}
@@ -127,8 +124,8 @@ export function clearFontCache(url?: string): void {
 			}
 			keysToRemove.forEach(key => window.localStorage.removeItem(key))
 		}
-	} catch (e) {
-		console.warn('[fontCache] Failed to clear cache:', e)
+	} catch {
+		// Silently fail - cache clearing is best-effort
 	}
 }
 

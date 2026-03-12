@@ -13,7 +13,6 @@ export async function loadBitmapFontFromUrl(bitmapFontUrl: string): Promise<Bitm
 	// Check cache first for the final BitmapFont with extracted glyphs
 	const cached = getCachedFont(bitmapFontUrl)
 	if (cached) {
-		console.log('[bitmapFontLoader] Using cached font for:', bitmapFontUrl)
 		return cached
 	}
 
@@ -41,8 +40,8 @@ export async function loadBitmapFontFromUrl(bitmapFontUrl: string): Promise<Bitm
 			}
 			return font
 		}
-	} catch (e: any) {
-		console.warn('Failed to load bitmap font:', e)
+	} catch (e: unknown) {
+		console.warn('Failed to load bitmap font:', e instanceof Error ? e.message : e)
 		return null
 	}
 }

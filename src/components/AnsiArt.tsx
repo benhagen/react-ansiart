@@ -15,8 +15,9 @@ export type AnsiArtProps = {
 	columns?: number | 'auto' // defaults to 80, 'auto' detects natural width
 	rows?: number | 'auto' // defaults to 'auto', 'auto' displays full height, number restricts to that height
 	background?: string
-	bitmapFontUrl: string
-	showControls?: boolean // Simple play/pause controls (deprecated in favor of showOverlayControls)
+	bitmapFontUrl?: string
+	/** @deprecated Use `showOverlayControls` instead */
+	showControls?: boolean
 	showOverlayControls?: boolean // YouTube-style overlay controls (only for animated mode with supported generators)
 	showPerformanceOverlay?: boolean
 	sauceOverlay?: boolean // Show SAUCE metadata overlay when available
@@ -60,7 +61,6 @@ export function AnsiArt({
 	const [isSauceOverlayVisible, setIsSauceOverlayVisible] = useState(false)
 	const [detectedMode, setDetectedMode] = useState<'animated' | 'final'>('final')
 	const sauceOverlayTimeoutRef = useRef<number | null>(null)
-	const frameGeneratorRef = useRef<CharacterFrameGenerator | null>(null)
 
 	// Detect animation when mode is 'auto' and ansiData is available
 	useEffect(() => {
@@ -87,21 +87,7 @@ export function AnsiArt({
 		if (ansiData && sauceOverlay) {
 			const parsedSauce = parseSauce(ansiData)
 			if (parsedSauce) {
-				console.log('[SAUCE] Metadata detected:', {
-					title: parsedSauce.title || '(no title)',
-					author: parsedSauce.author || '(no author)',
-					group: parsedSauce.group || '(no group)',
-					date: parsedSauce.date || '(no date)',
-					fileType: `${parsedSauce.dataType}:${parsedSauce.fileType}`,
-					dimensions:
-						parsedSauce.tInfo1 > 0 && parsedSauce.tInfo2 > 0
-							? `${parsedSauce.tInfo1}×${parsedSauce.tInfo2}`
-							: 'N/A',
-					comments: parsedSauce.comments,
-				})
 				setSauce(parsedSauce)
-			} else {
-				console.log('[SAUCE] No SAUCE metadata found in file')
 			}
 		} else if (!sauceOverlay) {
 			setSauce(undefined)
@@ -126,8 +112,8 @@ export function AnsiArt({
 					setAnsiData(buf)
 					setFileName(null)
 				}
-			} catch (e: any) {
-				if (!cancelled) setError(String(e?.message || e))
+			} catch (e: unknown) {
+				if (!cancelled) setError(e instanceof Error ? e.message : String(e))
 			}
 		}
 		load()
@@ -165,8 +151,8 @@ export function AnsiArt({
 			setFinalHeightForAnimated(null) // Reset final height for animated mode
 			setAnsiData(buf)
 			setFileName(file.name)
-		} catch (err: any) {
-			setError(String(err?.message || err))
+		} catch (err: unknown) {
+			setError(err instanceof Error ? err.message : String(err))
 		}
 	}
 
@@ -218,8 +204,8 @@ export function AnsiArt({
 				setDynamicColumns(80)
 				setDynamicRows(typeof rows === 'number' ? rows : 25)
 			}
-		} catch (e: any) {
-			setError(String(e?.message || e))
+		} catch (e: unknown) {
+			setError(e instanceof Error ? e.message : String(e))
 		}
 	}, [effectiveMode, ansiData, columns, rows])
 
@@ -283,7 +269,6 @@ export function AnsiArt({
 			debugCursorCodes,
 		})
 
-		frameGeneratorRef.current = generator
 		return generator
 	}, [
 		ansiData,

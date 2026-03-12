@@ -1,4 +1,4 @@
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 import { parseAnsiCore } from '../ansi/parser'
 import type { CharacterFrameGeneratorWithMetadata } from '../types/types'
 
@@ -116,6 +116,9 @@ export function createAnsiFrameGenerator(
 	let lastNotifiedColumns = 0
 	let lastNotifiedRows = 0
 	let lastNotifiedViewY = 0
+	// Cache last parse result to avoid re-parsing when byte position hasn't changed
+	let lastTargetByteIndex = -1
+	let lastParsedScreen: AnsiScreen | null = null
 
 	const generator = ((frame: number, cols: number, rows: number): AnsiScreen => {
 		// Reset if frame number went backwards (restart)
@@ -123,6 +126,8 @@ export function createAnsiFrameGenerator(
 			lastNotifiedColumns = 0
 			lastNotifiedRows = 0
 			lastNotifiedViewY = 0
+			lastTargetByteIndex = -1
+			lastParsedScreen = null
 		}
 		lastFrame = frame
 
@@ -135,11 +140,17 @@ export function createAnsiFrameGenerator(
 			ansiData.length
 		)
 
-		// Parse incrementally
+		// Parse incrementally — skip if byte position hasn't changed
 		let screen: AnsiScreen
-		if (columns !== undefined) {
+
+		// Use cached result if byte position is unchanged (common when paused or at sub-byte frame rates)
+		if (targetByteIndex === lastTargetByteIndex && lastParsedScreen) {
+			screen = lastParsedScreen
+		} else if (columns !== undefined) {
 			// Fixed mode - use parseAnsiCore with fixed columns and incremental parsing
 			screen = parseAnsiCore(ansiData, { columns, maxByteIndex: targetByteIndex })
+			lastTargetByteIndex = targetByteIndex
+			lastParsedScreen = screen
 
 			// For fixed mode animation with fixed rows, calculate scroll position and window content
 			// Scroll to keep the bottom of the content visible when it exceeds display rows
@@ -179,6 +190,8 @@ export function createAnsiFrameGenerator(
 		} else {
 			// Dynamic mode - use parseAnsiCore with dynamic sizing and incremental parsing
 			screen = parseAnsiCore(ansiData, { maxByteIndex: targetByteIndex })
+			lastTargetByteIndex = targetByteIndex
+			lastParsedScreen = screen
 			// Check if dimensions have changed and notify
 			if (onDimensionsChange) {
 				const currentColumns = screen.columns

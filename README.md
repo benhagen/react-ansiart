@@ -304,22 +304,6 @@ function App() {
 | `allowDrop`              | `boolean`               | `true`       | Enable drag-and-drop file loading                                                                                                        |
 | `debugCursorCodes`       | `boolean`               | `false`      | Log ANSI cursor control codes to console for debugging                                                                                   |
 
-### RipArt Props
-
-| Prop                     | Type                              | Default     | Description                                                                                                                        |
-| ------------------------ | --------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `url`                    | `string`                          | -           | URL or path to RIP file (optional if using drag-and-drop)                                                                          |
-| `mode`                   | `'animated' \| 'final' \| 'auto'` | `'auto'`    | Rendering mode: `'final'` displays complete art, `'animated'` shows progressive playback, `'auto'` detects animation automatically |
-| `width`                  | `number \| 'auto'`                | `'auto'`    | Canvas width in pixels or `'auto'` to detect from viewport                                                                         |
-| `height`                 | `number \| 'auto'`                | `'auto'`    | Canvas height in pixels or `'auto'` to detect from viewport                                                                        |
-| `background`             | `string`                          | `'#000000'` | Background color (any valid CSS color)                                                                                             |
-| `allowDrop`              | `boolean`                         | `true`      | Enable drag-and-drop file loading                                                                                                  |
-| `showOverlayControls`    | `boolean`                         | `false`     | Show YouTube-style overlay controls with seek, speed adjustment, and frame navigation (only for animated mode)                     |
-| `showPerformanceOverlay` | `boolean`                         | `false`     | Show performance metrics overlay for debugging                                                                                     |
-| `fps`                    | `number`                          | `30`        | Frames per second (only used in animated mode)                                                                                     |
-| `bytesPerSecond`         | `number`                          | `960`       | Bytes per second for animation speed (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec               |
-| `autoStart`              | `boolean`                         | `true`      | Start animation automatically on file load (only applies to animated mode)                                                         |
-
 ### AnsiVirtualDisplay Props
 
 | Prop                     | Type                    | Default      | Description                                                                                 |

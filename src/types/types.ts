@@ -1,4 +1,4 @@
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 import type { PaletteMode } from '../utils/rgbToAnsi'
 
 export interface RGBAColor {

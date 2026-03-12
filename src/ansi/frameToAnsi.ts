@@ -1,4 +1,4 @@
-import type { AnsiCell, AnsiScreen } from './parser'
+import type { AnsiCell, AnsiScreen } from './types'
 import type { FrameData } from '../types/types'
 import { getPalette, rgbToPaletteColor, ANSI_COLORS_RGB, type PaletteMode } from '../utils/rgbToAnsi'
 

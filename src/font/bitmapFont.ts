@@ -85,7 +85,12 @@ function parseColor(color: string): { r: number; g: number; b: number } {
 	// Fallback: use a canvas to parse the color
 	const canvas = document.createElement('canvas')
 	canvas.width = canvas.height = 1
-	const ctx = canvas.getContext('2d')!
+	const ctx = canvas.getContext('2d')
+	if (!ctx) {
+		const fallback = { r: 170, g: 170, b: 170 }
+		colorCache.set(color, fallback)
+		return fallback
+	}
 	ctx.fillStyle = color
 	ctx.fillRect(0, 0, 1, 1)
 	const data = ctx.getImageData(0, 0, 1, 1).data
@@ -108,7 +113,8 @@ export function renderGlyph(
 		font.glyphCache = new Map()
 	}
 
-	// Create cache key from charCode and colors
+	// Create cache key — for numeric ANSI colors use a cheaper key,
+	// for string colors fall back to template literal
 	const cacheKey = `${charCode}:${fgColor}:${bgColor}`
 	let canvas = font.glyphCache.get(cacheKey)
 

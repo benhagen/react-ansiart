@@ -1,24 +1,5 @@
-import type { AnsiScreen } from '../ansi/parser'
-
-// Default character set (same as asciiPerlinPlasma.tsx)
-const DEFAULT_CHARS2 = [
-	'@',
-	'0',
-	'#',
-	'2',
-	'$',
-	'*',
-	'+',
-	':',
-	',',
-	'.',
-	' ',
-	' ',
-	' ',
-	' ',
-	' ',
-	' ',
-]
+import type { AnsiScreen } from '../ansi/types'
+import { buildCharLookup } from './charLookup'
 
 const DEFAULT_CHARS = [
 	'Q',
@@ -122,6 +103,22 @@ function hash(x: number, y: number, seed: number): number {
 	return h ^ (h >>> 16)
 }
 
+// Cache permutation tables by seed to avoid regenerating every frame
+const permutationCache = new Map<number, Uint8Array>()
+
+function getCachedPermutation(seed: number): Uint8Array {
+	const cached = permutationCache.get(seed)
+	if (cached) return cached
+	const perm = generatePermutation(seed)
+	permutationCache.set(seed, perm)
+	// Limit cache size
+	if (permutationCache.size > 16) {
+		const firstKey = permutationCache.keys().next().value
+		if (firstKey !== undefined) permutationCache.delete(firstKey)
+	}
+	return perm
+}
+
 // Generate permutation table
 function generatePermutation(seed: number): Uint8Array {
 	const perm = new Uint8Array(256)
@@ -140,6 +137,23 @@ function generatePermutation(seed: number): Uint8Array {
 		;[perm[i], perm[j]] = [perm[j], perm[i]]
 	}
 	return perm
+}
+
+// Memoize octave configs to avoid re-creating array of objects every frame
+let lastOctaveInput: OctaveConfig[] | null = null
+let lastOctaveConfigs: Array<{ scaleX: number; scaleY: number; timeScaleX: number; timeScaleY: number; amplitude: number }> | null = null
+
+function getCachedOctaveConfigs(octaves: OctaveConfig[]) {
+	if (lastOctaveInput === octaves && lastOctaveConfigs) return lastOctaveConfigs
+	lastOctaveConfigs = octaves.map(o => ({
+		scaleX: o.scale,
+		scaleY: o.scale,
+		timeScaleX: o.timeScaleX,
+		timeScaleY: o.timeScaleY,
+		amplitude: o.amplitude,
+	}))
+	lastOctaveInput = octaves
+	return lastOctaveConfigs
 }
 
 // 2D Perlin noise function
@@ -192,27 +206,12 @@ export function generateAsciiPerlinPlasmaFrame(
 		seed = 12345, // Fixed default seed for consistent patterns
 	} = options
 
-	const charCount = chars.length
 	const time = frame * timeScale
 
-	// Generate permutation table
-	const perm = generatePermutation(seed)
-
-	// Pre-compute character lookup table based on brightness
-	const charLookup = new Array(256)
-	for (let i = 0; i < 256; i++) {
-		const normalizedValue = i / 255
-		charLookup[i] = chars[Math.floor(normalizedValue * (charCount - 0.001))]
-	}
-
-	// Pre-compute octave configurations
-	const octaveConfigs = octaves.map(octave => ({
-		scaleX: octave.scale,
-		scaleY: octave.scale,
-		timeScaleX: octave.timeScaleX,
-		timeScaleY: octave.timeScaleY,
-		amplitude: octave.amplitude,
-	}))
+	// Use cached permutation table and octave configs
+	const perm = getCachedPermutation(seed)
+	const charLookup = buildCharLookup(chars)
+	const octaveConfigs = getCachedOctaveConfigs(octaves)
 
 	// Generate screen
 	const lines: AnsiScreen['lines'] = []
@@ -266,23 +265,10 @@ export function createAsciiPerlinPlasmaSampler(
 		seed = 12345,
 	} = options
 
-	const charCount = chars.length
 	const time = frame * timeScale
-	const perm = generatePermutation(seed)
-
-	const charLookup = new Array(256)
-	for (let i = 0; i < 256; i++) {
-		const normalizedValue = i / 255
-		charLookup[i] = chars[Math.floor(normalizedValue * (charCount - 0.001))]
-	}
-
-	const octaveConfigs = octaves.map(octave => ({
-		scaleX: octave.scale,
-		scaleY: octave.scale,
-		timeScaleX: octave.timeScaleX,
-		timeScaleY: octave.timeScaleY,
-		amplitude: octave.amplitude,
-	}))
+	const perm = getCachedPermutation(seed)
+	const charLookup = buildCharLookup(chars)
+	const octaveConfigs = getCachedOctaveConfigs(octaves)
 
 	return (x: number, y: number) => {
 		let value = 0

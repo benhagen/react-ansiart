@@ -40,49 +40,42 @@ function rgbDistance(
  * Uses a cube root distribution for more perceptually uniform colors
  */
 export function generateEvenlySpacedPalette(size: number): Array<[number, number, number]> {
-	const palette: Array<[number, number, number]> = []
-
 	if (size === 1) {
 		return [[128, 128, 128]]
 	}
 
-	// Calculate cube root for 3D distribution
-	const cubeRoot = Math.cbrt(size)
-	const steps = Math.ceil(cubeRoot)
-
-	for (let i = 0; i < size; i++) {
-		// Distribute colors across RGB cube
-		const r = Math.floor((i % steps) * (255 / (steps - 1)))
-		const g = Math.floor(Math.floor(i / steps) % steps * (255 / (steps - 1)))
-		const b = Math.floor(Math.floor(i / (steps * steps)) * (255 / (steps - 1)))
-
-		palette.push([r, g, b])
-	}
-
-	// For better distribution, use a more sophisticated method
-	// Generate colors using HSV space for better coverage
 	if (size > 16) {
-		const newPalette: Array<[number, number, number]> = []
-
-		// Calculate dimensions for a 3D color space distribution
+		// Use HSV space for better perceptual coverage
+		const palette: Array<[number, number, number]> = []
 		const hueSteps = Math.ceil(Math.sqrt(size))
 		const satSteps = Math.ceil(Math.sqrt(size))
 		const valSteps = Math.ceil(size / (hueSteps * satSteps))
 
 		for (let i = 0; i < size; i++) {
-			// Distribute across hue (0-360), saturation (0.3-1.0), and value (0.2-1.0)
 			const hueIdx = i % hueSteps
 			const satIdx = Math.floor(i / hueSteps) % satSteps
 			const valIdx = Math.floor(i / (hueSteps * satSteps))
 
 			const hue = (hueIdx / hueSteps) * 360
-			const saturation = 0.3 + (satIdx / satSteps) * 0.7 // Range: 0.3 to 1.0
-			const value = 0.2 + (valIdx / valSteps) * 0.8 // Range: 0.2 to 1.0
+			const saturation = 0.3 + (satIdx / satSteps) * 0.7
+			const value = 0.2 + (valIdx / valSteps) * 0.8
 
 			const [r, g, b] = hsvToRgb(hue, Math.min(1, saturation), Math.min(1, value))
-			newPalette.push([r, g, b])
+			palette.push([r, g, b])
 		}
-		return newPalette
+		return palette
+	}
+
+	// For small palettes (≤16), use RGB cube distribution
+	const palette: Array<[number, number, number]> = []
+	const cubeRoot = Math.cbrt(size)
+	const steps = Math.ceil(cubeRoot)
+
+	for (let i = 0; i < size; i++) {
+		const r = Math.floor((i % steps) * (255 / (steps - 1)))
+		const g = Math.floor(Math.floor(i / steps) % steps * (255 / (steps - 1)))
+		const b = Math.floor(Math.floor(i / (steps * steps)) * (255 / (steps - 1)))
+		palette.push([r, g, b])
 	}
 
 	return palette

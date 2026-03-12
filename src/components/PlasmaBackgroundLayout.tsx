@@ -1,18 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
 import type { BitmapFont } from '../font/bitmapFont'
 import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
+import { getEmbeddedVgaFont } from '../font/embeddedVgaFont'
 import type { AsciiPerlinPlasmaOptions } from '../generators/asciiPerlinPlasmaGenerator'
 import {
 	createAsciiPerlinPlasmaSampler,
 	generateAsciiPerlinPlasmaFrame,
 } from '../generators/asciiPerlinPlasmaGenerator'
 import type { AsciiFireOptions } from '../generators/asciiFireGenerator'
-import {
-	createAsciiFireSampler,
-	generateAsciiFireFrame,
-} from '../generators/asciiFireGenerator'
 
 export interface PlasmaBackgroundLayoutProps {
 	children: React.ReactNode
@@ -39,7 +36,7 @@ export interface PlasmaBackgroundLayoutProps {
 	// Performance and rendering
 	showPerformanceOverlay?: boolean
 	fps?: number // Frames per second (default: 30)
-	bitmapFontUrl: string // URL to bitmap font file
+	bitmapFontUrl?: string // URL to bitmap font file
 }
 
 export function PlasmaBackgroundLayout({
@@ -73,22 +70,39 @@ export function PlasmaBackgroundLayout({
 	const [isMounted, setIsMounted] = useState(false)
 	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(null)
 
+	// Lazy-loaded fire generator module
+	const fireModuleRef = useRef<typeof import('../generators/asciiFireGenerator') | null>(null)
+	const [fireModuleLoaded, setFireModuleLoaded] = useState(false)
+
+	useEffect(() => {
+		if (generatorType !== 'fire') return
+		let cancelled = false
+		import('../generators/asciiFireGenerator').then(mod => {
+			if (!cancelled) {
+				fireModuleRef.current = mod
+				setFireModuleLoaded(true)
+			}
+		})
+		return () => { cancelled = true }
+	}, [generatorType])
+
 	// Load font once and share with AnsiVirtualDisplay
 	useEffect(() => {
 		if (!bitmapFontUrl) {
-			setBitmapFont(null)
+			// No URL provided — use embedded VGA font
+			setBitmapFont(getEmbeddedVgaFont())
 			return
 		}
 
 		let cancelled = false
 		async function loadFont() {
 			try {
-				const font = await loadBitmapFontFromUrl(bitmapFontUrl)
+				const font = await loadBitmapFontFromUrl(bitmapFontUrl!)
 				if (!cancelled) {
 					setBitmapFont(font)
 				}
-			} catch (error) {
-				console.error('Font loading failed:', error)
+			} catch {
+				// Font loading failed - setBitmapFont remains null
 			}
 		}
 		loadFont()
@@ -281,13 +295,12 @@ export function PlasmaBackgroundLayout({
 	// Memoize the fixed mode frame generator to avoid recreating on every render
 	const fixedFrameGenerator = useCallback(
 		(frame: number, columns: number, rows: number) => {
-			if (generatorType === 'fire') {
-				return generateAsciiFireFrame(frame, columns, rows, mergedFireOptions)
-			} else {
-				return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions)
+			if (generatorType === 'fire' && fireModuleRef.current) {
+				return fireModuleRef.current.generateAsciiFireFrame(frame, columns, rows, mergedFireOptions)
 			}
+			return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions)
 		},
-		[generatorType, mergedPlasmaOptions, mergedFireOptions]
+		[generatorType, mergedPlasmaOptions, mergedFireOptions, fireModuleLoaded]
 	)
 
 	// Store current view position in a ref so the generator can access it
@@ -302,8 +315,8 @@ export function PlasmaBackgroundLayout({
 	// Create the scrollable mode frame generator
 	// For fire, pass worldHeight and worldWidth for positioning and sizing
 	const scrollableFrameGenerator = useMemo(() => {
-		if (generatorType === 'fire') {
-			// For fire, return a function that creates samplers with world dimensions
+		if (generatorType === 'fire' && fireModuleRef.current) {
+			const fireMod = fireModuleRef.current
 			return (frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
 				const fireOptionsWithDimensions = {
 					...mergedFireOptions,
@@ -311,40 +324,15 @@ export function PlasmaBackgroundLayout({
 					worldWidth: virtualColumnsRef.current,
 				}
 
-				const sampler = createAsciiFireSampler(frame, fireOptionsWithDimensions)
+				const sampler = fireMod.createAsciiFireSampler(frame, fireOptionsWithDimensions)
 				const lines: AnsiScreen['lines'] = []
-
-				// Sample from the virtual world at the current view position
-				const currentViewY = viewYRef.current
-
-				// Render one extra row for smooth scrolling with pixelOffsetY
-				const rowsToRender = reqRows + 1
-
-				for (let y = 0; y < rowsToRender; y++) {
-					const line: AnsiScreen['lines'][number] = []
-					for (let x = 0; x < reqColumns; x++) {
-						const cell = sampler(x, currentViewY + y)
-						line.push(cell)
-					}
-					lines.push(line)
-				}
-
-				return { lines, columns: reqColumns }
-			}
-		} else {
-			// For plasma, use the memoized version for performance
-			return (frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
-				const sampler = createAsciiPerlinPlasmaSampler(frame, mergedPlasmaOptions)
-				const lines: AnsiScreen['lines'] = []
-
 				const currentViewY = viewYRef.current
 				const rowsToRender = reqRows + 1
 
 				for (let y = 0; y < rowsToRender; y++) {
 					const line: AnsiScreen['lines'][number] = []
 					for (let x = 0; x < reqColumns; x++) {
-						const cell = sampler(x, currentViewY + y)
-						line.push(cell)
+						line.push(sampler(x, currentViewY + y))
 					}
 					lines.push(line)
 				}
@@ -352,7 +340,24 @@ export function PlasmaBackgroundLayout({
 				return { lines, columns: reqColumns }
 			}
 		}
-	}, [generatorType, mergedFireOptions, mergedPlasmaOptions])
+
+		return (frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
+			const sampler = createAsciiPerlinPlasmaSampler(frame, mergedPlasmaOptions)
+			const lines: AnsiScreen['lines'] = []
+			const currentViewY = viewYRef.current
+			const rowsToRender = reqRows + 1
+
+			for (let y = 0; y < rowsToRender; y++) {
+				const line: AnsiScreen['lines'][number] = []
+				for (let x = 0; x < reqColumns; x++) {
+					line.push(sampler(x, currentViewY + y))
+				}
+				lines.push(line)
+			}
+
+			return { lines, columns: reqColumns }
+		}
+	}, [generatorType, mergedFireOptions, mergedPlasmaOptions, fireModuleLoaded])
 
 	// Derive virtual world in character units using font dimensions
 	const cellWidthPx = bitmapFont?.width || 8 // Default fallback

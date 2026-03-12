@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { SauceMetadata } from '../ansi/parser'
+import type { SauceMetadata } from '../utils/sauce'
 
 export type AnsiPlayerOverlayProps = {
 	isPlaying: boolean
@@ -187,6 +187,14 @@ export function AnsiPlayerOverlay({
 			}}
 			onMouseMove={onMouseMove}
 		>
+			<style>{`
+				.ansi-player-btn { background: rgba(255, 255, 255, 0.2); }
+				.ansi-player-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.3) !important; }
+				.ansi-player-btn-text { background: rgba(255, 255, 255, 0.2); }
+				.ansi-player-btn-text:hover { background: rgba(255, 255, 255, 0.3) !important; }
+				.ansi-player-speed-item { background: transparent; }
+				.ansi-player-speed-item:hover { background: rgba(255, 255, 255, 0.1) !important; }
+			`}</style>
 			{/* Progress bar */}
 			<div
 				ref={progressBarRef}
@@ -244,9 +252,9 @@ export function AnsiPlayerOverlay({
 			>
 				{/* Play/Pause/Restart button */}
 				<button
+					className='ansi-player-btn'
 					onClick={onPlayPause}
 					style={{
-						background: 'rgba(255, 255, 255, 0.2)',
 						border: 'none',
 						color: '#fff',
 						width: '36px',
@@ -259,12 +267,6 @@ export function AnsiPlayerOverlay({
 						fontSize: '16px',
 						transition: 'background 0.2s',
 					}}
-					onMouseEnter={e => {
-						e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-					}}
-					onMouseLeave={e => {
-						e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-					}}
 					title={isAtEnd ? 'Restart' : isPlaying ? 'Pause' : 'Play'}
 				>
 					{isAtEnd ? '↻' : isPlaying ? '⏸' : '▶'}
@@ -273,9 +275,9 @@ export function AnsiPlayerOverlay({
 				{/* Return to beginning button - only show after animation has started */}
 				{hasStarted && !isAtEnd && (
 					<button
+						className='ansi-player-btn'
 						onClick={onRestart}
 						style={{
-							background: 'rgba(255, 255, 255, 0.2)',
 							border: 'none',
 							color: '#fff',
 							width: '36px',
@@ -288,12 +290,6 @@ export function AnsiPlayerOverlay({
 							fontSize: '16px',
 							transition: 'background 0.2s',
 						}}
-						onMouseEnter={e => {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-						}}
-						onMouseLeave={e => {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-						}}
 						title='Return to beginning'
 					>
 						⏮
@@ -302,10 +298,10 @@ export function AnsiPlayerOverlay({
 
 				{/* Rewind one byte button */}
 				<button
+					className='ansi-player-btn'
 					onClick={onRewindByte}
 					disabled={currentBytes <= 0}
 					style={{
-						background: 'rgba(255, 255, 255, 0.2)',
 						border: 'none',
 						color: currentBytes <= 0 ? 'rgba(255, 255, 255, 0.5)' : '#fff',
 						width: '36px',
@@ -318,16 +314,6 @@ export function AnsiPlayerOverlay({
 						fontSize: '16px',
 						transition: 'background 0.2s',
 					}}
-					onMouseEnter={e => {
-						if (currentBytes > 0) {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-						}
-					}}
-					onMouseLeave={e => {
-						if (currentBytes > 0) {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-						}
-					}}
 					title='Rewind one byte'
 				>
 					‹‹
@@ -335,10 +321,10 @@ export function AnsiPlayerOverlay({
 
 				{/* Advance one byte button */}
 				<button
+					className='ansi-player-btn'
 					onClick={onAdvanceByte}
 					disabled={currentBytes >= totalBytes}
 					style={{
-						background: 'rgba(255, 255, 255, 0.2)',
 						border: 'none',
 						color: currentBytes >= totalBytes ? 'rgba(255, 255, 255, 0.5)' : '#fff',
 						width: '36px',
@@ -350,16 +336,6 @@ export function AnsiPlayerOverlay({
 						justifyContent: 'center',
 						fontSize: '16px',
 						transition: 'background 0.2s',
-					}}
-					onMouseEnter={e => {
-						if (currentBytes < totalBytes) {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-						}
-					}}
-					onMouseLeave={e => {
-						if (currentBytes < totalBytes) {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-						}
 					}}
 					title='Advance one byte'
 				>
@@ -382,9 +358,9 @@ export function AnsiPlayerOverlay({
 				{/* SAUCE button */}
 				{sauce && onSauceClick && (
 					<button
+						className='ansi-player-btn'
 						onClick={onSauceClick}
 						style={{
-							background: 'rgba(255, 255, 255, 0.2)',
 							border: 'none',
 							color: '#fff',
 							width: '36px',
@@ -400,12 +376,6 @@ export function AnsiPlayerOverlay({
 							lineHeight: '1',
 							padding: 0,
 						}}
-						onMouseEnter={e => {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-						}}
-						onMouseLeave={e => {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
-						}}
 						title='View SAUCE metadata'
 					>
 						S
@@ -415,9 +385,9 @@ export function AnsiPlayerOverlay({
 				{/* Speed selector */}
 				<div style={{ position: 'relative' }} ref={speedMenuRef}>
 					<button
+						className='ansi-player-btn-text'
 						onClick={() => setIsSpeedMenuOpen(!isSpeedMenuOpen)}
 						style={{
-							background: 'rgba(255, 255, 255, 0.2)',
 							border: 'none',
 							color: '#fff',
 							padding: '8px 12px',
@@ -428,12 +398,6 @@ export function AnsiPlayerOverlay({
 							transition: 'background 0.2s',
 							minWidth: '110px',
 							textAlign: 'left',
-						}}
-						onMouseEnter={e => {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)'
-						}}
-						onMouseLeave={e => {
-							e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'
 						}}
 					>
 						{currentSpeedLabel}
@@ -457,6 +421,7 @@ export function AnsiPlayerOverlay({
 						>
 							{SPEED_PRESETS.map(preset => (
 								<button
+									className={preset.value === currentSpeed ? undefined : 'ansi-player-speed-item'}
 									key={preset.value}
 									onClick={() => handleSpeedSelect(preset.value)}
 									style={{
@@ -471,16 +436,6 @@ export function AnsiPlayerOverlay({
 										fontFamily: 'monospace',
 										fontSize: '13px',
 										transition: 'background 0.15s',
-									}}
-									onMouseEnter={e => {
-										if (preset.value !== currentSpeed) {
-											e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'
-										}
-									}}
-									onMouseLeave={e => {
-										if (preset.value !== currentSpeed) {
-											e.currentTarget.style.background = 'transparent'
-										}
 									}}
 								>
 									{preset.label}

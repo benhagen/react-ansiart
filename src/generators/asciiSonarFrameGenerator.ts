@@ -1,4 +1,4 @@
-import type { AnsiScreen } from '../ansi/parser'
+import type { AnsiScreen } from '../ansi/types'
 
 export interface AsciiSonarOptions {
 	/** Pulses per second. Default: 0.9 */
@@ -139,7 +139,9 @@ function gaussianBand(distMinusRadius: number, invSigma: number): number {
 }
 
 // Cache distance fields to avoid per-frame sqrt cost
-const distanceFieldCache = new Map<string, Float32Array>()
+// Use numeric comparison instead of string key allocation
+let lastDistFieldKey: { columns: number; rows: number; centerX: number; centerY: number; aspectY: number } | null = null
+let lastDistField: Float32Array | null = null
 
 function getDistanceField(
 	columns: number,
@@ -148,9 +150,18 @@ function getDistanceField(
 	centerY: number,
 	aspectY: number
 ): Float32Array {
-	const key = `${columns}:${rows}:${centerX.toFixed(3)}:${centerY.toFixed(3)}:${aspectY.toFixed(3)}`
-	const existing = distanceFieldCache.get(key)
-	if (existing) return existing
+	// Fast numeric comparison instead of string key construction
+	if (
+		lastDistFieldKey &&
+		lastDistFieldKey.columns === columns &&
+		lastDistFieldKey.rows === rows &&
+		Math.abs(lastDistFieldKey.centerX - centerX) < 0.001 &&
+		Math.abs(lastDistFieldKey.centerY - centerY) < 0.001 &&
+		Math.abs(lastDistFieldKey.aspectY - aspectY) < 0.001 &&
+		lastDistField
+	) {
+		return lastDistField
+	}
 
 	const field = new Float32Array(columns * rows)
 	let i = 0
@@ -161,16 +172,12 @@ function getDistanceField(
 			field[i++] = Math.sqrt(dx * dx + dy * dy)
 		}
 	}
-	distanceFieldCache.set(key, field)
+	lastDistFieldKey = { columns, rows, centerX, centerY, aspectY }
+	lastDistField = field
 	return field
 }
 
-export function generateAsciiSonarFrame(
-	frame: number,
-	columns: number,
-	rows: number,
-	options: AsciiSonarOptions = {}
-): AnsiScreen {
+function resolveAndValidate(options: AsciiSonarOptions) {
 	const frequency = options.frequency ?? DEFAULTS.frequency
 	const intensity = options.intensity ?? DEFAULTS.intensity
 	const fps = options.fps ?? DEFAULTS.fps
@@ -185,15 +192,46 @@ export function generateAsciiSonarFrame(
 	const aspectY = options.aspectY ?? DEFAULTS.aspectY
 	const maxRings = options.maxRings ?? DEFAULTS.maxRings
 
-	const safeFps = fps > 0 ? fps : DEFAULTS.fps
-	const safeFrequency = frequency > 0 ? frequency : DEFAULTS.frequency
-	const safeSpeed = speed > 0 ? speed : DEFAULTS.speed
-	const safeBandWidth = bandWidth > 0 ? bandWidth : DEFAULTS.bandWidth
-	const safeDecay = decay >= 0 ? decay : DEFAULTS.decay
-	const safeIntensity = Math.max(0, intensity)
-	const safeBaseAlpha = clamp01(baseAlpha)
-	const steps = Math.max(2, Math.floor(alphaSteps))
-	const ringCap = Math.max(1, Math.floor(maxRings))
+	return {
+		fgColor,
+		bgColor,
+		dotChar,
+		aspectY,
+		safeFps: fps > 0 ? fps : DEFAULTS.fps,
+		safeFrequency: frequency > 0 ? frequency : DEFAULTS.frequency,
+		safeSpeed: speed > 0 ? speed : DEFAULTS.speed,
+		safeBandWidth: bandWidth > 0 ? bandWidth : DEFAULTS.bandWidth,
+		safeDecay: decay >= 0 ? decay : DEFAULTS.decay,
+		safeIntensity: Math.max(0, intensity),
+		safeBaseAlpha: clamp01(baseAlpha),
+		steps: Math.max(2, Math.floor(alphaSteps)),
+		ringCap: Math.max(1, Math.floor(maxRings)),
+	}
+}
+
+function computeRings(tSeconds: number, params: ReturnType<typeof resolveAndValidate>) {
+	const period = 1 / params.safeFrequency
+	const kMax = Math.floor(tSeconds / period)
+
+	const rings: Array<{ radius: number; amp: number }> = []
+	for (let k = kMax; k >= 0 && rings.length < params.ringCap; k--) {
+		const age = tSeconds - k * period
+		if (age < 0) continue
+		const radius = age * params.safeSpeed
+		const amp = Math.exp(-age * params.safeDecay)
+		rings.push({ radius, amp })
+	}
+	return rings
+}
+
+export function generateAsciiSonarFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiSonarOptions = {}
+): AnsiScreen {
+	const params = resolveAndValidate(options)
+	const { fgColor, bgColor, dotChar, aspectY, safeFps, safeIntensity, safeBaseAlpha, steps, safeBandWidth } = params
 
 	const centerX = options.centerX ?? (columns - 1) / 2
 	const centerY = options.centerY ?? (rows - 1) / 2
@@ -202,20 +240,7 @@ export function generateAsciiSonarFrame(
 	const rgbaTable = makeRgbaTable(rgb, steps)
 
 	const tSeconds = frame / safeFps
-	const period = 1 / safeFrequency
-	const kMax = Math.floor(tSeconds / period)
-
-	// Precompute active rings (newest first)
-	// Each ring: radius, amplitude
-	const rings: Array<{ radius: number; amp: number }> = []
-	for (let k = kMax; k >= 0 && rings.length < ringCap; k--) {
-		const age = tSeconds - k * period
-		if (age < 0) continue
-		const radius = age * safeSpeed
-		const amp = Math.exp(-age * safeDecay)
-		rings.push({ radius, amp })
-	}
-
+	const rings = computeRings(tSeconds, params)
 	const invSigma = 1 / safeBandWidth
 	const distField = getDistanceField(columns, rows, centerX, centerY, aspectY)
 
@@ -244,29 +269,8 @@ export function generateAsciiSonarFrame(
 }
 
 export function createAsciiSonarSampler(frame: number, options: AsciiSonarOptions = {}) {
-	const frequency = options.frequency ?? DEFAULTS.frequency
-	const intensity = options.intensity ?? DEFAULTS.intensity
-	const fps = options.fps ?? DEFAULTS.fps
-	const fgColor = options.fgColor ?? DEFAULTS.fgColor
-	const bgColor = options.bgColor ?? DEFAULTS.bgColor
-	const dotChar = options.dotChar ?? DEFAULTS.dotChar
-	const speed = options.speed ?? DEFAULTS.speed
-	const bandWidth = options.bandWidth ?? DEFAULTS.bandWidth
-	const decay = options.decay ?? DEFAULTS.decay
-	const baseAlpha = options.baseAlpha ?? DEFAULTS.baseAlpha
-	const alphaSteps = options.alphaSteps ?? DEFAULTS.alphaSteps
-	const aspectY = options.aspectY ?? DEFAULTS.aspectY
-	const maxRings = options.maxRings ?? DEFAULTS.maxRings
-
-	const safeFps = fps > 0 ? fps : DEFAULTS.fps
-	const safeFrequency = frequency > 0 ? frequency : DEFAULTS.frequency
-	const safeSpeed = speed > 0 ? speed : DEFAULTS.speed
-	const safeBandWidth = bandWidth > 0 ? bandWidth : DEFAULTS.bandWidth
-	const safeDecay = decay >= 0 ? decay : DEFAULTS.decay
-	const safeIntensity = Math.max(0, intensity)
-	const safeBaseAlpha = clamp01(baseAlpha)
-	const steps = Math.max(2, Math.floor(alphaSteps))
-	const ringCap = Math.max(1, Math.floor(maxRings))
+	const params = resolveAndValidate(options)
+	const { fgColor, bgColor, dotChar, aspectY, safeFps, safeIntensity, safeBaseAlpha, steps, safeBandWidth } = params
 
 	const centerX = options.centerX ?? 0
 	const centerY = options.centerY ?? 0
@@ -275,18 +279,7 @@ export function createAsciiSonarSampler(frame: number, options: AsciiSonarOption
 	const rgbaTable = makeRgbaTable(rgb, steps)
 
 	const tSeconds = frame / safeFps
-	const period = 1 / safeFrequency
-	const kMax = Math.floor(tSeconds / period)
-
-	const rings: Array<{ radius: number; amp: number }> = []
-	for (let k = kMax; k >= 0 && rings.length < ringCap; k--) {
-		const age = tSeconds - k * period
-		if (age < 0) continue
-		const radius = age * safeSpeed
-		const amp = Math.exp(-age * safeDecay)
-		rings.push({ radius, amp })
-	}
-
+	const rings = computeRings(tSeconds, params)
 	const invSigma = 1 / safeBandWidth
 
 	return (x: number, y: number) => {
