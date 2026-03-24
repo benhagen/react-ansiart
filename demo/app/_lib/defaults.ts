@@ -76,6 +76,69 @@ export const DATAMOSH_DEFAULTS = {
 	bgColor: '#000000',
 }
 
+export const MATRIX_DEFAULTS = {
+	speed: 0.5,
+	density: 0.7,
+	trailLength: 15,
+	headColor: '#ffffff',
+	trailColor: '#00ff44',
+	bgColor: '#000000',
+	chars: 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:."=*+-<>',
+	seed: 7331,
+}
+
+export const STARFIELD_DEFAULTS = {
+	stars: 200,
+	speed: 0.02,
+	fgColor: '#ffffff',
+	bgColor: '#000000',
+	chars: '·.+*#@',
+	seed: 4242,
+	streaks: true,
+}
+
+export const TUNNEL_DEFAULTS = {
+	speed: 0.08,
+	rotationSpeed: 0.01,
+	tiles: 8,
+	fgColor: '#00ffaa',
+	bgColor: '#000000',
+	chars: ' .:-=+*#%@',
+	aspectY: 2,
+}
+
+export const GAME_OF_LIFE_DEFAULTS = {
+	density: 0.3,
+	fgColor: '#55ff55',
+	bgColor: '#000000',
+	seed: 9999,
+	autoSeed: true,
+	autoSeedThreshold: 0.05,
+}
+
+export const WATER_RIPPLE_DEFAULTS = {
+	damping: 0.97,
+	dropFrequency: 15,
+	dropStrength: 255,
+	fgColor: '#4488ff',
+	bgColor: '#000011',
+	chars: ' ·:~=@',
+	seed: 5555,
+}
+
+export const MANDELBROT_DEFAULTS = {
+	maxIter: 64,
+	zoomSpeed: 0.02,
+	zoomX: -0.7435,
+	zoomY: 0.1314,
+	initialZoom: 0.5,
+	fgColor: '#ff8800',
+	bgColor: '#000000',
+	chars: ' .:-=+*#%@',
+	aspectY: 2,
+	colorMode: 'spectrum' as const,
+}
+
 export const METABALLS_DEFAULTS = {
 	seed: 1337,
 	balls: 6,

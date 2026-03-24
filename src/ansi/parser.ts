@@ -105,7 +105,7 @@ const PARAMETER_BYTE_MAX = 0x3f
 const SEMICOLON = 0x3b
 const SPACE = 0x20
 const QUESTION_MARK = 0x3f
-const MAX_CSI_PARAMS = 256
+const MAX_CSI_PARAMS = 64
 
 // ANSI color codes
 const ANSI_RESET = 0
@@ -312,8 +312,25 @@ function applySGR(params: number[], state: ParserState) {
 			state.bold = true
 			continue
 		}
+		if (p === 2) {
+			// Dim/faint — map bright fg colors to their dim variants
+			if (typeof state.fg === 'number' && state.fg >= 8 && state.fg <= 15) {
+				state.fg -= 8
+			}
+			continue
+		}
+		if (p === 3 || p === 4 || p === 9) {
+			// Italic (3), underline (4), strikethrough (9)
+			// Accepted but not rendered with bitmap fonts
+			continue
+		}
 		if (p === ANSI_BOLD_OFF) {
+			// Also covers "normal intensity" (SGR 22)
 			state.bold = false
+			continue
+		}
+		if (p === 23 || p === 24 || p === 29) {
+			// Not italic (23), not underlined (24), not strikethrough (29)
 			continue
 		}
 		if (p === ANSI_FG_DEFAULT) {

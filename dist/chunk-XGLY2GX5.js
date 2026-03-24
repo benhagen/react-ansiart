@@ -1,9 +1,9 @@
 import {
   AnsiVirtualDisplay
-} from "./chunk-ZCPDEUYS.js";
+} from "./chunk-4RKQEKOE.js";
 import {
   loadBitmapFontFromUrl
-} from "./chunk-ZKKL2N7R.js";
+} from "./chunk-GBKXSTBJ.js";
 import {
   getEmbeddedVgaFont
 } from "./chunk-H72Q7PYO.js";
@@ -13,7 +13,7 @@ import {
 } from "./chunk-YVQNOSJZ.js";
 
 // src/components/PlasmaBackgroundLayout.tsx
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 function PlasmaBackgroundLayout({
   children,
@@ -21,6 +21,7 @@ function PlasmaBackgroundLayout({
   contentClassName,
   contentStyle,
   plasmaClassName,
+  frameGenerator: externalFrameGenerator,
   generatorType = "plasma",
   virtualWidthPx,
   virtualHeightPx,
@@ -216,19 +217,19 @@ function PlasmaBackgroundLayout({
     if (bgColor) options.bgColor = bgColor;
     return options;
   }, [chars, darkenAmount, sparkRange, seed, bgColor]);
-  const fixedFrameGenerator = useCallback(
-    (frame, columns, rows) => {
-      if (generatorType === "fire" && fireModuleRef.current) {
-        return fireModuleRef.current.generateAsciiFireFrame(frame, columns, rows, mergedFireOptions);
-      }
-      return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions);
-    },
-    [generatorType, mergedPlasmaOptions, mergedFireOptions, fireModuleLoaded]
-  );
+  const fixedFrameGenerator = useMemo(() => {
+    if (externalFrameGenerator) return externalFrameGenerator;
+    if (generatorType === "fire" && fireModuleRef.current) {
+      const fireMod = fireModuleRef.current;
+      return (frame, columns, rows) => fireMod.generateAsciiFireFrame(frame, columns, rows, mergedFireOptions);
+    }
+    return (frame, columns, rows) => generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions);
+  }, [externalFrameGenerator, generatorType, mergedPlasmaOptions, mergedFireOptions, fireModuleLoaded]);
   const viewYRef = useRef(0);
   const virtualRowsRef = useRef(0);
   const virtualColumnsRef = useRef(0);
   const scrollableFrameGenerator = useMemo(() => {
+    if (externalFrameGenerator) return externalFrameGenerator;
     if (generatorType === "fire" && fireModuleRef.current) {
       const fireMod = fireModuleRef.current;
       return (frame, reqColumns, reqRows) => {
@@ -265,7 +266,7 @@ function PlasmaBackgroundLayout({
       }
       return { lines, columns: reqColumns };
     };
-  }, [generatorType, mergedFireOptions, mergedPlasmaOptions, fireModuleLoaded]);
+  }, [externalFrameGenerator, generatorType, mergedFireOptions, mergedPlasmaOptions, fireModuleLoaded]);
   const cellWidthPx = bitmapFont?.width || 8;
   const cellHeightPx = bitmapFont?.height || 16;
   if (mode === "fixed") {
@@ -282,6 +283,7 @@ function PlasmaBackgroundLayout({
           /* @__PURE__ */ jsx(
             "div",
             {
+              className: plasmaClassName,
               style: {
                 position: "fixed",
                 top: 0,
@@ -387,6 +389,7 @@ function PlasmaBackgroundLayout({
         /* @__PURE__ */ jsx(
           "div",
           {
+            className: plasmaClassName,
             style: {
               position: "fixed",
               top: 0,
@@ -437,8 +440,10 @@ function PlasmaBackgroundLayout({
     }
   );
 }
+var GeneratorBackgroundLayout = PlasmaBackgroundLayout;
 
 export {
-  PlasmaBackgroundLayout
+  PlasmaBackgroundLayout,
+  GeneratorBackgroundLayout
 };
-//# sourceMappingURL=chunk-B2IFVLLO.js.map
+//# sourceMappingURL=chunk-XGLY2GX5.js.map

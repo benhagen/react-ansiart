@@ -72,6 +72,12 @@ export function generateGeneratorCode(
 		sonar: { fn: 'generateAsciiSonarFrame', type: 'AsciiSonarOptions' },
 		datamosh: { fn: 'generateAsciiDatamoshFrame', type: 'AsciiDatamoshOptions' },
 		metaballs: { fn: 'generateAsciiMetaballsFrame', type: 'AsciiMetaballsOptions' },
+		matrix: { fn: 'generateAsciiMatrixRainFrame', type: 'AsciiMatrixRainOptions' },
+		starfield: { fn: 'generateAsciiStarfieldFrame', type: 'AsciiStarfieldOptions' },
+		tunnel: { fn: 'generateAsciiTunnelFrame', type: 'AsciiTunnelOptions' },
+		gameOfLife: { fn: 'generateAsciiGameOfLifeFrame', type: 'AsciiGameOfLifeOptions' },
+		waterRipple: { fn: 'generateAsciiWaterRippleFrame', type: 'AsciiWaterRippleOptions' },
+		mandelbrot: { fn: 'generateAsciiMandelbrotFrame', type: 'AsciiMandelbrotOptions' },
 	}
 
 	const gen = generatorMap[generatorType]

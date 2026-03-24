@@ -1,6 +1,6 @@
 import {
   parseAnsiCore
-} from "./chunk-BBNH5DIF.js";
+} from "./chunk-3PHKD3AN.js";
 
 // src/generators/ansiFrameGenerator.ts
 function createEmptyRow(columns) {
@@ -177,4 +177,4 @@ export {
   createAnsiFrameGenerator,
   createAnsiArtFrameGenerator
 };
-//# sourceMappingURL=chunk-TQ4BCI7D.js.map
+//# sourceMappingURL=chunk-LSGSMP4Z.js.map

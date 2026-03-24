@@ -1,6 +1,6 @@
 import {
   loadBitmapFontFromUrl
-} from "./chunk-ZKKL2N7R.js";
+} from "./chunk-GBKXSTBJ.js";
 import {
   AnsiPlayerOverlay
 } from "./chunk-54OD6GSV.js";
@@ -12,7 +12,7 @@ import {
 } from "./chunk-RZAN2XLW.js";
 import {
   renderGlyph
-} from "./chunk-R3T57YO4.js";
+} from "./chunk-XYPTVL3M.js";
 
 // src/components/AnsiVirtualDisplay.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -31,10 +31,10 @@ function drawPerformanceOverlay(ctx, stats, font) {
     viewX,
     viewY
   } = stats;
+  const totalTime = renderTime + drawTime;
   const lines = [
     `FPS: ${actualFps.toFixed(1)} / ${targetFps}`,
-    `Render: ${renderTime.toFixed(2)}ms`,
-    `Draw: ${drawTime.toFixed(2)}ms`,
+    `Frame: ${totalTime.toFixed(2)}ms (gen ${renderTime.toFixed(1)} + draw ${drawTime.toFixed(1)})`,
     `World: ${virtualColumns ?? viewColumns}x${virtualRows ?? viewRows}`,
     `View: ${viewColumns}x${viewRows} @ (${viewX},${viewY})`
   ];
@@ -131,7 +131,8 @@ var AnsiVirtualDisplayEngine = class {
           this.pause();
           return;
         }
-        this.currentFrame++;
+        const framesToAdvance = Math.max(1, Math.floor(elapsed / frameInterval));
+        this.currentFrame += framesToAdvance;
         this._generateAndRender();
       }
       this.animationFrameId = requestAnimationFrame(this._animate);
@@ -173,6 +174,10 @@ var AnsiVirtualDisplayEngine = class {
     }
   }
   setBitmapFont(font) {
+    if (this.bitmapFont?.glyphCache) {
+      this.bitmapFont.glyphCache.clear();
+    }
+    this.previousCells = null;
     this.bitmapFont = font;
     this._setupCanvas();
     this._render();
@@ -827,4 +832,4 @@ export {
   drawPerformanceOverlay,
   AnsiVirtualDisplay
 };
-//# sourceMappingURL=chunk-ZCPDEUYS.js.map
+//# sourceMappingURL=chunk-4RKQEKOE.js.map

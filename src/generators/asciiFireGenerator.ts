@@ -192,6 +192,10 @@ export function generateAsciiFireFrame(
 		// Everything else stays at 0 (black)
 		state = { buffer, lastFrame: -1 } // Set to -1 so we process frame 0
 		fireStateMap.set(stateKey, state)
+		if (fireStateMap.size > 32) {
+			const firstKey = fireStateMap.keys().next().value
+			if (firstKey !== undefined) fireStateMap.delete(firstKey)
+		}
 	}
 
 	const fireBuffer = state.buffer
@@ -403,6 +407,10 @@ export function createAsciiFireSampler(frame: number, options: AsciiFireOptions 
 		// Everything else stays at 0 (black)
 		samplerState = { buffer, bufferCols, bufferRows, lastFrame: -1 } // Set to -1 so we process frame 0
 		samplerStateMap.set(stateKey, samplerState)
+		if (samplerStateMap.size > 32) {
+			const firstKey = samplerStateMap.keys().next().value
+			if (firstKey !== undefined) samplerStateMap.delete(firstKey)
+		}
 	}
 
 	const virtualBuffer = samplerState.buffer

@@ -342,6 +342,10 @@ function generateAsciiDatamoshFrame(frame, columns, rows, options = {}) {
       lastKeyframe: -1
     };
     datamoshStateMap.set(stateKey, state);
+    if (datamoshStateMap.size > 32) {
+      const firstKey = datamoshStateMap.keys().next().value;
+      if (firstKey !== void 0) datamoshStateMap.delete(firstKey);
+    }
   }
   advanceState(frame, columns, rows, opts, state);
   const lines = [];
@@ -375,6 +379,10 @@ function createAsciiDatamoshSampler(frame, options = {}) {
       lastKeyframe: -1
     };
     datamoshStateMap.set(stateKey, state);
+    if (datamoshStateMap.size > 32) {
+      const firstKey = datamoshStateMap.keys().next().value;
+      if (firstKey !== void 0) datamoshStateMap.delete(firstKey);
+    }
   }
   advanceState(frame, virtualColumns, virtualRows, opts, state);
   return (x, y) => {
@@ -398,4 +406,4 @@ export {
   createAsciiDatamoshSampler,
   clearDatamoshState
 };
-//# sourceMappingURL=chunk-EU7BANWY.js.map
+//# sourceMappingURL=chunk-IL2CPPL5.js.map

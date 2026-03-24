@@ -35,6 +35,7 @@
 			"types": "./dist/types/*.d.ts"
 		}
 	},
+	"sideEffects": false,
 	"files": [
 		"dist",
 		"README.md"

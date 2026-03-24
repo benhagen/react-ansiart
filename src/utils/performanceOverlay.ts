@@ -36,10 +36,10 @@ export function drawPerformanceOverlay(
 	} = stats
 
 	// Prepare overlay text
+	const totalTime = renderTime + drawTime
 	const lines = [
 		`FPS: ${actualFps.toFixed(1)} / ${targetFps}`,
-		`Render: ${renderTime.toFixed(2)}ms`,
-		`Draw: ${drawTime.toFixed(2)}ms`,
+		`Frame: ${totalTime.toFixed(2)}ms (gen ${renderTime.toFixed(1)} + draw ${drawTime.toFixed(1)})`,
 		`World: ${virtualColumns ?? viewColumns}x${virtualRows ?? viewRows}`,
 		`View: ${viewColumns}x${viewRows} @ (${viewX},${viewY})`,
 	]

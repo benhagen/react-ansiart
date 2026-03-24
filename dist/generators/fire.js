@@ -2,7 +2,7 @@ import {
   clearFireState,
   createAsciiFireSampler,
   generateAsciiFireFrame
-} from "../chunk-OE5RWVGH.js";
+} from "../chunk-WICQIU2Y.js";
 export {
   clearFireState,
   createAsciiFireSampler,

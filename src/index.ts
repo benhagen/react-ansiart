@@ -7,8 +7,8 @@ export type { AnsiVirtualDisplayProps } from './components/AnsiVirtualDisplay'
 export { AnsiPlayerOverlay } from './components/AnsiPlayerOverlay'
 export type { AnsiPlayerOverlayProps } from './components/AnsiPlayerOverlay'
 
-export { PlasmaBackgroundLayout } from './components/PlasmaBackgroundLayout'
-export type { PlasmaBackgroundLayoutProps } from './components/PlasmaBackgroundLayout'
+export { PlasmaBackgroundLayout, GeneratorBackgroundLayout } from './components/PlasmaBackgroundLayout'
+export type { PlasmaBackgroundLayoutProps, GeneratorBackgroundLayoutProps } from './components/PlasmaBackgroundLayout'
 
 export { FontCharacterChart } from './components/FontCharacterChart'
 export type { FontCharacterChartProps } from './components/FontCharacterChart'
@@ -38,6 +38,8 @@ export { getSauceInfo, parseSauce } from './utils/sauce'
 export type { SauceMetadata } from './utils/sauce'
 
 export { convertFrameDataToAnsi } from './ansi/frameToAnsi'
+export { createShapeConverter, SHAPE_CHAR_PRESETS } from './ansi/shapeAsciiConverter'
+export type { ShapeConverterOptions, ShapeCharPreset } from './ansi/shapeAsciiConverter'
 
 export {
 	createAsciiPerlinPlasmaSampler,
@@ -73,6 +75,45 @@ export {
 	generateAsciiMetaballsFrame,
 } from './generators/asciiMetaballsGenerator'
 export type { AsciiMetaballsOptions } from './generators/asciiMetaballsGenerator'
+
+export {
+	clearMatrixRainState,
+	createAsciiMatrixRainSampler,
+	generateAsciiMatrixRainFrame,
+} from './generators/asciiMatrixRainGenerator'
+export type { AsciiMatrixRainOptions } from './generators/asciiMatrixRainGenerator'
+
+export {
+	clearStarfieldState,
+	createAsciiStarfieldSampler,
+	generateAsciiStarfieldFrame,
+} from './generators/asciiStarfieldGenerator'
+export type { AsciiStarfieldOptions } from './generators/asciiStarfieldGenerator'
+
+export {
+	generateAsciiTunnelFrame,
+} from './generators/asciiTunnelGenerator'
+export type { AsciiTunnelOptions } from './generators/asciiTunnelGenerator'
+
+export {
+	clearGameOfLifeState,
+	createAsciiGameOfLifeSampler,
+	generateAsciiGameOfLifeFrame,
+} from './generators/asciiGameOfLifeGenerator'
+export type { AsciiGameOfLifeOptions } from './generators/asciiGameOfLifeGenerator'
+
+export {
+	clearWaterRippleState,
+	createAsciiWaterRippleSampler,
+	generateAsciiWaterRippleFrame,
+} from './generators/asciiWaterRippleGenerator'
+export type { AsciiWaterRippleOptions } from './generators/asciiWaterRippleGenerator'
+
+export {
+	generateAsciiMandelbrotFrame,
+	generateMandelbrotPixels,
+} from './generators/asciiMandelbrotGenerator'
+export type { AsciiMandelbrotOptions } from './generators/asciiMandelbrotGenerator'
 
 export {
 	createAnsiArtFrameGenerator,

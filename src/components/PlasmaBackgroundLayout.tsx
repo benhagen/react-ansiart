@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator, DisplayFrameGenerator } from '../types/types'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
 import type { BitmapFont } from '../font/bitmapFont'
 import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
@@ -17,7 +18,9 @@ export interface PlasmaBackgroundLayoutProps {
 	contentClassName?: string
 	contentStyle?: React.CSSProperties
 	plasmaClassName?: string
-	// Generator selection
+	// Generator: pass a custom frame generator directly (overrides generatorType)
+	frameGenerator?: DisplayFrameGenerator
+	// Generator selection (built-in shortcut, ignored when frameGenerator is provided)
 	generatorType?: 'plasma' | 'fire' // Type of generator to use (default: 'plasma')
 	// Virtual world dimensions (in pixels) - if not provided, will be calculated from content
 	virtualWidthPx?: number
@@ -45,6 +48,7 @@ export function PlasmaBackgroundLayout({
 	contentClassName,
 	contentStyle,
 	plasmaClassName,
+	frameGenerator: externalFrameGenerator,
 	generatorType = 'plasma',
 	virtualWidthPx,
 	virtualHeightPx,
@@ -293,15 +297,16 @@ export function PlasmaBackgroundLayout({
 	}, [chars, darkenAmount, sparkRange, seed, bgColor])
 
 	// Memoize the fixed mode frame generator to avoid recreating on every render
-	const fixedFrameGenerator = useCallback(
-		(frame: number, columns: number, rows: number) => {
-			if (generatorType === 'fire' && fireModuleRef.current) {
-				return fireModuleRef.current.generateAsciiFireFrame(frame, columns, rows, mergedFireOptions)
-			}
-			return generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions)
-		},
-		[generatorType, mergedPlasmaOptions, mergedFireOptions, fireModuleLoaded]
-	)
+	const fixedFrameGenerator: DisplayFrameGenerator = useMemo(() => {
+		if (externalFrameGenerator) return externalFrameGenerator
+		if (generatorType === 'fire' && fireModuleRef.current) {
+			const fireMod = fireModuleRef.current
+			return (frame: number, columns: number, rows: number) =>
+				fireMod.generateAsciiFireFrame(frame, columns, rows, mergedFireOptions)
+		}
+		return (frame: number, columns: number, rows: number) =>
+			generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions)
+	}, [externalFrameGenerator, generatorType, mergedPlasmaOptions, mergedFireOptions, fireModuleLoaded])
 
 	// Store current view position in a ref so the generator can access it
 	const viewYRef = useRef(0)
@@ -314,7 +319,10 @@ export function PlasmaBackgroundLayout({
 
 	// Create the scrollable mode frame generator
 	// For fire, pass worldHeight and worldWidth for positioning and sizing
-	const scrollableFrameGenerator = useMemo(() => {
+	const scrollableFrameGenerator: DisplayFrameGenerator = useMemo(() => {
+		// External generator: use directly (no sampler-based virtual world scrolling)
+		if (externalFrameGenerator) return externalFrameGenerator
+
 		if (generatorType === 'fire' && fireModuleRef.current) {
 			const fireMod = fireModuleRef.current
 			return (frame: number, reqColumns: number, reqRows: number): AnsiScreen => {
@@ -357,7 +365,7 @@ export function PlasmaBackgroundLayout({
 
 			return { lines, columns: reqColumns }
 		}
-	}, [generatorType, mergedFireOptions, mergedPlasmaOptions, fireModuleLoaded])
+	}, [externalFrameGenerator, generatorType, mergedFireOptions, mergedPlasmaOptions, fireModuleLoaded])
 
 	// Derive virtual world in character units using font dimensions
 	const cellWidthPx = bitmapFont?.width || 8 // Default fallback
@@ -373,8 +381,9 @@ export function PlasmaBackgroundLayout({
 					width: '100%',
 				}}
 			>
-				{/* Fixed plasma background */}
+				{/* Fixed background */}
 				<div
+					className={plasmaClassName}
 					style={{
 						position: 'fixed',
 						top: 0,
@@ -493,6 +502,7 @@ export function PlasmaBackgroundLayout({
 		>
 			{/* Fixed viewport-sized virtual display */}
 			<div
+				className={plasmaClassName}
 				style={{
 					position: 'fixed',
 					top: 0,
@@ -542,3 +552,7 @@ export function PlasmaBackgroundLayout({
 		</div>
 	)
 }
+
+/** Alias for PlasmaBackgroundLayout — supports any generator via frameGenerator prop */
+export const GeneratorBackgroundLayout = PlasmaBackgroundLayout
+export type GeneratorBackgroundLayoutProps = PlasmaBackgroundLayoutProps

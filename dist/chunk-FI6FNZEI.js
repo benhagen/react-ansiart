@@ -10,7 +10,7 @@ import {
 import {
   loadRawBitmapFont,
   renderGlyph
-} from "./chunk-R3T57YO4.js";
+} from "./chunk-XYPTVL3M.js";
 
 // src/components/FontCharacterChart.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -180,4 +180,4 @@ function FontCharacterChart({ bitmapFontUrl }) {
 export {
   FontCharacterChart
 };
-//# sourceMappingURL=chunk-624JQLJA.js.map
+//# sourceMappingURL=chunk-FI6FNZEI.js.map

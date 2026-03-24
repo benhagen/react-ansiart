@@ -93,6 +93,10 @@ function generateAsciiFireFrame(frame, columns, rows, options = {}) {
     }
     state = { buffer, lastFrame: -1 };
     fireStateMap.set(stateKey, state);
+    if (fireStateMap.size > 32) {
+      const firstKey = fireStateMap.keys().next().value;
+      if (firstKey !== void 0) fireStateMap.delete(firstKey);
+    }
   }
   const fireBuffer = state.buffer;
   state.lastFrame = frame;
@@ -226,6 +230,10 @@ function createAsciiFireSampler(frame, options = {}) {
     }
     samplerState = { buffer, bufferCols, bufferRows, lastFrame: -1 };
     samplerStateMap.set(stateKey, samplerState);
+    if (samplerStateMap.size > 32) {
+      const firstKey = samplerStateMap.keys().next().value;
+      if (firstKey !== void 0) samplerStateMap.delete(firstKey);
+    }
   }
   const virtualBuffer = samplerState.buffer;
   const currentBufferCols = samplerState.bufferCols;
@@ -284,4 +292,4 @@ export {
   createAsciiFireSampler,
   clearFireState
 };
-//# sourceMappingURL=chunk-OE5RWVGH.js.map
+//# sourceMappingURL=chunk-WICQIU2Y.js.map

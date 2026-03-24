@@ -37,7 +37,10 @@ function renderGlyph(ctx, font, charCode, x, y, fgColor, bgColor) {
   }
   const cacheKey = `${charCode}:${fgColor}:${bgColor}`;
   let canvas = font.glyphCache.get(cacheKey);
-  if (!canvas) {
+  if (canvas) {
+    font.glyphCache.delete(cacheKey);
+    font.glyphCache.set(cacheKey, canvas);
+  } else {
     const glyph = font.glyphs[charCode] || font.glyphs[0];
     canvas = document.createElement("canvas");
     canvas.width = font.width;
@@ -53,6 +56,13 @@ function renderGlyph(ctx, font, charCode, x, y, fgColor, bgColor) {
         if (byte & 1 << bit) {
           offscreenCtx.fillRect(col, row, 1, 1);
         }
+      }
+    }
+    if (font.glyphCache.size > 8192) {
+      const iter = font.glyphCache.keys();
+      for (let i = 0; i < 2048; i++) {
+        const k = iter.next().value;
+        if (k !== void 0) font.glyphCache.delete(k);
       }
     }
     font.glyphCache.set(cacheKey, canvas);
@@ -74,4 +84,4 @@ export {
   renderGlyph,
   renderText
 };
-//# sourceMappingURL=chunk-R3T57YO4.js.map
+//# sourceMappingURL=chunk-XYPTVL3M.js.map

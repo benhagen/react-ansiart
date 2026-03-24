@@ -124,6 +124,10 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	setBitmapFont(font: BitmapFont | null): void {
+		if (this.bitmapFont?.glyphCache) {
+			this.bitmapFont.glyphCache.clear()
+		}
+		this.previousCells = null
 		this.bitmapFont = font
 		this._setupCanvas()
 		this._render()
@@ -344,7 +348,9 @@ export class AnsiVirtualDisplayEngine {
 				return
 			}
 
-			this.currentFrame++
+			// Skip frames if rendering fell behind to keep animation timing correct
+			const framesToAdvance = Math.max(1, Math.floor(elapsed / frameInterval))
+			this.currentFrame += framesToAdvance
 			this._generateAndRender()
 		}
 

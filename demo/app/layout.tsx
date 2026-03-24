@@ -10,6 +10,7 @@ const NAV_LINKS = [
 	{ href: '/generators', label: 'Generators' },
 	{ href: '/backgrounds', label: 'Backgrounds' },
 	{ href: '/font-chart', label: 'Font Chart' },
+	{ href: '/shape-converter', label: 'Shape Converter' },
 ]
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

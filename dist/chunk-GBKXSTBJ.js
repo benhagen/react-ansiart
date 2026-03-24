@@ -3,7 +3,7 @@ import {
 } from "./chunk-ISKFY25D.js";
 import {
   loadRawBitmapFont
-} from "./chunk-R3T57YO4.js";
+} from "./chunk-XYPTVL3M.js";
 
 // src/font/fontCache.ts
 var CACHE_PREFIX = "react-ansiart:font:";
@@ -136,4 +136,4 @@ export {
   clearFontCache,
   loadBitmapFontFromUrl
 };
-//# sourceMappingURL=chunk-ZKKL2N7R.js.map
+//# sourceMappingURL=chunk-GBKXSTBJ.js.map

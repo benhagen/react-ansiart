@@ -118,7 +118,11 @@ export function renderGlyph(
 	const cacheKey = `${charCode}:${fgColor}:${bgColor}`
 	let canvas = font.glyphCache.get(cacheKey)
 
-	if (!canvas) {
+	if (canvas) {
+		// LRU: move to end of Map iteration order so it's evicted last
+		font.glyphCache.delete(cacheKey)
+		font.glyphCache.set(cacheKey, canvas)
+	} else {
 		// Cache miss - render the glyph to an offscreen canvas
 		const glyph = font.glyphs[charCode] || font.glyphs[0]
 
@@ -141,6 +145,15 @@ export function renderGlyph(
 				if (byte & (1 << bit)) {
 					offscreenCtx.fillRect(col, row, 1, 1)
 				}
+			}
+		}
+
+		// Evict oldest entries if cache grows too large (prevents memory blow-up with RGB colors)
+		if (font.glyphCache.size > 8192) {
+			const iter = font.glyphCache.keys()
+			for (let i = 0; i < 2048; i++) {
+				const k = iter.next().value
+				if (k !== undefined) font.glyphCache.delete(k)
 			}
 		}
 

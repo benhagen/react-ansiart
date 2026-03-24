@@ -2,7 +2,7 @@ import {
   loadRawBitmapFont,
   renderGlyph,
   renderText
-} from "../chunk-R3T57YO4.js";
+} from "../chunk-XYPTVL3M.js";
 export {
   loadRawBitmapFont,
   renderGlyph,

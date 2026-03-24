@@ -8,7 +8,7 @@ import {
   parseAnsiIncremental,
   parseAnsiIncrementalDynamic,
   parseAscii
-} from "../chunk-BBNH5DIF.js";
+} from "../chunk-3PHKD3AN.js";
 import {
   getSauceInfo,
   parseSauce

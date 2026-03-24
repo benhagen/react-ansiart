@@ -23,7 +23,7 @@ var PARAMETER_BYTE_MAX = 63;
 var SEMICOLON = 59;
 var SPACE = 32;
 var QUESTION_MARK = 63;
-var MAX_CSI_PARAMS = 256;
+var MAX_CSI_PARAMS = 64;
 var ANSI_RESET = 0;
 var ANSI_BOLD = 1;
 var ANSI_BOLD_OFF = 22;
@@ -156,8 +156,20 @@ function applySGR(params, state) {
       state.bold = true;
       continue;
     }
+    if (p === 2) {
+      if (typeof state.fg === "number" && state.fg >= 8 && state.fg <= 15) {
+        state.fg -= 8;
+      }
+      continue;
+    }
+    if (p === 3 || p === 4 || p === 9) {
+      continue;
+    }
     if (p === ANSI_BOLD_OFF) {
       state.bold = false;
+      continue;
+    }
+    if (p === 23 || p === 24 || p === 29) {
       continue;
     }
     if (p === ANSI_FG_DEFAULT) {
@@ -878,4 +890,4 @@ export {
   findNextRenderPoint,
   findNextCursorMove
 };
-//# sourceMappingURL=chunk-BBNH5DIF.js.map
+//# sourceMappingURL=chunk-3PHKD3AN.js.map

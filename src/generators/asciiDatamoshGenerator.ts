@@ -511,6 +511,10 @@ export function generateAsciiDatamoshFrame(
 			lastKeyframe: -1,
 		}
 		datamoshStateMap.set(stateKey, state)
+		if (datamoshStateMap.size > 32) {
+			const firstKey = datamoshStateMap.keys().next().value
+			if (firstKey !== undefined) datamoshStateMap.delete(firstKey)
+		}
 	}
 
 	advanceState(frame, columns, rows, opts, state)
@@ -561,6 +565,10 @@ export function createAsciiDatamoshSampler(
 			lastKeyframe: -1,
 		}
 		datamoshStateMap.set(stateKey, state)
+		if (datamoshStateMap.size > 32) {
+			const firstKey = datamoshStateMap.keys().next().value
+			if (firstKey !== undefined) datamoshStateMap.delete(firstKey)
+		}
 	}
 
 	advanceState(frame, virtualColumns, virtualRows, opts, state)
