@@ -7,6 +7,7 @@ import {
 	clearFireState,
 	clearGameOfLifeState,
 	clearMatrixRainState,
+	clearReactionDiffusionState,
 	clearStarfieldState,
 	clearWaterRippleState,
 	generateAsciiDatamoshFrame,
@@ -20,6 +21,11 @@ import {
 	generateAsciiMandelbrotFrame,
 	generateAsciiTunnelFrame,
 	generateAsciiWaterRippleFrame,
+	generateAsciiCopperBarsFrame,
+	generateAsciiCrtStaticFrame,
+	generateAsciiAuroraBorealisFrame,
+	generateAsciiReactionDiffusionFrame,
+	generateAsciiTerrainFlyoverFrame,
 	generateMandelbrotPixels,
 	createShapeConverter,
 	getEmbeddedVgaFont,
@@ -31,6 +37,9 @@ import { ControlGroup } from '../_components/ControlGroup'
 import { NumberInput, SelectInput, ToggleInput } from '../_components/ControlRow'
 import { generateGeneratorCode } from '../_lib/generateCode'
 import {
+	AURORA_BOREALIS_DEFAULTS,
+	COPPER_BARS_DEFAULTS,
+	CRT_STATIC_DEFAULTS,
 	DATAMOSH_DEFAULTS,
 	FIRE_DEFAULTS,
 	GAME_OF_LIFE_DEFAULTS,
@@ -38,8 +47,10 @@ import {
 	MATRIX_DEFAULTS,
 	METABALLS_DEFAULTS,
 	PLASMA_DEFAULTS,
+	REACTION_DIFFUSION_DEFAULTS,
 	SONAR_DEFAULTS,
 	STARFIELD_DEFAULTS,
+	TERRAIN_FLYOVER_DEFAULTS,
 	TUNNEL_DEFAULTS,
 	VIRTUAL_DISPLAY_DEFAULTS,
 	WATER_RIPPLE_DEFAULTS,
@@ -55,8 +66,13 @@ import { TunnelPanel } from './_panels/TunnelPanel'
 import { GameOfLifePanel } from './_panels/GameOfLifePanel'
 import { WaterRipplePanel } from './_panels/WaterRipplePanel'
 import { MandelbrotPanel } from './_panels/MandelbrotPanel'
+import { CopperBarsPanel } from './_panels/CopperBarsPanel'
+import { CrtStaticPanel } from './_panels/CrtStaticPanel'
+import { AuroraBorealisPanel } from './_panels/AuroraBorealisPanel'
+import { ReactionDiffusionPanel } from './_panels/ReactionDiffusionPanel'
+import { TerrainFlyoverPanel } from './_panels/TerrainFlyoverPanel'
 
-type GeneratorType = 'perlinPlasma' | 'fire' | 'sonar' | 'datamosh' | 'metaballs' | 'matrix' | 'starfield' | 'tunnel' | 'gameOfLife' | 'waterRipple' | 'mandelbrot'
+type GeneratorType = 'perlinPlasma' | 'fire' | 'sonar' | 'datamosh' | 'metaballs' | 'matrix' | 'starfield' | 'tunnel' | 'gameOfLife' | 'waterRipple' | 'mandelbrot' | 'copperBars' | 'crtStatic' | 'auroraBorealis' | 'reactionDiffusion' | 'terrainFlyover'
 
 const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'perlinPlasma', label: 'Plasma' },
@@ -70,6 +86,11 @@ const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'gameOfLife', label: 'Life' },
 	{ key: 'waterRipple', label: 'Ripples' },
 	{ key: 'mandelbrot', label: 'Mandelbrot' },
+	{ key: 'copperBars', label: 'Copper Bars' },
+	{ key: 'crtStatic', label: 'CRT Static' },
+	{ key: 'auroraBorealis', label: 'Aurora' },
+	{ key: 'reactionDiffusion', label: 'Reaction-Diff' },
+	{ key: 'terrainFlyover', label: 'Terrain' },
 ]
 
 export default function GeneratorsPage() {
@@ -190,6 +211,55 @@ export default function GeneratorsPage() {
 	const [mandelbrotColorMode, setMandelbrotColorMode] = useState<string>(MANDELBROT_DEFAULTS.colorMode)
 	const [mandelbrotShapeMode, setMandelbrotShapeMode] = useState(false)
 
+	// Copper Bars state
+	const [copperBarCount, setCopperBarCount] = useState(COPPER_BARS_DEFAULTS.barCount)
+	const [copperBarHeight, setCopperBarHeight] = useState(COPPER_BARS_DEFAULTS.barHeight)
+	const [copperSpeed, setCopperSpeed] = useState(COPPER_BARS_DEFAULTS.speed)
+	const [copperBgColor, setCopperBgColor] = useState(COPPER_BARS_DEFAULTS.bgColor)
+	const [copperChars, setCopperChars] = useState(COPPER_BARS_DEFAULTS.chars)
+	const [copperSeed, setCopperSeed] = useState(COPPER_BARS_DEFAULTS.seed)
+
+	// CRT Static state
+	const [crtSignalStrength, setCrtSignalStrength] = useState(CRT_STATIC_DEFAULTS.signalStrength)
+	const [crtScanlineIntensity, setCrtScanlineIntensity] = useState(CRT_STATIC_DEFAULTS.scanlineIntensity)
+	const [crtTearFrequency, setCrtTearFrequency] = useState(CRT_STATIC_DEFAULTS.tearFrequency)
+	const [crtRollingBarSpeed, setCrtRollingBarSpeed] = useState(CRT_STATIC_DEFAULTS.rollingBarSpeed)
+	const [crtVhsMode, setCrtVhsMode] = useState(CRT_STATIC_DEFAULTS.vhsMode)
+	const [crtBgColor, setCrtBgColor] = useState(CRT_STATIC_DEFAULTS.bgColor)
+	const [crtChars, setCrtChars] = useState(CRT_STATIC_DEFAULTS.chars)
+	const [crtSeed, setCrtSeed] = useState(CRT_STATIC_DEFAULTS.seed)
+
+	// Aurora Borealis state
+	const [auroraCurtainCount, setAuroraCurtainCount] = useState(AURORA_BOREALIS_DEFAULTS.curtainCount)
+	const [auroraSpeed, setAuroraSpeed] = useState(AURORA_BOREALIS_DEFAULTS.speed)
+	const [auroraIntensity, setAuroraIntensity] = useState(AURORA_BOREALIS_DEFAULTS.intensity)
+	const [auroraBgColor, setAuroraBgColor] = useState(AURORA_BOREALIS_DEFAULTS.bgColor)
+	const [auroraChars, setAuroraChars] = useState(AURORA_BOREALIS_DEFAULTS.chars)
+	const [auroraSeed, setAuroraSeed] = useState(AURORA_BOREALIS_DEFAULTS.seed)
+
+	// Reaction-Diffusion state
+	const [rdFeedRate, setRdFeedRate] = useState(REACTION_DIFFUSION_DEFAULTS.feedRate)
+	const [rdKillRate, setRdKillRate] = useState(REACTION_DIFFUSION_DEFAULTS.killRate)
+	const [rdDiffusionU, setRdDiffusionU] = useState(REACTION_DIFFUSION_DEFAULTS.diffusionU)
+	const [rdDiffusionV, setRdDiffusionV] = useState(REACTION_DIFFUSION_DEFAULTS.diffusionV)
+	const [rdStepsPerFrame, setRdStepsPerFrame] = useState(REACTION_DIFFUSION_DEFAULTS.stepsPerFrame)
+	const [rdColorMode, setRdColorMode] = useState<string>(REACTION_DIFFUSION_DEFAULTS.colorMode)
+	const [rdFgColor, setRdFgColor] = useState(REACTION_DIFFUSION_DEFAULTS.fgColor)
+	const [rdBgColor, setRdBgColor] = useState(REACTION_DIFFUSION_DEFAULTS.bgColor)
+	const [rdChars, setRdChars] = useState(REACTION_DIFFUSION_DEFAULTS.chars)
+	const [rdSeed, setRdSeed] = useState(REACTION_DIFFUSION_DEFAULTS.seed)
+
+	// Terrain Flyover state
+	const [terrainScrollSpeed, setTerrainScrollSpeed] = useState(TERRAIN_FLYOVER_DEFAULTS.scrollSpeed)
+	const [terrainHeightScale, setTerrainHeightScale] = useState(TERRAIN_FLYOVER_DEFAULTS.heightScale)
+	const [terrainFogDistance, setTerrainFogDistance] = useState(TERRAIN_FLYOVER_DEFAULTS.fogDistance)
+	const [terrainColorMode, setTerrainColorMode] = useState<string>(TERRAIN_FLYOVER_DEFAULTS.colorMode)
+	const [terrainFgColor, setTerrainFgColor] = useState(TERRAIN_FLYOVER_DEFAULTS.fgColor)
+	const [terrainBgColor, setTerrainBgColor] = useState(TERRAIN_FLYOVER_DEFAULTS.bgColor)
+	const [terrainSkyColor, setTerrainSkyColor] = useState(TERRAIN_FLYOVER_DEFAULTS.skyColor)
+	const [terrainChars, setTerrainChars] = useState(TERRAIN_FLYOVER_DEFAULTS.chars)
+	const [terrainSeed, setTerrainSeed] = useState(TERRAIN_FLYOVER_DEFAULTS.seed)
+
 	useEffect(() => {
 		clearFireState()
 		clearDatamoshState()
@@ -197,6 +267,7 @@ export default function GeneratorsPage() {
 		clearStarfieldState()
 		clearGameOfLifeState()
 		clearWaterRippleState()
+		clearReactionDiffusionState()
 	}, [generatorType])
 
 	const parseOptionalNumber = (value: string): number | undefined => {
@@ -347,6 +418,70 @@ export default function GeneratorsPage() {
 			return (frame: number, cols: number, r: number) =>
 				generateAsciiMandelbrotFrame(frame, cols, r, mandelbrotOpts)
 		}
+		if (generatorType === 'copperBars') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiCopperBarsFrame(frame, cols, r, {
+					barCount: copperBarCount,
+					barHeight: copperBarHeight,
+					speed: copperSpeed,
+					bgColor: copperBgColor,
+					chars: copperChars.trim() ? Array.from(copperChars) : undefined,
+					seed: copperSeed,
+				})
+		}
+		if (generatorType === 'crtStatic') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiCrtStaticFrame(frame, cols, r, {
+					signalStrength: crtSignalStrength,
+					scanlineIntensity: crtScanlineIntensity,
+					tearFrequency: crtTearFrequency,
+					rollingBarSpeed: crtRollingBarSpeed,
+					vhsMode: crtVhsMode,
+					bgColor: crtBgColor,
+					chars: crtChars.trim() ? Array.from(crtChars) : undefined,
+					seed: crtSeed,
+				})
+		}
+		if (generatorType === 'auroraBorealis') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiAuroraBorealisFrame(frame, cols, r, {
+					curtainCount: auroraCurtainCount,
+					speed: auroraSpeed,
+					intensity: auroraIntensity,
+					bgColor: auroraBgColor,
+					chars: auroraChars.trim() ? Array.from(auroraChars) : undefined,
+					seed: auroraSeed,
+				})
+		}
+		if (generatorType === 'reactionDiffusion') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiReactionDiffusionFrame(frame, cols, r, {
+					feedRate: rdFeedRate,
+					killRate: rdKillRate,
+					diffusionU: rdDiffusionU,
+					diffusionV: rdDiffusionV,
+					stepsPerFrame: rdStepsPerFrame,
+					colorMode: rdColorMode as 'spectrum' | 'mono',
+					fgColor: rdFgColor,
+					bgColor: rdBgColor,
+					chars: rdChars.trim() ? Array.from(rdChars) : undefined,
+					seed: rdSeed,
+				})
+		}
+		if (generatorType === 'terrainFlyover') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiTerrainFlyoverFrame(frame, cols, r, {
+					scrollSpeed: terrainScrollSpeed,
+					heightScale: terrainHeightScale,
+					fogDistance: terrainFogDistance,
+					colorMode: terrainColorMode as 'biome' | 'mono',
+					fgColor: terrainFgColor,
+					bgColor: terrainBgColor,
+					skyColor: terrainSkyColor,
+					chars: terrainChars.trim() ? Array.from(terrainChars) : undefined,
+					seed: terrainSeed,
+				})
+		}
 		return (frame: number, cols: number, r: number) =>
 			generateAsciiPerlinPlasmaFrame(frame, cols, r, {
 				chars: plasmaChars.trim() ? Array.from(plasmaChars) : undefined,
@@ -375,6 +510,11 @@ export default function GeneratorsPage() {
 		rippleDamping, rippleDropFrequency, rippleDropStrength, rippleFgColor, rippleBgColor, rippleChars, rippleSeed,
 		mandelbrotMaxIter, mandelbrotZoomSpeed, mandelbrotZoomX, mandelbrotZoomY, mandelbrotInitialZoom,
 		mandelbrotFgColor, mandelbrotBgColor, mandelbrotChars, mandelbrotAspectY, mandelbrotColorMode, mandelbrotShapeMode,
+		copperBarCount, copperBarHeight, copperSpeed, copperBgColor, copperChars, copperSeed,
+		crtSignalStrength, crtScanlineIntensity, crtTearFrequency, crtRollingBarSpeed, crtVhsMode, crtBgColor, crtChars, crtSeed,
+		auroraCurtainCount, auroraSpeed, auroraIntensity, auroraBgColor, auroraChars, auroraSeed,
+		rdFeedRate, rdKillRate, rdDiffusionU, rdDiffusionV, rdStepsPerFrame, rdColorMode, rdFgColor, rdBgColor, rdChars, rdSeed,
+		terrainScrollSpeed, terrainHeightScale, terrainFogDistance, terrainColorMode, terrainFgColor, terrainBgColor, terrainSkyColor, terrainChars, terrainSeed,
 	])
 
 	const generatorOptionsMap: Record<GeneratorType, { options: Record<string, unknown>; defaults: Record<string, unknown> }> = {
@@ -421,6 +561,26 @@ export default function GeneratorsPage() {
 		mandelbrot: {
 			options: { maxIter: mandelbrotMaxIter, zoomSpeed: mandelbrotZoomSpeed, zoomX: mandelbrotZoomX, zoomY: mandelbrotZoomY, initialZoom: mandelbrotInitialZoom, fgColor: mandelbrotFgColor, bgColor: mandelbrotBgColor, chars: mandelbrotChars, aspectY: mandelbrotAspectY, colorMode: mandelbrotColorMode },
 			defaults: MANDELBROT_DEFAULTS,
+		},
+		copperBars: {
+			options: { barCount: copperBarCount, barHeight: copperBarHeight, speed: copperSpeed, bgColor: copperBgColor, chars: copperChars, seed: copperSeed },
+			defaults: COPPER_BARS_DEFAULTS,
+		},
+		crtStatic: {
+			options: { signalStrength: crtSignalStrength, scanlineIntensity: crtScanlineIntensity, tearFrequency: crtTearFrequency, rollingBarSpeed: crtRollingBarSpeed, vhsMode: crtVhsMode, bgColor: crtBgColor, chars: crtChars, seed: crtSeed },
+			defaults: CRT_STATIC_DEFAULTS,
+		},
+		auroraBorealis: {
+			options: { curtainCount: auroraCurtainCount, speed: auroraSpeed, intensity: auroraIntensity, bgColor: auroraBgColor, chars: auroraChars, seed: auroraSeed },
+			defaults: AURORA_BOREALIS_DEFAULTS,
+		},
+		reactionDiffusion: {
+			options: { feedRate: rdFeedRate, killRate: rdKillRate, diffusionU: rdDiffusionU, diffusionV: rdDiffusionV, stepsPerFrame: rdStepsPerFrame, colorMode: rdColorMode, fgColor: rdFgColor, bgColor: rdBgColor, chars: rdChars, seed: rdSeed },
+			defaults: REACTION_DIFFUSION_DEFAULTS,
+		},
+		terrainFlyover: {
+			options: { scrollSpeed: terrainScrollSpeed, heightScale: terrainHeightScale, fogDistance: terrainFogDistance, colorMode: terrainColorMode, fgColor: terrainFgColor, bgColor: terrainBgColor, skyColor: terrainSkyColor, chars: terrainChars, seed: terrainSeed },
+			defaults: TERRAIN_FLYOVER_DEFAULTS,
 		},
 	}
 
@@ -609,6 +769,70 @@ export default function GeneratorsPage() {
 							aspectY={mandelbrotAspectY} setAspectY={setMandelbrotAspectY}
 							colorMode={mandelbrotColorMode} setColorMode={setMandelbrotColorMode}
 							shapeMode={mandelbrotShapeMode} setShapeMode={setMandelbrotShapeMode}
+						/>
+					)}
+
+					{generatorType === 'copperBars' && (
+						<CopperBarsPanel
+							barCount={copperBarCount} setBarCount={setCopperBarCount}
+							barHeight={copperBarHeight} setBarHeight={setCopperBarHeight}
+							speed={copperSpeed} setSpeed={setCopperSpeed}
+							bgColor={copperBgColor} setBgColor={setCopperBgColor}
+							chars={copperChars} setChars={setCopperChars}
+							seed={copperSeed} setSeed={setCopperSeed}
+						/>
+					)}
+
+					{generatorType === 'crtStatic' && (
+						<CrtStaticPanel
+							signalStrength={crtSignalStrength} setSignalStrength={setCrtSignalStrength}
+							scanlineIntensity={crtScanlineIntensity} setScanlineIntensity={setCrtScanlineIntensity}
+							tearFrequency={crtTearFrequency} setTearFrequency={setCrtTearFrequency}
+							rollingBarSpeed={crtRollingBarSpeed} setRollingBarSpeed={setCrtRollingBarSpeed}
+							vhsMode={crtVhsMode} setVhsMode={setCrtVhsMode}
+							bgColor={crtBgColor} setBgColor={setCrtBgColor}
+							chars={crtChars} setChars={setCrtChars}
+							seed={crtSeed} setSeed={setCrtSeed}
+						/>
+					)}
+
+					{generatorType === 'auroraBorealis' && (
+						<AuroraBorealisPanel
+							curtainCount={auroraCurtainCount} setCurtainCount={setAuroraCurtainCount}
+							speed={auroraSpeed} setSpeed={setAuroraSpeed}
+							intensity={auroraIntensity} setIntensity={setAuroraIntensity}
+							bgColor={auroraBgColor} setBgColor={setAuroraBgColor}
+							chars={auroraChars} setChars={setAuroraChars}
+							seed={auroraSeed} setSeed={setAuroraSeed}
+						/>
+					)}
+
+					{generatorType === 'reactionDiffusion' && (
+						<ReactionDiffusionPanel
+							feedRate={rdFeedRate} setFeedRate={setRdFeedRate}
+							killRate={rdKillRate} setKillRate={setRdKillRate}
+							diffusionU={rdDiffusionU} setDiffusionU={setRdDiffusionU}
+							diffusionV={rdDiffusionV} setDiffusionV={setRdDiffusionV}
+							stepsPerFrame={rdStepsPerFrame} setStepsPerFrame={setRdStepsPerFrame}
+							colorMode={rdColorMode} setColorMode={setRdColorMode}
+							fgColor={rdFgColor} setFgColor={setRdFgColor}
+							bgColor={rdBgColor} setBgColor={setRdBgColor}
+							chars={rdChars} setChars={setRdChars}
+							seed={rdSeed} setSeed={setRdSeed}
+						/>
+					)}
+
+					{generatorType === 'terrainFlyover' && (
+						<TerrainFlyoverPanel
+							scrollSpeed={terrainScrollSpeed} setScrollSpeed={setTerrainScrollSpeed}
+							heightScale={terrainHeightScale} setHeightScale={setTerrainHeightScale}
+							fogDistance={terrainFogDistance} setFogDistance={setTerrainFogDistance}
+							colorMode={terrainColorMode} setColorMode={setTerrainColorMode}
+							fgColor={terrainFgColor} setFgColor={setTerrainFgColor}
+							bgColor={terrainBgColor} setBgColor={setTerrainBgColor}
+							skyColor={terrainSkyColor} setSkyColor={setTerrainSkyColor}
+							chars={terrainChars} setChars={setTerrainChars}
+							seed={terrainSeed} setSeed={setTerrainSeed}
 						/>
 					)}
 

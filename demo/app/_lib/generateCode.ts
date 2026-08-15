@@ -78,6 +78,11 @@ export function generateGeneratorCode(
 		gameOfLife: { fn: 'generateAsciiGameOfLifeFrame', type: 'AsciiGameOfLifeOptions' },
 		waterRipple: { fn: 'generateAsciiWaterRippleFrame', type: 'AsciiWaterRippleOptions' },
 		mandelbrot: { fn: 'generateAsciiMandelbrotFrame', type: 'AsciiMandelbrotOptions' },
+		copperBars: { fn: 'generateAsciiCopperBarsFrame', type: 'AsciiCopperBarsOptions' },
+		crtStatic: { fn: 'generateAsciiCrtStaticFrame', type: 'AsciiCrtStaticOptions' },
+		auroraBorealis: { fn: 'generateAsciiAuroraBorealisFrame', type: 'AsciiAuroraBorealisOptions' },
+		reactionDiffusion: { fn: 'generateAsciiReactionDiffusionFrame', type: 'AsciiReactionDiffusionOptions' },
+		terrainFlyover: { fn: 'generateAsciiTerrainFlyoverFrame', type: 'AsciiTerrainFlyoverOptions' },
 	}
 
 	const gen = generatorMap[generatorType]

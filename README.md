@@ -11,6 +11,7 @@ React components for rendering ANSI art files (.ANS, .ASC) and creating animated
 - **CP437 Encoding**: Full support for Code Page 437 characters including box-drawing and block elements
 - **Bitmap Font Rendering**: Pixel-perfect canvas rendering using Windows .FON bitmap fonts for authentic VGA display
 - **Embedded VGA Font**: Built-in IBM VGA 8x16 font — no external font file required
+
 - **Progressive Animation**: Animate ANSI sequences progressively to simulate BBS-era terminal playback with configurable modem speeds
 - **YouTube-Style Controls**: Overlay controls with seek, speed adjustment, and frame-by-frame navigation
 - **SAUCE Metadata**: Parse and display SAUCE metadata from ANSI art files

@@ -139,6 +139,60 @@ export const MANDELBROT_DEFAULTS = {
 	colorMode: 'spectrum' as const,
 }
 
+export const COPPER_BARS_DEFAULTS = {
+	barCount: 5,
+	barHeight: 6,
+	speed: 0.04,
+	bgColor: '#000000',
+	chars: ' .·:+=# @',
+	seed: 7777,
+}
+
+export const CRT_STATIC_DEFAULTS = {
+	signalStrength: 0.3,
+	scanlineIntensity: 0.3,
+	tearFrequency: 0.08,
+	rollingBarSpeed: 0.02,
+	vhsMode: false,
+	bgColor: '#000000',
+	chars: ' .·-:+=%#@',
+	seed: 4242,
+}
+
+export const AURORA_BOREALIS_DEFAULTS = {
+	curtainCount: 4,
+	speed: 0.015,
+	intensity: 1.0,
+	bgColor: '#000008',
+	chars: '  .·:~=+*#@',
+	seed: 3333,
+}
+
+export const REACTION_DIFFUSION_DEFAULTS = {
+	feedRate: 0.055,
+	killRate: 0.062,
+	diffusionU: 1.0,
+	diffusionV: 0.5,
+	stepsPerFrame: 8,
+	colorMode: 'spectrum' as const,
+	fgColor: '#55ffaa',
+	bgColor: '#000000',
+	chars: '  .·:;+=xX$#@',
+	seed: 9876,
+}
+
+export const TERRAIN_FLYOVER_DEFAULTS = {
+	scrollSpeed: 0.3,
+	heightScale: 0.4,
+	fogDistance: 0.7,
+	colorMode: 'biome' as const,
+	fgColor: '#88cc88',
+	bgColor: '#000011',
+	skyColor: '#000022',
+	chars: ' .·:;=+xX%#@',
+	seed: 54321,
+}
+
 export const METABALLS_DEFAULTS = {
 	seed: 1337,
 	balls: 6,
