@@ -212,13 +212,19 @@ function resolveAndValidate(options: AsciiSonarOptions) {
 function computeRings(tSeconds: number, params: ReturnType<typeof resolveAndValidate>) {
 	const period = 1 / params.safeFrequency
 	const kMax = Math.floor(tSeconds / period)
+	// Rings only get older (and thus dimmer) as k decreases, so amp is
+	// monotonically decreasing along this loop. Once a ring's amplitude
+	// can't move the alpha by even one quantization step, it and every
+	// subsequent (older) ring are visually indistinguishable from absent.
+	const minAmp = 1 / (2 * params.steps)
 
 	const rings: Array<{ radius: number; amp: number }> = []
 	for (let k = kMax; k >= 0 && rings.length < params.ringCap; k--) {
 		const age = tSeconds - k * period
 		if (age < 0) continue
-		const radius = age * params.safeSpeed
 		const amp = Math.exp(-age * params.safeDecay)
+		if (amp < minAmp) break
+		const radius = age * params.safeSpeed
 		rings.push({ radius, amp })
 	}
 	return rings
@@ -255,7 +261,10 @@ export function generateAsciiSonarFrame(
 			let sum = 0
 			for (let r = 0; r < rings.length; r++) {
 				const ring = rings[r]
-				sum += gaussianBand(dist - ring.radius, invSigma) * ring.amp
+				const d = dist - ring.radius
+				// Beyond 3 sigma the Gaussian contribution is negligible; skip the exp() call.
+				if (Math.abs(d) * invSigma > 3) continue
+				sum += gaussianBand(d, invSigma) * ring.amp
 			}
 
 			const alpha = clamp01(safeBaseAlpha + safeIntensity * sum)
@@ -290,7 +299,9 @@ export function createAsciiSonarSampler(frame: number, options: AsciiSonarOption
 		let sum = 0
 		for (let r = 0; r < rings.length; r++) {
 			const ring = rings[r]
-			sum += gaussianBand(dist - ring.radius, invSigma) * ring.amp
+			const d = dist - ring.radius
+			if (Math.abs(d) * invSigma > 3) continue
+			sum += gaussianBand(d, invSigma) * ring.amp
 		}
 
 		const alpha = clamp01(safeBaseAlpha + safeIntensity * sum)

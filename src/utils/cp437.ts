@@ -1,8 +1,47 @@
-// Minimal CP437 decoding utilities focused on ANSI art use-cases (blocks/box-drawing)
+// CP437 (IBM PC / "OEM-US") code page conversion utilities.
+//
+// The mapping below is the complete, standard CP437 -> Unicode table. It matters that it
+// is complete AND that it is a bijection: the render path converts bytes to characters on
+// the way in (parser) and characters back to bytes on the way out (bitmap glyph lookup).
+// Any two bytes sharing a Unicode codepoint would make the reverse lookup ambiguous and
+// silently render the wrong glyph.
 
-// Reverse mapping: Unicode -> CP437 byte (for bitmap font rendering)
-const unicodeToCp437Map: Map<string, number> = new Map()
+/** CP437 glyphs for bytes 0x00-0x1F (the "control" range has printable forms in CP437). */
+const CP437_CONTROL_GLYPHS = '\u0000☺☻♥♦♣♠•◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼'
 
+/** CP437 glyphs for bytes 0x7F-0xFF. Byte 0xFF is a non-breaking space. */
+const CP437_HIGH_GLYPHS =
+	'⌂ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ '
+
+function buildTable(): string[] {
+	const table = new Array<string>(256)
+	for (let i = 0x00; i <= 0x1f; i++) table[i] = CP437_CONTROL_GLYPHS[i]
+	for (let i = 0x20; i <= 0x7e; i++) table[i] = String.fromCharCode(i)
+	for (let i = 0x7f; i <= 0xff; i++) table[i] = CP437_HIGH_GLYPHS[i - 0x7f]
+	return table
+}
+
+/**
+ * Complete CP437 byte -> Unicode character table, indexed by byte value.
+ * Every entry is a single distinct character, so the mapping is reversible.
+ */
+export const CP437_TO_UNICODE: readonly string[] = buildTable()
+
+/**
+ * Convert a CP437 byte to its printable glyph, ignoring any control-character meaning.
+ * Use this when the byte is known to represent a glyph rather than a control code.
+ */
+export function cp437ByteToGlyph(byte: number): string {
+	return CP437_TO_UNICODE[byte & 0xff]
+}
+
+/**
+ * Convert a CP437 byte to a character for text/stream decoding.
+ *
+ * Bytes that carry control meaning in an ANSI art stream keep that meaning here:
+ * LF and CR stay line terminators and TAB becomes a space (BBS convention). Other
+ * C0 bytes are dropped. For the raw glyph forms use {@link cp437ByteToGlyph}.
+ */
 export function cp437ByteToChar(byte: number): string {
 	// Handle control bytes explicitly
 	if (byte === 0x0a) return '\n' // LF
@@ -10,75 +49,7 @@ export function cp437ByteToChar(byte: number): string {
 	if (byte === 0x09) return ' ' // TAB -> space (BBS convention)
 	if (byte < 0x20) return '' // ignore other control chars
 
-	// Common box-drawing and block elements used in ANSI art
-	switch (byte) {
-		// Light/medium/dark shade
-		case 0xb0:
-			return '\u2591' // ░
-		case 0xb1:
-			return '\u2592' // ▒
-		case 0xb2:
-			return '\u2593' // ▓
-
-		// Box drawing single
-		case 0xb3:
-			return '\u2502' // │
-		case 0xb4:
-			return '\u2524' // ┤
-		case 0xbf:
-			return '\u2510' // ┐
-		case 0xc0:
-			return '\u2514' // └
-		case 0xc1:
-			return '\u2534' // ┴
-		case 0xc2:
-			return '\u252c' // ┬
-		case 0xc3:
-			return '\u251c' // ├
-		case 0xc4:
-			return '\u2500' // ─
-		case 0xc5:
-			return '\u253c' // ┼
-		case 0xc7:
-			return '\u251c' // ├ (approx)
-		case 0xc8:
-			return '\u2514' // └ (approx)
-		case 0xc9:
-			return '\u250c' // ┌
-		case 0xca:
-			return '\u252c' // ┬ (approx)
-		case 0xcb:
-			return '\u252c' // ┬ (approx)
-		case 0xcc:
-			return '\u251c' // ├ (approx)
-		case 0xcd:
-			return '\u2500' // ─ (double maps to single for compatibility)
-		case 0xce:
-			return '\u253c' // ┼ (approx)
-		case 0xd9:
-			return '\u2518' // ┘
-		case 0xda:
-			return '\u250c' // ┌
-
-		// Block elements
-		case 0xdb:
-			return '\u2588' // █ full block
-		case 0xdc:
-			return '\u2584' // ▄ lower half block
-		case 0xdd:
-			return '\u258c' // ▌ left half block
-		case 0xde:
-			return '\u2590' // ▐ right half block
-		case 0xdf:
-			return '\u2580' // ▀ upper half block
-
-		// Other commonly seen
-		case 0xfe:
-			return '\u25a0' // ■ black square
-	}
-
-	// ASCII range and most others map directly
-	return String.fromCharCode(byte)
+	return CP437_TO_UNICODE[byte & 0xff]
 }
 
 export function decodeCp437(bytes: Uint8Array): string {
@@ -89,20 +60,20 @@ export function decodeCp437(bytes: Uint8Array): string {
 	return out
 }
 
-// Build reverse mapping on first use
+// Reverse mapping: Unicode -> CP437 byte (for bitmap font glyph lookup).
+// Built from the full table, so it round-trips every byte exactly.
+const unicodeToCp437Map: Map<string, number> = new Map()
+
 function buildReverseMap() {
 	if (unicodeToCp437Map.size > 0) return
 	for (let i = 0; i < 256; i++) {
-		const ch = cp437ByteToChar(i)
-		if (ch && ch !== '') {
-			unicodeToCp437Map.set(ch, i)
-		}
+		unicodeToCp437Map.set(CP437_TO_UNICODE[i], i)
 	}
 }
 
 /**
- * Convert a Unicode character back to its CP437 byte code
- * Returns the character code point if no CP437 mapping exists
+ * Convert a Unicode character back to its CP437 byte code.
+ * Falls back to the code point for unmapped characters in the byte range, else space.
  */
 export function charToCp437Byte(ch: string): number {
 	if (!ch || ch.length === 0) return 32 // space

@@ -31,9 +31,17 @@ export {
 } from './utils/rgbToAnsi'
 export type { PaletteMode } from './utils/rgbToAnsi'
 
+export {
+	CP437_TO_UNICODE,
+	charToCp437Byte,
+	cp437ByteToChar,
+	cp437ByteToGlyph,
+	decodeCp437,
+} from './utils/cp437'
+
 export type { AnsiCell, AnsiScreen } from './ansi/types'
-export { detectAnimation, parseAnsi, parseAscii } from './ansi/parser'
-export type { CharacterEncoding } from './ansi/parser'
+export { createAnsiParseSession, detectAnimation, parseAnsi, parseAscii } from './ansi/parser'
+export type { AnsiParseSession, CharacterEncoding } from './ansi/parser'
 export { getSauceInfo, parseSauce } from './utils/sauce'
 export type { SauceMetadata } from './utils/sauce'
 
@@ -58,6 +66,7 @@ export type { AsciiSonarOptions } from './generators/asciiSonarFrameGenerator'
 
 export {
 	clearFireState,
+	createAsciiFireGenerator,
 	createAsciiFireSampler,
 	generateAsciiFireFrame,
 } from './generators/asciiFireGenerator'
@@ -65,6 +74,7 @@ export type { AsciiFireOptions } from './generators/asciiFireGenerator'
 
 export {
 	clearDatamoshState,
+	createAsciiDatamoshGenerator,
 	createAsciiDatamoshSampler,
 	generateAsciiDatamoshFrame,
 } from './generators/asciiDatamoshGenerator'
@@ -78,6 +88,7 @@ export type { AsciiMetaballsOptions } from './generators/asciiMetaballsGenerator
 
 export {
 	clearMatrixRainState,
+	createAsciiMatrixRainGenerator,
 	createAsciiMatrixRainSampler,
 	generateAsciiMatrixRainFrame,
 } from './generators/asciiMatrixRainGenerator'
@@ -85,6 +96,7 @@ export type { AsciiMatrixRainOptions } from './generators/asciiMatrixRainGenerat
 
 export {
 	clearStarfieldState,
+	createAsciiStarfieldGenerator,
 	createAsciiStarfieldSampler,
 	generateAsciiStarfieldFrame,
 } from './generators/asciiStarfieldGenerator'
@@ -97,6 +109,7 @@ export type { AsciiTunnelOptions } from './generators/asciiTunnelGenerator'
 
 export {
 	clearGameOfLifeState,
+	createAsciiGameOfLifeGenerator,
 	createAsciiGameOfLifeSampler,
 	generateAsciiGameOfLifeFrame,
 } from './generators/asciiGameOfLifeGenerator'
@@ -104,6 +117,7 @@ export type { AsciiGameOfLifeOptions } from './generators/asciiGameOfLifeGenerat
 
 export {
 	clearWaterRippleState,
+	createAsciiWaterRippleGenerator,
 	createAsciiWaterRippleSampler,
 	generateAsciiWaterRippleFrame,
 } from './generators/asciiWaterRippleGenerator'
@@ -123,6 +137,42 @@ export type {
 	AnsiArtFrameGeneratorOptions,
 	AnsiFrameGeneratorOptions,
 } from './generators/ansiFrameGenerator'
+
+export {
+	createAsciiCopperBarsSampler,
+	generateAsciiCopperBarsFrame,
+} from './generators/asciiCopperBarsGenerator'
+export type { AsciiCopperBarsOptions } from './generators/asciiCopperBarsGenerator'
+
+export {
+	createAsciiCrtStaticSampler,
+	generateAsciiCrtStaticFrame,
+} from './generators/asciiCrtStaticGenerator'
+export type { AsciiCrtStaticOptions } from './generators/asciiCrtStaticGenerator'
+
+export {
+	createAsciiAuroraBorealisSampler,
+	generateAsciiAuroraBorealisFrame,
+} from './generators/asciiAuroraBorealisGenerator'
+export type { AsciiAuroraBorealisOptions } from './generators/asciiAuroraBorealisGenerator'
+
+export {
+	clearReactionDiffusionState,
+	createAsciiReactionDiffusionGenerator,
+	createAsciiReactionDiffusionSampler,
+	generateAsciiReactionDiffusionFrame,
+} from './generators/asciiReactionDiffusionGenerator'
+export type { AsciiReactionDiffusionOptions } from './generators/asciiReactionDiffusionGenerator'
+
+export {
+	createAsciiTerrainFlyoverSampler,
+	generateAsciiTerrainFlyoverFrame,
+} from './generators/asciiTerrainFlyoverGenerator'
+export type { AsciiTerrainFlyoverOptions } from './generators/asciiTerrainFlyoverGenerator'
+
+export { createGeneratorStateStore } from './generators/generatorState'
+export type { GeneratorStateStore } from './generators/generatorState'
+export { MAX_SIMULATION_CATCHUP, catchupSteps } from './generators/simulationCatchup'
 
 export type {
 	CharacterFrameGenerator,

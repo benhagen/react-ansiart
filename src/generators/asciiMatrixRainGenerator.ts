@@ -1,4 +1,6 @@
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator } from '../types/types'
+import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
 
 // Default character pool: half-width katakana + digits + symbols
 const DEFAULT_CHARS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:."=*+-<>'
@@ -59,6 +61,64 @@ function lerpColor(
 	return `rgb(${r},${g},${b2})`
 }
 
+// Memoized char pool split: Array.from(chars) was re-run every frame even though chars is
+// constant per generator instance.
+let lastMatrixChars: string | null = null
+let lastMatrixCharPool: string[] | null = null
+
+function getMatrixCharPool(chars: string): string[] {
+	if (lastMatrixChars === chars && lastMatrixCharPool) return lastMatrixCharPool
+	lastMatrixCharPool = Array.from(chars)
+	lastMatrixChars = chars
+	return lastMatrixCharPool
+}
+
+// Trail fade color cache: trailColor is constant for a render, and the interpolation factor
+// t*t is deterministic per (stream.length, distFromHead) pair, both of which recur across
+// frames (streams keep their length once spawned). Cache by exact t value so results are
+// pixel-identical to the uncached lerpColor call — no quantization. Bounded with simple
+// insertion-order eviction, reset whenever trailColor changes.
+const MAX_TRAIL_COLOR_CACHE = 4096
+let trailColorCacheKey: string | null = null
+let trailColorCache: Map<number, string> | null = null
+
+function getTrailFadeColor(trailRGB: [number, number, number], trailColor: string, t: number): string {
+	if (trailColorCacheKey !== trailColor || !trailColorCache) {
+		trailColorCache = new Map()
+		trailColorCacheKey = trailColor
+	}
+	const cached = trailColorCache.get(t)
+	if (cached !== undefined) return cached
+	const result = lerpColor(trailRGB, [0, 0, 0], t)
+	trailColorCache.set(t, result)
+	if (trailColorCache.size > MAX_TRAIL_COLOR_CACHE) {
+		const oldest = trailColorCache.keys().next().value
+		if (oldest !== undefined) trailColorCache.delete(oldest)
+	}
+	return result
+}
+
+// Memoized JSON.stringify state key.
+let lastMatrixKeyInputs: { columns: number; seed: number; density: number; trailLength: number } | null = null
+let lastMatrixKeyStr: string | null = null
+
+function getMatrixStateKey(columns: number, seed: number, density: number, trailLength: number): string {
+	const prev = lastMatrixKeyInputs
+	if (
+		prev &&
+		lastMatrixKeyStr &&
+		prev.columns === columns &&
+		prev.seed === seed &&
+		prev.density === density &&
+		prev.trailLength === trailLength
+	) {
+		return lastMatrixKeyStr
+	}
+	lastMatrixKeyStr = JSON.stringify({ columns, seed, density, trailLength })
+	lastMatrixKeyInputs = { columns, seed, density, trailLength }
+	return lastMatrixKeyStr
+}
+
 interface Stream {
 	y: number
 	speed: number
@@ -72,7 +132,9 @@ interface MatrixState {
 	lastFrame: number
 }
 
-const matrixStateMap = new Map<string, MatrixState>()
+// State shared by all callers of generateAsciiMatrixRainFrame. Prefer
+// createAsciiMatrixRainGenerator, which gives each instance its own.
+const sharedStore = createGeneratorStateStore<MatrixState>()
 
 function initStream(
 	rng: () => number,
@@ -96,11 +158,12 @@ function initStream(
 	}
 }
 
-export function generateAsciiMatrixRainFrame(
+function renderMatrixRainFrame(
+	store: GeneratorStateStore<MatrixState>,
 	frame: number,
 	columns: number,
 	rows: number,
-	options: AsciiMatrixRainOptions = {},
+	options: AsciiMatrixRainOptions,
 ): AnsiScreen {
 	const {
 		speed = DEFAULT_SPEED,
@@ -113,10 +176,10 @@ export function generateAsciiMatrixRainFrame(
 		seed = DEFAULT_SEED,
 	} = options
 
-	const charPool = Array.from(chars)
-	const stateKey = JSON.stringify({ columns, seed, density, trailLength })
+	const charPool = getMatrixCharPool(chars)
+	const stateKey = getMatrixStateKey(columns, seed, density, trailLength)
 
-	let state = matrixStateMap.get(stateKey)
+	let state = store.get(stateKey)
 	if (!state || frame < state.lastFrame) {
 		const rng = createRandom(seed)
 		const streams: (Stream | null)[] = []
@@ -128,23 +191,15 @@ export function generateAsciiMatrixRainFrame(
 			}
 		}
 		state = { streams, lastFrame: -1 }
-		matrixStateMap.set(stateKey, state)
-
-		// Cap state map size
-		if (matrixStateMap.size > 32) {
-			const firstKey = matrixStateMap.keys().next().value
-			if (firstKey !== undefined) matrixStateMap.delete(firstKey)
-		}
+		store.set(stateKey, state)
 	}
 
-	const headRGB = parseHex(headColor)
 	const trailRGB = parseHex(trailColor)
-	const blackRGB: [number, number, number] = [0, 0, 0]
 
 	// Advance streams
 	const rng = createRandom(seed + frame * 97)
 	for (let col = 0; col < columns; col++) {
-		let stream = state.streams[col]
+		const stream = state.streams[col]
 		if (stream) {
 			stream.y += stream.speed
 
@@ -200,7 +255,7 @@ export function generateAsciiMatrixRainFrame(
 				// Trail — fade from bright green to black
 				const t = distFromHead / (stream.length - 1) // 0 at head, 1 at tail
 				const ch = charPool[stream.charIndices[distFromHead % stream.charIndices.length] % charPool.length]
-				const fg = lerpColor(trailRGB, blackRGB, t * t) // quadratic fade
+				const fg = getTrailFadeColor(trailRGB, trailColor, t * t) // quadratic fade
 				line.push({ ch, fg, bg: bgColor, bold: false })
 			}
 		}
@@ -208,6 +263,34 @@ export function generateAsciiMatrixRainFrame(
 	}
 
 	return { lines, columns }
+}
+
+/**
+ * Generate an ASCII Matrix-style digital rain frame.
+ *
+ * Uses process-wide state keyed on dimensions and options, so separate components with
+ * matching options will interfere with each other. Prefer
+ * {@link createAsciiMatrixRainGenerator} when rendering more than one instance.
+ */
+export function generateAsciiMatrixRainFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiMatrixRainOptions = {},
+): AnsiScreen {
+	return renderMatrixRainFrame(sharedStore, frame, columns, rows, options)
+}
+
+/**
+ * Create a Matrix rain generator that owns its stream state.
+ * Each call returns an independent instance safe to render alongside others.
+ */
+export function createAsciiMatrixRainGenerator(
+	options: AsciiMatrixRainOptions = {},
+): CharacterFrameGenerator {
+	const store = createGeneratorStateStore<MatrixState>()
+	return (frame: number, columns: number, rows: number) =>
+		renderMatrixRainFrame(store, frame, columns, rows, options)
 }
 
 /**
@@ -237,5 +320,5 @@ export function createAsciiMatrixRainSampler(
  * Clear all matrix rain state.
  */
 export function clearMatrixRainState() {
-	matrixStateMap.clear()
+	sharedStore.clear()
 }

@@ -72,11 +72,19 @@ export class AnsiVirtualDisplayEngine {
 	private targetFps: number = 0
 	private offscreenCanvas: HTMLCanvasElement | null = null
 	private offscreenCtx: CanvasRenderingContext2D | null = null
+	// Onscreen context: fetched once (context creation attributes only apply on the
+	// FIRST getContext() call for a canvas) and reused across renders.
+	private ctx: CanvasRenderingContext2D | null = null
 	private lastRenderedViewY: number = -1
 	// Dirty-cell tracking: store previous frame's cell state to skip unchanged cells
 	private previousCells: Array<{ ch: string; fg: number | string; bg: number | string; bold: boolean }> | null = null
 	private previousCellsCols: number = 0
 	private previousCellsRows: number = 0
+	// When true, the next _render() call always performs the onscreen clear+blit even if the
+	// dirty-cell diff finds nothing changed. Set by any explicit/user-triggered action (config
+	// update, seek, restart, font swap, ...) so those paths always paint; left false for the
+	// steady-state RAF-driven render, which is where the skip-when-unchanged optimization matters.
+	private forceNextBlit: boolean = true
 
 	constructor(canvas: HTMLCanvasElement, config: DisplayConfigWithInitialState) {
 		this.canvas = canvas
@@ -101,6 +109,7 @@ export class AnsiVirtualDisplayEngine {
 		if (gen?.clearManualBytePosition) {
 			this._syncFrameToBytePosition(gen)
 			gen.clearManualBytePosition()
+			this.forceNextBlit = true
 			this._generateAndRender()
 		}
 		this._startAnimation()
@@ -117,6 +126,7 @@ export class AnsiVirtualDisplayEngine {
 		this.isPlaying = true
 		// Clear manual byte position when restarting
 		this._getGeneratorMetadata()?.clearManualBytePosition?.()
+		this.forceNextBlit = true
 		this._generateAndRender()
 		if (this.isPlaying) {
 			this._startAnimation()
@@ -124,11 +134,12 @@ export class AnsiVirtualDisplayEngine {
 	}
 
 	setBitmapFont(font: BitmapFont | null): void {
-		if (this.bitmapFont?.glyphCache) {
-			this.bitmapFont.glyphCache.clear()
-		}
+		// Release the outgoing font's rendered glyphs; they are keyed to its bitmaps.
+		this.bitmapFont?.glyphCache?.clear()
+		this.bitmapFont?.glyphMaskCache?.clear()
 		this.previousCells = null
 		this.bitmapFont = font
+		this.forceNextBlit = true
 		this._setupCanvas()
 		this._render()
 	}
@@ -139,6 +150,10 @@ export class AnsiVirtualDisplayEngine {
 		const overlayToggled =
 			config.showPerformanceOverlay !== undefined &&
 			config.showPerformanceOverlay !== this.showPerformanceOverlay
+
+		// Conservative: any config update (background, viewport, pixel scroll offset, etc.)
+		// may affect the composite even with zero dirty cells, so always force the next blit.
+		this.forceNextBlit = true
 
 		this.config = { ...this.config, ...config }
 
@@ -215,6 +230,7 @@ export class AnsiVirtualDisplayEngine {
 
 	enablePerformanceOverlay(enabled: boolean): void {
 		this.showPerformanceOverlay = enabled
+		this.forceNextBlit = true
 		this._generateAndRender()
 	}
 
@@ -224,6 +240,7 @@ export class AnsiVirtualDisplayEngine {
 
 	seekToFrame(frame: number): void {
 		this.currentFrame = Math.max(0, frame)
+		this.forceNextBlit = true
 		this._generateAndRender()
 	}
 
@@ -236,6 +253,7 @@ export class AnsiVirtualDisplayEngine {
 		if (gen?.advanceByte) {
 			gen.advanceByte()
 			this._syncFrameToBytePosition(gen)
+			this.forceNextBlit = true
 			this._generateAndRender()
 		}
 	}
@@ -245,6 +263,7 @@ export class AnsiVirtualDisplayEngine {
 		if (gen?.rewindByte) {
 			gen.rewindByte()
 			this._syncFrameToBytePosition(gen)
+			this.forceNextBlit = true
 			this._generateAndRender()
 		}
 	}
@@ -322,22 +341,34 @@ export class AnsiVirtualDisplayEngine {
 
 		// Render a frame if enough time has elapsed
 		if (elapsed >= frameInterval) {
-			// Track FPS: measure actual interval between frame decisions
-			this.fpsHistory.push(elapsed)
-			// Keep rolling window of last 30 frames
-			if (this.fpsHistory.length > 30) {
-				this.fpsHistory.shift()
+			// Track FPS: measure actual interval between frame decisions. Only worth collecting
+			// when the performance overlay is visible to read it; skip the array churn otherwise.
+			if (this.showPerformanceOverlay) {
+				this.fpsHistory.push(elapsed)
+				// Keep rolling window of last 30 frames
+				if (this.fpsHistory.length > 30) {
+					this.fpsHistory.shift()
+				}
+				// Calculate actual FPS as average of intervals
+				const avgInterval = this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length
+				this.actualFps = 1000 / avgInterval
+				this.targetFps = this.config.fps
 			}
-			// Calculate actual FPS as average of intervals
-			const avgInterval = this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length
-			this.actualFps = 1000 / avgInterval
-			this.targetFps = this.config.fps
 
-			// Update lastFrameTime: sync to current time to align with RAF timing
-			// For FPS that divide evenly into 60Hz (15, 20, 30, 60), this ensures we stay locked
-			// to the actual refresh rate rather than accumulating drift
-			// For other FPS, we still sync but maintain the target interval
-			this.lastFrameTime = currentTime
+			// Skip frames if rendering fell behind, so animation tracks wall-clock time.
+			// Deliberately unclamped: for a stateless generator the frame number is just a
+			// time parameter, and capping it makes a heavy effect run in slow motion rather
+			// than dropping frames. Generators that carry state bound their own catch-up
+			// (see catchupSteps), which is where the cost of a large jump actually lives.
+			const framesToAdvance = Math.max(1, Math.floor(elapsed / frameInterval))
+
+			// Advance lastFrameTime by the interval actually consumed (not snapped to
+			// currentTime), so any fractional remainder carries into the next frame instead of
+			// being discarded. Discarding it quantizes the render rate to divisors of the RAF
+			// refresh rate (e.g. a 24fps target rendering at ~20fps on a 60Hz display).
+			// framesToAdvance is recomputed from real elapsed time on every call, so this
+			// cannot accumulate unbounded drift.
+			this.lastFrameTime += framesToAdvance * frameInterval
 
 			// Check if we've reached the end (based on bytes, not frames)
 			const currentBytes = this.getCurrentBytePosition()
@@ -348,8 +379,6 @@ export class AnsiVirtualDisplayEngine {
 				return
 			}
 
-			// Skip frames if rendering fell behind to keep animation timing correct
-			const framesToAdvance = Math.max(1, Math.floor(elapsed / frameInterval))
 			this.currentFrame += framesToAdvance
 			this._generateAndRender()
 		}
@@ -421,6 +450,19 @@ export class AnsiVirtualDisplayEngine {
 		this.canvas.style.width = `${cssWidth}px`
 		this.canvas.style.height = `${cssHeight}px`
 
+		// Fetch the onscreen context once. Context creation attributes (alpha: false — this
+		// canvas is always fully painted, so an opaque backing store saves the browser a
+		// blend step) only take effect on the FIRST getContext() call for a given canvas.
+		if (!this.ctx) {
+			this.ctx = this.canvas.getContext('2d', { alpha: false })
+		}
+		// Resizing canvas.width/height resets the 2D context's transform and smoothing state,
+		// so these must be re-applied every time the canvas is (re)established, not per-render.
+		if (this.ctx) {
+			this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+			this.ctx.imageSmoothingEnabled = false
+		}
+
 		// Invalidate dirty-cell tracking on resize
 		this.previousCells = null
 	}
@@ -428,7 +470,7 @@ export class AnsiVirtualDisplayEngine {
 	private _render(): void {
 		if (!this.screen || !this.bitmapFont) return
 		const drawStart = performance.now()
-		const ctx = this.canvas.getContext('2d')
+		const ctx = this.ctx
 		if (!ctx) return
 
 		const screenRows = this.screen.lines.length
@@ -438,12 +480,6 @@ export class AnsiVirtualDisplayEngine {
 		const charHeight = this.bitmapFont.height
 
 		const cssWidth = screenCols * charWidth
-		const cssHeight = screenRows * charHeight
-		const dpr =
-			typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1
-
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-		ctx.imageSmoothingEnabled = false
 
 		// Create or resize offscreen canvas if needed (sized for buffered content)
 		const bufferedHeight = screenRows * charHeight
@@ -481,15 +517,19 @@ export class AnsiVirtualDisplayEngine {
 			}
 		}
 
-		let cellIdx = 0
+		// Frame generators may return short or missing lines (the type permits it), so every
+		// grid position is visited and anything the generator omitted is drawn as a blank
+		// cell. Two reasons: indexing by (row, column) keeps the diff aligned with the
+		// previous-frame buffer, and painting the gaps clears glyphs left on the offscreen
+		// canvas when a line shrinks between frames.
+		const blankCell = { ch: ' ', fg: this.config.background, bg: this.config.background, bold: false }
+		let dirtyCount = 0
 		for (let r = 0; r < screenRows; r++) {
 			const cells = this.screen.lines[r]
-			if (!cells) {
-				cellIdx += screenCols
-				continue
-			}
-			for (let c = 0; c < cells.length; c++) {
-				const cell = cells[c]
+			const rowStart = r * screenCols
+			for (let c = 0; c < screenCols; c++) {
+				const cell = cells?.[c] ?? blankCell
+				const cellIdx = rowStart + c
 				const prevCell = this.previousCells![cellIdx]
 
 				// Skip if cell hasn't changed (dirty-cell check)
@@ -500,9 +540,10 @@ export class AnsiVirtualDisplayEngine {
 					prevCell.bg === cell.bg &&
 					prevCell.bold === cell.bold
 				) {
-					cellIdx++
 					continue
 				}
+
+				dirtyCount++
 
 				const x = c * charWidth
 				const y = r * charHeight
@@ -518,7 +559,6 @@ export class AnsiVirtualDisplayEngine {
 				prevCell.fg = cell.fg
 				prevCell.bg = cell.bg
 				prevCell.bold = cell.bold
-				cellIdx++
 			}
 		}
 		this.previousCellsCols = screenCols
@@ -531,19 +571,47 @@ export class AnsiVirtualDisplayEngine {
 		const isFinalMode = this._isFinalMode()
 		const visibleHeight = isFinalMode ? screenRows * charHeight : this.config.rows * charHeight
 
-		ctx.fillStyle = this.config.background
-		ctx.fillRect(0, 0, cssWidth, visibleHeight)
-		ctx.drawImage(
-			this.offscreenCanvas,
-			0,
-			pixelOffsetY, // source Y with pixel offset (no buffer offset)
-			cssWidth,
-			visibleHeight, // source height
-			0,
-			0, // destination
-			cssWidth,
-			visibleHeight // destination size
-		)
+		// Consume the force flag: any explicit/user-triggered call (config update, seek,
+		// restart, font swap, ...) sets this so those paths always paint. The steady-state
+		// RAF-driven path leaves it false and relies on the dirty-cell diff instead.
+		const forceBlit = this.forceNextBlit
+		this.forceNextBlit = false
+
+		// Skip the onscreen clear+blit entirely when nothing that affects the composite
+		// changed: no dirty cells, the offscreen buffer wasn't fully rebuilt (!canDiff already
+		// implies a fresh offscreen), and the performance overlay (redrawn every frame with
+		// fresh stats, directly on ctx, outside the offscreen buffer) isn't visible.
+		const shouldBlit = forceBlit || !canDiff || dirtyCount > 0 || this.showPerformanceOverlay
+
+		if (shouldBlit) {
+			if (!canDiff) {
+				// Offscreen buffer was fully rebuilt (first frame, resize, font swap) — clear
+				// the full onscreen region to match.
+				ctx.fillStyle = this.config.background
+				ctx.fillRect(0, 0, cssWidth, visibleHeight)
+			} else {
+				// Incremental update: only the bottom sliver of the destination that the
+				// offscreen source rect can't cover (exposed when pixelOffsetY scrolls the
+				// source window past the end of the buffered content) needs a background fill;
+				// drawImage below overwrites everything else.
+				const sliverHeight = Math.max(0, pixelOffsetY + visibleHeight - bufferedHeight)
+				if (sliverHeight > 0) {
+					ctx.fillStyle = this.config.background
+					ctx.fillRect(0, visibleHeight - sliverHeight, cssWidth, sliverHeight)
+				}
+			}
+			ctx.drawImage(
+				this.offscreenCanvas,
+				0,
+				pixelOffsetY, // source Y with pixel offset (no buffer offset)
+				cssWidth,
+				visibleHeight, // source height
+				0,
+				0, // destination
+				cssWidth,
+				visibleHeight // destination size
+			)
+		}
 
 		this.drawTime = performance.now() - drawStart
 		// Store for next frame's overlay

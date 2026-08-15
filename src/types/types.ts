@@ -42,6 +42,15 @@ export type GeneratorCapabilities = {
 
 // Character frame generator with metadata for control features
 export type CharacterFrameGeneratorWithMetadata = CharacterFrameGenerator & {
+	/**
+	 * True when the generator produces a single, unchanging screen (e.g. a fully parsed
+	 * ANSI file in 'final' mode). Consumers render one frame and then leave the generator
+	 * alone instead of driving a frame loop that can never produce anything new.
+	 *
+	 * Time-dependent procedural generators (plasma, fire, sonar, ...) must NOT set this,
+	 * even though they are stateless — their output changes with the frame number.
+	 */
+	isStatic?: boolean
 	capabilities?: GeneratorCapabilities
 	setSpeed?: (bytesPerSecond: number) => void
 	seekToFrame?: (frame: number) => void

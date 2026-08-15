@@ -1,5 +1,5 @@
 import type { AnsiScreen } from '../ansi/types'
-import { parseAnsiCore } from '../ansi/parser'
+import { createAnsiParseSession, parseAnsiCore } from '../ansi/parser'
 import type { CharacterFrameGeneratorWithMetadata } from '../types/types'
 
 /**
@@ -22,11 +22,19 @@ export type AnsiFrameGeneratorOptions = {
 	columns?: number // Fixed column width (for fixed mode, undefined for dynamic)
 	rows?: number // Display rows (for calculating scroll position in fixed animated mode, undefined for auto)
 	finalHeightForCanvas?: number // Final height for canvas sizing in animated mode with rows='auto'
+	/**
+	 * Already-parsed screen for 'final' mode. When the caller has parsed the file (e.g. for
+	 * dimension detection) it can hand the result over so the file is parsed exactly once per
+	 * load. It MUST have been parsed with the same `columns` value passed here. Ignored in
+	 * 'animated' mode, which parses progressively.
+	 */
+	preparsedScreen?: AnsiScreen
 	bytesPerSecond?: number // Bytes per second (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec
 	fps?: number // Frames per second (needed to calculate bytes per frame from bytesPerSecond)
 	onDimensionsChange?: (dimensions: { columns: number; rows: number }) => void // Callback for dynamic sizing
 	onScrollChange?: (scroll: { viewY: number; contentRows: number }) => void // Callback for scroll position changes (fixed animated mode)
-	debugCursorCodes?: boolean // if true, log ANSI cursor control codes to console (default false)
+	/** @deprecated No longer consumed; cursor-code logging was removed. Accepted for compatibility. */
+	debugCursorCodes?: boolean
 }
 
 /**
@@ -43,11 +51,11 @@ export function createAnsiFrameGenerator(
 		columns,
 		rows: displayRows,
 		finalHeightForCanvas,
+		preparsedScreen,
 		bytesPerSecond: initialBytesPerSecond = 960, // Default: 9600 baud = 960 bytes/sec (baud/10 conversion)
 		fps = 30, // Default: 30 fps
 		onDimensionsChange,
 		onScrollChange,
-		debugCursorCodes = false,
 	} = options
 
 	// Mutable state for speed control
@@ -55,21 +63,19 @@ export function createAnsiFrameGenerator(
 
 	// For final mode, parse once and return the same screen for all frames
 	if (mode === 'final') {
-		let cachedScreen: AnsiScreen | null = null
+		// Reuse the caller's parse when it supplied one (AnsiArt parses each file exactly once
+		// per load for dimension detection and hands the screen down); otherwise parse here.
+		// Fixed mode passes explicit columns; dynamic mode lets the parser size itself.
+		const cachedScreen: AnsiScreen =
+			preparsedScreen ??
+			(columns !== undefined ? parseAnsiCore(ansiData, { columns }) : parseAnsiCore(ansiData))
 
-		if (columns !== undefined) {
-			// Fixed mode - use parseAnsiCore with fixed columns
-			cachedScreen = parseAnsiCore(ansiData, { columns })
-		} else {
-			// Dynamic mode - use parseAnsiCore with dynamic sizing
-			cachedScreen = parseAnsiCore(ansiData)
-			// Notify about dimensions
-			if (onDimensionsChange) {
-				onDimensionsChange({
-					columns: cachedScreen.columns,
-					rows: cachedScreen.lines.length,
-				})
-			}
+		if (columns === undefined && onDimensionsChange) {
+			// Dynamic mode - notify about the detected dimensions
+			onDimensionsChange({
+				columns: cachedScreen.columns,
+				rows: cachedScreen.lines.length,
+			})
 		}
 
 		// Return generator that always returns the same screen
@@ -79,7 +85,7 @@ export function createAnsiFrameGenerator(
 			if (columns !== undefined) {
 				// Fixed mode: return ALL content rows starting at row 0
 				// No buffering - AnsiArtNG handles view offset
-				const actualContent = cachedScreen!.lines
+				const actualContent = cachedScreen.lines
 
 				// Return ALL content rows starting at row 0
 				const paddedLines: AnsiScreen['lines'] = []
@@ -96,11 +102,16 @@ export function createAnsiFrameGenerator(
 
 				return {
 					lines: paddedLines,
-					columns: cachedScreen!.columns,
+					columns: cachedScreen.columns,
 				}
 			}
-			return cachedScreen!
+			return cachedScreen
 		}) as CharacterFrameGeneratorWithMetadata
+
+		// The screen never changes, so a display can render one frame and stop instead of
+		// driving a frame loop forever. (Only 'final' mode is static — the animated branch
+		// below and every procedural generator are time-dependent.)
+		generator.isStatic = true
 
 		// Final mode: no seek or speed control support
 		generator.capabilities = {
@@ -111,7 +122,10 @@ export function createAnsiFrameGenerator(
 		return generator
 	}
 
-	// Animated mode - progressive parsing
+	// Animated mode - progressive parsing via a resumable session
+	// Each frame parses only the newly revealed bytes instead of re-parsing
+	// from byte 0; the session resets itself when the byte position rewinds
+	const session = createAnsiParseSession(ansiData, { columns })
 	let lastFrame = -1
 	let lastNotifiedColumns = 0
 	let lastNotifiedRows = 0
@@ -120,7 +134,7 @@ export function createAnsiFrameGenerator(
 	let lastTargetByteIndex = -1
 	let lastParsedScreen: AnsiScreen | null = null
 
-	const generator = ((frame: number, cols: number, rows: number): AnsiScreen => {
+	const generator = ((frame: number, _cols: number, _rows: number): AnsiScreen => {
 		// Reset if frame number went backwards (restart)
 		if (frame < lastFrame) {
 			lastNotifiedColumns = 0
@@ -147,8 +161,8 @@ export function createAnsiFrameGenerator(
 		if (targetByteIndex === lastTargetByteIndex && lastParsedScreen) {
 			screen = lastParsedScreen
 		} else if (columns !== undefined) {
-			// Fixed mode - use parseAnsiCore with fixed columns and incremental parsing
-			screen = parseAnsiCore(ansiData, { columns, maxByteIndex: targetByteIndex })
+			// Fixed mode - advance the resumable session to the target byte index
+			screen = session.advanceTo(targetByteIndex)
 			lastTargetByteIndex = targetByteIndex
 			lastParsedScreen = screen
 
@@ -188,8 +202,8 @@ export function createAnsiFrameGenerator(
 				}
 			}
 		} else {
-			// Dynamic mode - use parseAnsiCore with dynamic sizing and incremental parsing
-			screen = parseAnsiCore(ansiData, { maxByteIndex: targetByteIndex })
+			// Dynamic mode - advance the resumable session (dynamic sizing)
+			screen = session.advanceTo(targetByteIndex)
 			lastTargetByteIndex = targetByteIndex
 			lastParsedScreen = screen
 			// Check if dimensions have changed and notify
@@ -238,11 +252,18 @@ export type AnsiArtFrameGeneratorOptions = {
 	columns?: number // undefined for auto mode
 	rows?: number // undefined for auto mode
 	finalHeightForAnimated?: number // Final height for animated mode with rows='auto'
+	/**
+	 * Already-parsed screen for 'final' mode, parsed with the same `columns` value passed
+	 * here. Lets a caller that already parsed the file (for dimension detection) avoid a
+	 * second parse. Ignored in 'animated' mode.
+	 */
+	preparsedScreen?: AnsiScreen
 	bytesPerSecond?: number // Bytes per second (NOT baud). For reference: 1200 baud ≈ 120 bytes/sec, 9600 baud ≈ 960 bytes/sec
 	fps?: number // Frames per second
 	onDimensionsChange?: (dimensions: { columns: number; rows: number }) => void
 	onScrollChange?: (scroll: { viewY: number; contentRows: number }) => void
-	debugCursorCodes?: boolean // if true, log ANSI cursor control codes to console (default false)
+	/** @deprecated No longer consumed; cursor-code logging was removed. Accepted for compatibility. */
+	debugCursorCodes?: boolean
 }
 
 /**
@@ -258,6 +279,7 @@ export function createAnsiArtFrameGenerator(
 		columns,
 		rows,
 		finalHeightForAnimated,
+		preparsedScreen,
 		bytesPerSecond = 960, // Default: 9600 baud = 960 bytes/sec
 		fps = 30,
 		onDimensionsChange,
@@ -271,6 +293,7 @@ export function createAnsiArtFrameGenerator(
 		columns,
 		rows,
 		finalHeightForCanvas: finalHeightForAnimated,
+		preparsedScreen,
 		bytesPerSecond,
 		fps,
 		onDimensionsChange,

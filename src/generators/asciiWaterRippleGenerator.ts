@@ -1,5 +1,8 @@
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator } from '../types/types'
 import { buildCharLookup } from './charLookup'
+import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
+import { catchupSteps } from './simulationCatchup'
 
 const DEFAULT_DAMPING = 0.97
 const DEFAULT_DROP_FREQUENCY = 15
@@ -71,19 +74,54 @@ function lerpColor(
 	return `rgb(${r},${g},${bl})`
 }
 
+const LERP_TABLE_STEPS = 256
+
+// intensity is a continuous 0..1 value recomputed per cell, but the endpoint
+// colors (bgRgb/fgRgb) are fixed for an entire render call, so quantizing
+// intensity into 256 steps (same resolution as the brightness ramp already
+// used for character selection) and precomputing the rgb() strings once
+// avoids rebuilding an identical string per cell. Error is at most 1/510 of
+// the color range — imperceptible.
+let lastLerpA: [number, number, number] | null = null
+let lastLerpB: [number, number, number] | null = null
+let lastLerpTable: string[] | null = null
+
+function getLerpColorTable(a: [number, number, number], b: [number, number, number]): string[] {
+	if (
+		lastLerpTable &&
+		lastLerpA &&
+		lastLerpB &&
+		lastLerpA[0] === a[0] && lastLerpA[1] === a[1] && lastLerpA[2] === a[2] &&
+		lastLerpB[0] === b[0] && lastLerpB[1] === b[1] && lastLerpB[2] === b[2]
+	) {
+		return lastLerpTable
+	}
+	const table = new Array<string>(LERP_TABLE_STEPS)
+	for (let i = 0; i < LERP_TABLE_STEPS; i++) {
+		table[i] = lerpColor(a, b, i / (LERP_TABLE_STEPS - 1))
+	}
+	lastLerpA = a
+	lastLerpB = b
+	lastLerpTable = table
+	return table
+}
+
 interface WaterRippleState {
 	current: Float32Array
 	previous: Float32Array
 	lastFrame: number
 }
 
-const stateMap = new Map<string, WaterRippleState>()
+// State shared by all callers of generateAsciiWaterRippleFrame. Prefer
+// createAsciiWaterRippleGenerator, which gives each instance its own.
+const sharedStore = createGeneratorStateStore<WaterRippleState>()
 
 /**
- * Clear all water ripple state (useful for resetting effects or when switching generators)
+ * Clear the water ripple state shared by generateAsciiWaterRippleFrame callers.
+ * Instances from createAsciiWaterRippleGenerator own their state and are unaffected.
  */
 export function clearWaterRippleState(): void {
-	stateMap.clear()
+	sharedStore.clear()
 }
 
 // Memoized char lookup
@@ -98,14 +136,49 @@ function getCharLookup(chars: string): string[] {
 	return lastCharLookup
 }
 
-/**
- * Generate an ASCII water ripple frame with wave-equation simulation
- */
-export function generateAsciiWaterRippleFrame(
+// Memoized state-key builder — avoids a JSON.stringify allocation every
+// frame when the options driving the key haven't changed since last call.
+let lastStateKeyParams: {
+	columns: number
+	rows: number
+	seed: number
+	damping: number
+	dropFrequency: number
+	dropStrength: number
+} | null = null
+let lastStateKey: string | null = null
+
+function getStateKey(
+	columns: number,
+	rows: number,
+	seed: number,
+	damping: number,
+	dropFrequency: number,
+	dropStrength: number,
+): string {
+	if (
+		lastStateKeyParams &&
+		lastStateKeyParams.columns === columns &&
+		lastStateKeyParams.rows === rows &&
+		lastStateKeyParams.seed === seed &&
+		lastStateKeyParams.damping === damping &&
+		lastStateKeyParams.dropFrequency === dropFrequency &&
+		lastStateKeyParams.dropStrength === dropStrength &&
+		lastStateKey
+	) {
+		return lastStateKey
+	}
+	lastStateKeyParams = { columns, rows, seed, damping, dropFrequency, dropStrength }
+	lastStateKey = JSON.stringify(lastStateKeyParams)
+	return lastStateKey
+}
+
+function renderWaterRippleFrame(
+	store: GeneratorStateStore<WaterRippleState>,
 	frame: number,
 	columns: number,
 	rows: number,
-	options: AsciiWaterRippleOptions = {},
+	options: AsciiWaterRippleOptions,
 ): AnsiScreen {
 	const {
 		damping = DEFAULT_DAMPING,
@@ -118,26 +191,28 @@ export function generateAsciiWaterRippleFrame(
 	} = options
 
 	const totalCells = columns * rows
-	const stateKey = JSON.stringify({ columns, rows, seed, damping, dropFrequency, dropStrength })
+	const stateKey = getStateKey(columns, rows, seed, damping, dropFrequency, dropStrength)
 
-	let state = stateMap.get(stateKey)
+	let state = store.get(stateKey)
 	if (!state || frame < state.lastFrame) {
 		const current = new Float32Array(totalCells)
 		const previous = new Float32Array(totalCells)
 		state = { current, previous, lastFrame: -1 }
-		stateMap.set(stateKey, state)
-		if (stateMap.size > 32) {
-			const firstKey = stateMap.keys().next().value
-			if (firstKey !== undefined) stateMap.delete(firstKey)
-		}
+		store.set(stateKey, state)
 	}
 
-	const { current, previous } = state
+	// Local mutable bindings so the buffer swap below can rebind these
+	// variables instead of copying grid contents element-by-element.
+	let current = state.current
+	let previous = state.previous
 
-	// Simulate forward from lastFrame to current frame
-	const framesToSimulate = frame - state.lastFrame
+	// Simulate forward from lastFrame to current frame, capped so a large jump
+	// (backgrounded tab, seek) cannot block the main thread proportionally to the gap.
+	// When capped, run the most recent steps so drop timing stays in phase with `frame`.
+	const framesToSimulate = catchupSteps(frame, state.lastFrame)
+	const firstFrame = frame - framesToSimulate + 1
 	for (let f = 0; f < framesToSimulate; f++) {
-		const currentFrame = state.lastFrame + 1 + f
+		const currentFrame = firstFrame + f
 
 		// Drop a stone at the right frequency
 		if (currentFrame % dropFrequency === 0) {
@@ -166,17 +241,18 @@ export function generateAsciiWaterRippleFrame(
 			}
 		}
 
-		// Swap buffers: previous now holds the new state, current holds the old state
-		// We need to swap the data, not the references (since state holds references)
-		// Copy previous (new state) to a temp, then current becomes previous, previous becomes new
-		// Simpler: just swap contents
-		for (let i = 0; i < totalCells; i++) {
-			const tmp = previous[i]
-			previous[i] = current[i]
-			current[i] = tmp
-		}
+		// Swap buffers by reference: `previous` now holds the newly computed
+		// state and `current` holds the state-before-last, which is exactly
+		// what the next iteration needs for `current`/`previous` respectively.
+		// `current`/`previous` are plain local bindings (state.current/
+		// state.previous are plain properties with no external aliases), so a
+		// reference swap is equivalent to the old element-wise copy and avoids
+		// an O(totalCells) pass per substep.
+		;[current, previous] = [previous, current]
 	}
 
+	state.current = current
+	state.previous = previous
 	state.lastFrame = frame
 
 	// Pre-compute character lookup
@@ -185,6 +261,8 @@ export function generateAsciiWaterRippleFrame(
 	// Parse colors
 	const fgRgb = parseColor(fgColor)
 	const bgRgb = parseColor(bgColor)
+	const lerpTable = getLerpColorTable(bgRgb, fgRgb)
+	const lerpTableMax = lerpTable.length - 1
 
 	// Build screen
 	const lines: AnsiScreen['lines'] = []
@@ -203,7 +281,7 @@ export function generateAsciiWaterRippleFrame(
 
 			// Color: lerp from bgColor (calm) to fgColor (disturbed) based on abs(height)
 			const intensity = Math.min(Math.abs(height) / dropStrength, 1)
-			const fg = lerpColor(bgRgb, fgRgb, intensity)
+			const fg = lerpTable[Math.round(intensity * lerpTableMax)]
 
 			line.push({ ch, fg, bg: bgColor, bold: false })
 		}
@@ -211,6 +289,34 @@ export function generateAsciiWaterRippleFrame(
 	}
 
 	return { lines, columns }
+}
+
+/**
+ * Generate an ASCII water ripple frame with wave-equation simulation.
+ *
+ * Uses process-wide state keyed on dimensions and options, so separate components with
+ * matching options will interfere with each other. Prefer
+ * {@link createAsciiWaterRippleGenerator} when rendering more than one instance.
+ */
+export function generateAsciiWaterRippleFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiWaterRippleOptions = {},
+): AnsiScreen {
+	return renderWaterRippleFrame(sharedStore, frame, columns, rows, options)
+}
+
+/**
+ * Create a water ripple generator that owns its simulation state.
+ * Each call returns an independent instance safe to render alongside others.
+ */
+export function createAsciiWaterRippleGenerator(
+	options: AsciiWaterRippleOptions = {},
+): CharacterFrameGenerator {
+	const store = createGeneratorStateStore<WaterRippleState>()
+	return (frame: number, columns: number, rows: number) =>
+		renderWaterRippleFrame(store, frame, columns, rows, options)
 }
 
 /**

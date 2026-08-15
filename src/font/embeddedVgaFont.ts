@@ -4,7 +4,6 @@
 import type { BitmapFont } from './bitmapFont'
 
 // 4096 bytes (256 glyphs × 16 rows × 1 byte/row), base64-encoded
-/* eslint-disable max-len */
 const VGA_8X16_BASE64 =
 	'AAAAAAAAAAAAAAAAAAAAAAAAfoGlgYG9mYGBfgAAAAAAAH7/2///w+f//34AAAAAAAAAAGz+/v7+fDgQ' +
 	'AAAAAAAAAAAQOHz+fDgQAAAAAAAAAAAYPDzn5+cYGDwAAAAAAAAAGDx+//9+GBg8AAAAAAAAAAAAABg8' +
@@ -75,7 +74,6 @@ const VGA_8X16_BASE64 =
 	'dtwAAAAAAAAAOGxsOAAAAAAAAAAAAAAAAAAAAAAAABgYAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAADwwM' +
 	'DAwM7GxsPBwAAAAAANhsbGxsbAAAAAAAAAAAAABw2DBgyPgAAAAAAAAAAAAAAAAAfHx8fHx8fAAAAAAA' +
 	'AAAAAAAAAAAAAAAAAAAAAA=='
-/* eslint-enable max-len */
 
 let cachedFont: BitmapFont | null = null
 

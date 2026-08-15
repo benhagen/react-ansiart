@@ -148,7 +148,6 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 	const group = readString(62, 20) // Offset 62 (42 + 20)
 	const date = readString(82, 8) // Offset 82 (62 + 20)
 
-	const fileSize = dataView.getUint32(89, true) // Little-endian (offset 89 = 82 + 8 - 1, but actually 89)
 
 	const dataType = bytes[saucePos + 93]
 	const fileType = bytes[saucePos + 94]

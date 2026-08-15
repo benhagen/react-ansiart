@@ -50,9 +50,6 @@ const DEFAULTS: Required<
 	aspectY: 2,
 }
 
-function clamp(v: number, min: number, max: number): number {
-	return v < min ? min : v > max ? max : v
-}
 
 function clampInt(v: number, min: number, max: number): number {
 	if (!Number.isFinite(v)) return min
@@ -149,14 +146,51 @@ function resolveOptions(options: AsciiMetaballsOptions): Required<AsciiMetaballs
 	}
 }
 
+type BallFrameState = {
+	bx: number
+	by: number
+	radius2: number
+}
+
+// Reused per-frame ball position buffer — avoids recomputing cos/sin per cell.
+// bx/by/radius2 are invariant across all cells in a frame (depend only on
+// ball params + time), so they're hoisted here once per frame instead of
+// being recomputed inside the per-cell hot loop.
+let ballFrameBuf: BallFrameState[] = []
+
+function computeBallFrame(balls: BallParams[], time: number): BallFrameState[] {
+	if (ballFrameBuf.length !== balls.length) {
+		ballFrameBuf = new Array(balls.length)
+		for (let i = 0; i < balls.length; i++) {
+			ballFrameBuf[i] = { bx: 0, by: 0, radius2: 0 }
+		}
+	}
+	for (let i = 0; i < balls.length; i++) {
+		const b = balls[i]
+		const state = ballFrameBuf[i]
+		state.bx = b.baseX + Math.cos(time * b.freq + b.phase) * b.orbitX
+		state.by = b.baseY + Math.sin(time * (b.freq * 0.9) + b.phase) * b.orbitY
+		state.radius2 = b.radius * b.radius
+	}
+	return ballFrameBuf
+}
+
+// Memoized char lookup — rebuilt only when the chars array reference changes.
+let lastChars: string[] | null = null
+let lastCharLookup: string[] | null = null
+
+function getCharLookup(chars: string[]): string[] {
+	if (lastChars === chars && lastCharLookup) return lastCharLookup
+	lastCharLookup = buildCharLookup(chars)
+	lastChars = chars
+	return lastCharLookup
+}
+
 function computeCell(
 	x: number,
 	y: number,
-	time: number,
-	columns: number,
-	rows: number,
 	options: Required<AsciiMetaballsOptions>,
-	balls: BallParams[],
+	ballFrame: BallFrameState[],
 	charLookup: string[]
 ) {
 	const aspectY = options.aspectY > 0 ? options.aspectY : DEFAULTS.aspectY
@@ -164,15 +198,13 @@ function computeCell(
 	let field = 0
 	const eps = 0.65
 
-	for (let i = 0; i < balls.length; i++) {
-		const b = balls[i]
-		const bx = b.baseX + Math.cos(time * b.freq + b.phase) * b.orbitX
-		const by = b.baseY + Math.sin(time * (b.freq * 0.9) + b.phase) * b.orbitY
+	for (let i = 0; i < ballFrame.length; i++) {
+		const s = ballFrame[i]
 
-		const dx = x - bx
-		const dy = (y - by) * aspectY
+		const dx = x - s.bx
+		const dy = (y - s.by) * aspectY
 		const d2 = dx * dx + dy * dy + eps
-		field += (b.radius * b.radius) / d2
+		field += s.radius2 / d2
 	}
 
 	const k = options.intensity >= 0 ? options.intensity : DEFAULTS.intensity
@@ -201,16 +233,17 @@ export function generateAsciiMetaballsFrame(
 	const time = frame * opts.speed
 
 	const balls = getCachedBalls(columns, rows, opts)
+	const ballFrame = computeBallFrame(balls, time)
 
-	// Character lookup table (0..255)
+	// Character lookup table (0..255), memoized across frames
 	const chars = opts.chars.length ? opts.chars : DEFAULTS.chars
-	const charLookup = buildCharLookup(chars)
+	const charLookup = getCharLookup(chars)
 
 	const lines: AnsiScreen['lines'] = []
 	for (let y = 0; y < rows; y++) {
 		const line: AnsiScreen['lines'][number] = []
 		for (let x = 0; x < columns; x++) {
-			line.push(computeCell(x, y, time, columns, rows, opts, balls, charLookup))
+			line.push(computeCell(x, y, opts, ballFrame, charLookup))
 		}
 		lines.push(line)
 	}
@@ -227,12 +260,13 @@ export function createAsciiMetaballsSampler(frame: number, options: AsciiMetabal
 	const virtualColumns = 200
 	const virtualRows = 120
 	const balls = buildBalls(virtualColumns, virtualRows, opts)
+	const ballFrame = computeBallFrame(balls, time)
 
 	const chars = opts.chars.length ? opts.chars : DEFAULTS.chars
-	const charLookup = buildCharLookup(chars)
+	const charLookup = getCharLookup(chars)
 
 	return (x: number, y: number) => {
-		return computeCell(x, y, time, virtualColumns, virtualRows, opts, balls, charLookup)
+		return computeCell(x, y, opts, ballFrame, charLookup)
 	}
 }
 

@@ -110,6 +110,26 @@ export function generateAsciiMandelbrotFrame(
 
 	const fgRGB = parseHex(fgColor)
 
+	// Escaped-cell color depends only on `iter` (0..maxIter-1) and `frame` —
+	// build the fg-string table once per frame instead of once per escaped
+	// cell (avoids a hslToRgb call + string allocation per pixel).
+	const fgTable = new Array<string>(maxIter)
+	for (let iter = 0; iter < maxIter; iter++) {
+		if (colorMode === 'spectrum') {
+			// Rainbow hue cycling
+			const hue = ((iter / maxIter) * 3 + frame * 0.005) % 1
+			const lightness = 0.15 + (iter / maxIter) * 0.55
+			fgTable[iter] = hslToRgb(hue, 0.9, lightness)
+		} else {
+			// Mono mode: fgColor scaled by brightness
+			const t = iter / maxIter
+			const r = Math.round(fgRGB[0] * t)
+			const g = Math.round(fgRGB[1] * t)
+			const b = Math.round(fgRGB[2] * t)
+			fgTable[iter] = `rgb(${r},${g},${b})`
+		}
+	}
+
 	const lines: AnsiScreen['lines'] = []
 
 	for (let row = 0; row < rows; row++) {
@@ -119,17 +139,32 @@ export function generateAsciiMandelbrotFrame(
 		for (let col = 0; col < columns; col++) {
 			const cr = zoomX + (col - columns / 2) * scaleX
 
-			// Mandelbrot iteration
-			let zr = 0
-			let zi = 0
+			// Cardioid / period-2 bulb membership test: these regions never
+			// escape, so we can classify them as interior without running the
+			// full iteration loop. This is an exact analytic test (not an
+			// approximation) so it changes no output, only skips work.
+			const crMinusQuarter = cr - 0.25
+			const ci2 = ci * ci
+			const q = crMinusQuarter * crMinusQuarter + ci2
+			const inCardioid = q * (q + crMinusQuarter) <= 0.25 * ci2
+			const crPlusOne = cr + 1
+			const inBulb = crPlusOne * crPlusOne + ci2 <= 0.0625
+
 			let iter = 0
-			while (iter < maxIter) {
-				const zr2 = zr * zr
-				const zi2 = zi * zi
-				if (zr2 + zi2 > 4) break
-				zi = 2 * zr * zi + ci
-				zr = zr2 - zi2 + cr
-				iter++
+			if (!inCardioid && !inBulb) {
+				// Mandelbrot iteration
+				let zr = 0
+				let zi = 0
+				while (iter < maxIter) {
+					const zr2 = zr * zr
+					const zi2 = zi * zi
+					if (zr2 + zi2 > 4) break
+					zi = 2 * zr * zi + ci
+					zr = zr2 - zi2 + cr
+					iter++
+				}
+			} else {
+				iter = maxIter
 			}
 
 			if (iter === maxIter) {
@@ -139,21 +174,7 @@ export function generateAsciiMandelbrotFrame(
 				// Smooth coloring: use iteration count normalized to 0-255
 				const brightness = Math.floor((iter / maxIter) * 255)
 				const ch = charLookup[brightness]
-
-				let fg: string
-				if (colorMode === 'spectrum') {
-					// Rainbow hue cycling
-					const hue = ((iter / maxIter) * 3 + frame * 0.005) % 1
-					const lightness = 0.15 + (iter / maxIter) * 0.55
-					fg = hslToRgb(hue, 0.9, lightness)
-				} else {
-					// Mono mode: fgColor scaled by brightness
-					const t = iter / maxIter
-					const r = Math.round(fgRGB[0] * t)
-					const g = Math.round(fgRGB[1] * t)
-					const b = Math.round(fgRGB[2] * t)
-					fg = `rgb(${r},${g},${b})`
-				}
+				const fg = fgTable[iter]
 
 				line.push({ ch, fg, bg: bgColor, bold: false })
 			}

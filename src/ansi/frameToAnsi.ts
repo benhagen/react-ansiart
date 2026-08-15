@@ -42,7 +42,6 @@ export function convertFrameDataToAnsi(
 	palette: PaletteMode = 'ansi16'
 ): AnsiScreen {
 	const paletteColors = getPalette(palette)
-	const paletteSize = paletteColors.length
 	const lines: AnsiCell[][] = []
 
 	// Calculate pixels per cell

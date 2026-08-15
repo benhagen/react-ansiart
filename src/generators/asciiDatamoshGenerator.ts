@@ -1,5 +1,7 @@
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator } from '../types/types'
 import { EGA_PALETTE_RGB } from '../utils/egaPalette'
+import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
 
 export interface AsciiDatamoshOptions {
 	/** Random seed. Default: 1337 */
@@ -133,7 +135,7 @@ function fillKeyframeBase(
 	cells: CellArrays
 ) {
 	const { seed, baseChars, bgColor } = options
-	const ramp = Array.from(baseChars.length ? baseChars : DEFAULTS.baseChars)
+	const ramp = getBaseCharsArray(baseChars)
 	const rampLen = ramp.length
 	cells.bg = bgColor
 
@@ -235,6 +237,31 @@ function horizontalTear(
 	}
 }
 
+// Memoized Array.from() splits for character strings, keyed by the resolved (non-empty)
+// string value. Both fillKeyframeBase and noiseFillRect otherwise re-split their character
+// string into a code-point array on every call.
+let lastBaseCharsInput: string | null = null
+let lastBaseCharsArray: string[] | null = null
+
+function getBaseCharsArray(baseChars: string): string[] {
+	const effective = baseChars.length ? baseChars : DEFAULTS.baseChars
+	if (lastBaseCharsInput === effective && lastBaseCharsArray) return lastBaseCharsArray
+	lastBaseCharsArray = Array.from(effective)
+	lastBaseCharsInput = effective
+	return lastBaseCharsArray
+}
+
+let lastNoiseCharsInput: string | null = null
+let lastNoiseCharsArray: string[] | null = null
+
+function getNoiseCharsArray(noiseChars: string): string[] {
+	const effective = noiseChars.length ? noiseChars : DEFAULTS.noiseChars
+	if (lastNoiseCharsInput === effective && lastNoiseCharsArray) return lastNoiseCharsArray
+	lastNoiseCharsArray = Array.from(effective)
+	lastNoiseCharsInput = effective
+	return lastNoiseCharsArray
+}
+
 function noiseFillRect(
 	dst: CellArrays,
 	columns: number,
@@ -248,7 +275,7 @@ function noiseFillRect(
 	noiseChars: string,
 	wrap: boolean
 ) {
-	const chars = Array.from(noiseChars.length ? noiseChars : DEFAULTS.noiseChars)
+	const chars = getNoiseCharsArray(noiseChars)
 	const cLen = chars.length
 	for (let by = 0; by < h; by++) {
 		const y = y0 + by
@@ -269,6 +296,20 @@ function noiseFillRect(
 	}
 }
 
+// Reverse lookup for EGA palette colors to indices (64 entries). Built lazily once at
+// module level instead of being rebuilt on every paletteShiftRect call.
+let egaIndexByColorCache: Map<string, number> | null = null
+
+function getEgaIndexByColor(): Map<string, number> {
+	if (egaIndexByColorCache) return egaIndexByColorCache
+	const map = new Map<string, number>()
+	for (let i = 0; i < 64; i++) {
+		map.set(EGA_PALETTE_RGB[i], i)
+	}
+	egaIndexByColorCache = map
+	return map
+}
+
 function paletteShiftRect(
 	src: CellArrays,
 	dst: CellArrays,
@@ -281,12 +322,7 @@ function paletteShiftRect(
 	shift: number,
 	wrap: boolean
 ) {
-	// Build a quick lookup for EGA palette colors to indices.
-	// (64 entries so this is tiny; create once per call.)
-	const egaIndexByColor = new Map<string, number>()
-	for (let i = 0; i < 64; i++) {
-		egaIndexByColor.set(EGA_PALETTE_RGB[i], i)
-	}
+	const egaIndexByColor = getEgaIndexByColor()
 
 	for (let by = 0; by < h; by++) {
 		const y = y0 + by
@@ -316,15 +352,65 @@ type DatamoshState = {
 	lastKeyframe: number
 }
 
-const datamoshStateMap = new Map<string, DatamoshState>()
+// State shared by all callers of generateAsciiDatamoshFrame / createAsciiDatamoshSampler.
+// Prefer createAsciiDatamoshGenerator, which gives each instance its own.
+const sharedStore = createGeneratorStateStore<DatamoshState>()
+
+type DatamoshKeyInputs = {
+	columns: number
+	rows: number
+	seed: number
+	bgColor: string
+	keyframeIntervalFrames: number
+	blockOpsPerFrame: number
+	minBlockSize: number
+	maxBlockSize: number
+	maxShift: number
+	tearChance: number
+	paletteShiftChance: number
+	noiseFillChance: number
+	baseChars: string
+	noiseChars: string
+	wrap: boolean
+}
+
+// Memoized JSON.stringify state key: getStateKey is called every frame (from both
+// renderDatamoshFrame and createAsciiDatamoshSampler) with unchanged options in the common
+// case. Cache the built string against the last inputs seen (single-slot, mirroring the
+// numeric-comparison pattern used elsewhere in the generators for cached derived values).
+let lastDatamoshKeyInputs: DatamoshKeyInputs | null = null
+let lastDatamoshKeyStr: string | null = null
 
 function getStateKey(
 	columns: number,
 	rows: number,
 	options: Required<AsciiDatamoshOptions>
 ): string {
+	const prev = lastDatamoshKeyInputs
+	if (
+		prev &&
+		lastDatamoshKeyStr &&
+		prev.columns === columns &&
+		prev.rows === rows &&
+		prev.seed === options.seed &&
+		prev.bgColor === options.bgColor &&
+		prev.keyframeIntervalFrames === options.keyframeIntervalFrames &&
+		prev.blockOpsPerFrame === options.blockOpsPerFrame &&
+		prev.minBlockSize === options.minBlockSize &&
+		prev.maxBlockSize === options.maxBlockSize &&
+		prev.maxShift === options.maxShift &&
+		prev.tearChance === options.tearChance &&
+		prev.paletteShiftChance === options.paletteShiftChance &&
+		prev.noiseFillChance === options.noiseFillChance &&
+		prev.baseChars === options.baseChars &&
+		prev.noiseChars === options.noiseChars &&
+		prev.wrap === options.wrap
+	) {
+		return lastDatamoshKeyStr
+	}
+
 	// Important: include anything that changes the “physics” / output determinism.
-	return JSON.stringify({
+	const inputs: DatamoshKeyInputs = {
 		columns,
 		rows,
 		seed: options.seed,
@@ -340,7 +426,10 @@ function getStateKey(
 		baseChars: options.baseChars,
 		noiseChars: options.noiseChars,
 		wrap: options.wrap,
-	})
+	}
+	lastDatamoshKeyStr = JSON.stringify(inputs)
+	lastDatamoshKeyInputs = inputs
+	return lastDatamoshKeyStr
 }
 
 function resolveOptions(options: AsciiDatamoshOptions): Required<AsciiDatamoshOptions> {
@@ -434,6 +523,23 @@ function advanceState(
 	}
 	const readCells = state.readCells
 
+	// Block ops, tears, and palette shifts each read from readCells and write to
+	// state.cells, and each subsequent op stage is meant to see the *previous* stage's
+	// same-frame writes (tear picks up the block-op output, palette shift picks up the
+	// tear output) — so readCells must be resynced with state.cells between stages.
+	// Rather than doing a full O(columns*rows) copy for every resync, track which rects
+	// state.cells diverged from readCells in and resync only those (still exact — no
+	// output change — since it's the same cells that changed, just not the whole grid).
+	const dirtyRects: Array<{ x0: number; y0: number; w: number; h: number }> = []
+
+	function syncDirtyRectsToReadCells() {
+		for (let r = 0; r < dirtyRects.length; r++) {
+			const rect = dirtyRects[r]
+			copyRect(state.cells, readCells, columns, rows, rect.x0, rect.y0, rect.w, rect.h, 0, 0, wrap)
+		}
+		dirtyRects.length = 0
+	}
+
 	const ops = opts.blockOpsPerFrame
 	for (let op = 0; op < ops; op++) {
 		const w = clampInt(lerp(minB, maxB, rng()), 1, columns)
@@ -446,6 +552,7 @@ function advanceState(
 		const dy = clampInt((rng() * 2 - 1) * maxShift, -maxShift, maxShift)
 
 		copyRect(readCells, state.cells, columns, rows, x0, y0, w, h, dx, dy, wrap)
+		dirtyRects.push({ x0: x0 + dx, y0: y0 + dy, w, h })
 	}
 
 	// Horizontal tearing (scanline band shift) — reuse readCells buffer
@@ -453,14 +560,12 @@ function advanceState(
 		const bandH = clampInt(lerp(1, Math.max(2, Math.floor(rows * 0.15)), rng()), 1, rows)
 		const y0 = clampInt(rng() * rows, 0, rows - 1)
 		const shift = clampInt((rng() * 2 - 1) * maxShift, -maxShift, maxShift)
-		// Refresh readCells with current state before tear
-		const n = state.cells.chars.length
-		for (let i = 0; i < n; i++) {
-			readCells.chars[i] = state.cells.chars[i]
-			readCells.fg[i] = state.cells.fg[i]
-			readCells.bold[i] = state.cells.bold[i]
-		}
+		// Resync readCells with the block-op writes above before tear reads it.
+		syncDirtyRectsToReadCells()
 		horizontalTear(readCells, state.cells, columns, rows, y0, bandH, shift, wrap)
+		// Tear can permute a written cell to any column in the band (wrap) or leave gaps
+		// (no wrap); mark the full-width band dirty rather than tracking the exact permutation.
+		dirtyRects.push({ x0: 0, y0, w: columns, h: bandH })
 	}
 
 	// Palette shift blocks — reuse readCells buffer
@@ -471,13 +576,8 @@ function advanceState(
 		const h = clampInt(lerp(minB, maxB, rng()), 1, rows)
 		const x0 = clampInt(rng() * columns, 0, columns - 1)
 		const y0 = clampInt(rng() * rows, 0, rows - 1)
-		// Refresh readCells with current state before palette shift
-		const n2 = state.cells.chars.length
-		for (let i = 0; i < n2; i++) {
-			readCells.chars[i] = state.cells.chars[i]
-			readCells.fg[i] = state.cells.fg[i]
-			readCells.bold[i] = state.cells.bold[i]
-		}
+		// Resync readCells with the tear (or block-op) writes above before palette shift reads it.
+		syncDirtyRectsToReadCells()
 		paletteShiftRect(readCells, state.cells, columns, rows, x0, y0, w, h, shift, wrap)
 	}
 
@@ -493,16 +593,17 @@ function advanceState(
 	state.lastFrame = frame
 }
 
-export function generateAsciiDatamoshFrame(
+function renderDatamoshFrame(
+	store: GeneratorStateStore<DatamoshState>,
 	frame: number,
 	columns: number,
 	rows: number,
-	options: AsciiDatamoshOptions = {}
+	options: AsciiDatamoshOptions
 ): AnsiScreen {
 	const opts = resolveOptions(options)
 	const stateKey = getStateKey(columns, rows, opts)
 
-	let state = datamoshStateMap.get(stateKey)
+	let state = store.get(stateKey)
 	if (!state) {
 		state = {
 			cells: createCellArrays(columns, rows, opts.bgColor),
@@ -510,11 +611,7 @@ export function generateAsciiDatamoshFrame(
 			lastFrame: -1,
 			lastKeyframe: -1,
 		}
-		datamoshStateMap.set(stateKey, state)
-		if (datamoshStateMap.size > 32) {
-			const firstKey = datamoshStateMap.keys().next().value
-			if (firstKey !== undefined) datamoshStateMap.delete(firstKey)
-		}
+		store.set(stateKey, state)
 	}
 
 	advanceState(frame, columns, rows, opts, state)
@@ -556,7 +653,7 @@ export function createAsciiDatamoshSampler(
 	const opts = resolveOptions(options)
 	const stateKey = getStateKey(virtualColumns, virtualRows, opts)
 
-	let state = datamoshStateMap.get(stateKey)
+	let state = sharedStore.get(stateKey)
 	if (!state) {
 		state = {
 			cells: createCellArrays(virtualColumns, virtualRows, opts.bgColor),
@@ -564,11 +661,7 @@ export function createAsciiDatamoshSampler(
 			lastFrame: -1,
 			lastKeyframe: -1,
 		}
-		datamoshStateMap.set(stateKey, state)
-		if (datamoshStateMap.size > 32) {
-			const firstKey = datamoshStateMap.keys().next().value
-			if (firstKey !== undefined) datamoshStateMap.delete(firstKey)
-		}
+		sharedStore.set(stateKey, state)
 	}
 
 	advanceState(frame, virtualColumns, virtualRows, opts, state)
@@ -586,6 +679,39 @@ export function createAsciiDatamoshSampler(
 	}
 }
 
+/**
+ * Generate an ASCII datamosh frame — block-based compression-artifact glitching.
+ *
+ * Uses process-wide state keyed on dimensions and options, so separate components with
+ * matching options will interfere with each other. Prefer
+ * {@link createAsciiDatamoshGenerator} when rendering more than one instance.
+ */
+export function generateAsciiDatamoshFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiDatamoshOptions = {}
+): AnsiScreen {
+	return renderDatamoshFrame(sharedStore, frame, columns, rows, options)
+}
+
+/**
+ * Create a datamosh generator that owns its cell buffers.
+ * Each call returns an independent instance safe to render alongside others.
+ */
+export function createAsciiDatamoshGenerator(
+	options: AsciiDatamoshOptions = {}
+): CharacterFrameGenerator {
+	const store = createGeneratorStateStore<DatamoshState>()
+	return (frame: number, columns: number, rows: number) =>
+		renderDatamoshFrame(store, frame, columns, rows, options)
+}
+
+/**
+ * Clear the datamosh state shared by generateAsciiDatamoshFrame and
+ * createAsciiDatamoshSampler callers. Instances from createAsciiDatamoshGenerator
+ * own their state and are unaffected.
+ */
 export function clearDatamoshState() {
-	datamoshStateMap.clear()
+	sharedStore.clear()
 }
