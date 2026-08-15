@@ -15,6 +15,9 @@
 # production
 /build
 
+# build output (published from CI via files: ["dist"], not committed)
+/dist
+
 # misc
 .DS_Store
 *.pem
