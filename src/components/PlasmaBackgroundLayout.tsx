@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnsiScreen } from '../ansi/types'
-import type { CharacterFrameGenerator, DisplayFrameGenerator } from '../types/types'
+import type { DisplayFrameGenerator } from '../types/types'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
 import type { BitmapFont } from '../font/bitmapFont'
 import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
@@ -70,7 +70,6 @@ export function PlasmaBackgroundLayout({
 	const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 })
 	const [containerHeight, setContainerHeight] = useState(0)
 	const [scrollTop, setScrollTop] = useState(0)
-	const [maxScrollTop, setMaxScrollTop] = useState(0)
 	const [isMounted, setIsMounted] = useState(false)
 	const [bitmapFont, setBitmapFont] = useState<BitmapFont | null>(null)
 
@@ -151,12 +150,10 @@ export function PlasmaBackgroundLayout({
 				return
 			}
 
-			const containerRect = containerRef.current.getBoundingClientRect()
 			const scrollableEl = scrollableRef.current
 
 			// Get the actual scroll height of the content (not just visible height)
 			const scrollHeight = scrollableEl.scrollHeight
-			const clientHeight = scrollableEl.clientHeight
 			const currentScrollTop = scrollableEl.scrollTop
 
 			// Only update container height if it actually changed to avoid unnecessary re-renders
@@ -165,10 +162,8 @@ export function PlasmaBackgroundLayout({
 				lastScrollHeight = scrollHeight
 			}
 
-			// Track scroll position and maximum scrollable distance
+			// Track scroll position
 			setScrollTop(currentScrollTop)
-			const maxScroll = Math.max(0, scrollHeight - clientHeight)
-			setMaxScrollTop(maxScroll)
 
 			// Calculate visible viewport bounds
 			const containerRect2 = containerRef.current.getBoundingClientRect()
@@ -306,6 +301,7 @@ export function PlasmaBackgroundLayout({
 		}
 		return (frame: number, columns: number, rows: number) =>
 			generateAsciiPerlinPlasmaFrame(frame, columns, rows, mergedPlasmaOptions)
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- fireModuleLoaded gates the fireModuleRef read
 	}, [externalFrameGenerator, generatorType, mergedPlasmaOptions, mergedFireOptions, fireModuleLoaded])
 
 	// Store current view position in a ref so the generator can access it
@@ -365,6 +361,7 @@ export function PlasmaBackgroundLayout({
 
 			return { lines, columns: reqColumns }
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- fireModuleLoaded gates the fireModuleRef read
 	}, [externalFrameGenerator, generatorType, mergedFireOptions, mergedPlasmaOptions, fireModuleLoaded])
 
 	// Derive virtual world in character units using font dimensions

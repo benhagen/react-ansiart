@@ -7,7 +7,11 @@ import { AnsiVirtualDisplayEngine } from '../engines/AnsiVirtualDisplayEngine'
 import { BitmapFont } from '../font/bitmapFont'
 import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
 import { getEmbeddedVgaFont } from '../font/embeddedVgaFont'
-import type { DisplayFrameGenerator, GeneratorCapabilities } from '../types/types'
+import type {
+	CharacterFrameGeneratorWithMetadata,
+	DisplayFrameGenerator,
+	GeneratorCapabilities,
+} from '../types/types'
 
 export type AnsiVirtualDisplayProps = {
 	columns?: number // default 80
@@ -31,6 +35,7 @@ export type AnsiVirtualDisplayProps = {
 	// Pixel offsets for smooth scrolling (sub-character precision)
 	pixelOffsetX?: number
 	pixelOffsetY?: number
+	/** @deprecated Never invoked; the engine owns view state. Accepted for compatibility. */
 	onViewChange?: (view: { viewX: number; viewY: number }) => void
 	// SAUCE metadata
 	sauce?: SauceMetadata
@@ -57,7 +62,6 @@ export function AnsiVirtualDisplay({
 	viewY = 0,
 	pixelOffsetX = 0,
 	pixelOffsetY = 0,
-	onViewChange,
 	sauce,
 	onSauceClick,
 	autoStart,
@@ -72,6 +76,18 @@ export function AnsiVirtualDisplay({
 	const [totalBytes, setTotalBytes] = useState(0)
 	const [currentSpeed, setCurrentSpeed] = useState(960) // Default: 9600 baud = 960 bytes/sec
 	const hideTimeoutRef = useRef<number | null>(null)
+	// Tracks whether the engine is currently paused because the canvas scrolled out of
+	// the viewport (as opposed to an explicit user/app pause). Only visibility-pauses are
+	// ever auto-resumed; explicit pauses must never be overridden by re-entering the viewport.
+	const pausedByVisibilityRef = useRef(false)
+	const isPlayingRef = useRef(isPlaying)
+	useEffect(() => {
+		isPlayingRef.current = isPlaying
+	}, [isPlaying])
+	// Latest intersection state, kept outside React state so other effects/handlers can read it
+	// synchronously. Defaults to true (visible) so environments without IntersectionObserver
+	// (SSR / older browsers) — where this is never updated — behave as "always visible".
+	const isIntersectingRef = useRef(true)
 
 	// Use the provided frameGenerator directly
 	// The caller (e.g. PlasmaBackgroundLayout) is responsible for handling windowing/sampling
@@ -92,6 +108,16 @@ export function AnsiVirtualDisplay({
 		generatorCapabilities !== null &&
 		(generatorCapabilities.supportsSeek || generatorCapabilities.supportsSpeedControl)
 
+	// A static generator (a fully-parsed ANSI file in 'final' mode) returns the same screen for
+	// every frame. Running the engine's frame loop for it burns a tick at the target fps forever
+	// and can never produce a new pixel, so the display renders exactly one frame and stays
+	// paused. Note this is *not* the same as "no capabilities": procedural generators (plasma,
+	// fire, ...) also expose no seek/speed control but their output changes with the frame number.
+	const isStaticGenerator = useMemo<boolean>(() => {
+		if (typeof frameGenerator !== 'function') return false
+		return (frameGenerator as CharacterFrameGeneratorWithMetadata).isStatic === true
+	}, [frameGenerator])
+
 	// Initialize engine when canvas is available
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -99,10 +125,18 @@ export function AnsiVirtualDisplay({
 
 		if (!engineRef.current) {
 			// Determine if animation should start paused
+			// A static generator has nothing to play, so it always starts paused regardless of
+			// autoStart — the engine constructor still renders frame 0 (see below), which is all
+			// a static image ever needs.
 			// If autoStart is explicitly false, start paused
 			// If autoStart is true or undefined, start playing (unless overlay controls are enabled, then use current behavior)
-			const shouldStartPaused =
-				autoStart === false ? true : autoStart === true ? false : supportsOverlayControls // If autoStart is undefined, use current behavior
+			const shouldStartPaused = isStaticGenerator
+				? true
+				: autoStart === false
+				? true
+				: autoStart === true
+				? false
+				: supportsOverlayControls // If autoStart is undefined, use current behavior
 			engineRef.current = new AnsiVirtualDisplayEngine(canvas, {
 				columns,
 				rows,
@@ -122,8 +156,9 @@ export function AnsiVirtualDisplay({
 			previousFrameGeneratorRef.current = effectiveFrameGenerator
 			// Sync initial playing state
 			setIsPlaying(!shouldStartPaused)
-			// Show overlay initially if starting paused
-			if (shouldStartPaused) {
+			// Show overlay initially if starting paused — but not for a static image, which
+			// isn't paused in any user-meaningful sense and has no transport to offer.
+			if (shouldStartPaused && !isStaticGenerator) {
 				setIsOverlayVisible(true)
 			}
 		}
@@ -133,6 +168,43 @@ export function AnsiVirtualDisplay({
 				engineRef.current.destroy()
 				engineRef.current = null
 			}
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once: prop changes are applied by the updateConfig effect below
+	}, [])
+
+	// Pause the engine while the canvas is scrolled out of the viewport, and resume it when
+	// it comes back — but only if visibility is what paused it (never override an explicit
+	// user/app pause, and never let a stale visibility-resume fire after a later explicit pause).
+	useEffect(() => {
+		const canvas = canvasRef.current
+		if (!canvas) return
+		if (typeof IntersectionObserver === 'undefined') return // SSR / unsupported environments: no-op
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				const entry = entries[entries.length - 1]
+				if (!entry || !engineRef.current) return
+
+				isIntersectingRef.current = entry.isIntersecting
+
+				if (entry.isIntersecting) {
+					if (pausedByVisibilityRef.current) {
+						pausedByVisibilityRef.current = false
+						engineRef.current.play()
+						setIsPlaying(true)
+					}
+				} else if (isPlayingRef.current) {
+					pausedByVisibilityRef.current = true
+					engineRef.current.pause()
+					setIsPlaying(false)
+				}
+			},
+			{ threshold: 0, rootMargin: '200px' }
+		)
+		observer.observe(canvas)
+
+		return () => {
+			observer.disconnect()
 		}
 	}, [])
 
@@ -158,13 +230,32 @@ export function AnsiVirtualDisplay({
 			pixelOffsetY,
 		})
 
-		// If frameGenerator changed (new file loaded) and autoStart is true, restart and play
-		// Only do this if previousFrameGenerator was not null (i.e., not the initial creation)
-		if (frameGeneratorChanged && previousFrameGenerator !== null && autoStart !== false) {
-			engineRef.current.restart()
-			if (!engineRef.current.getPlayingState()) {
-				engineRef.current.play()
-				setIsPlaying(true)
+		// If frameGenerator changed (new file loaded) and autoStart is true, restart and play.
+		// Only do this if previousFrameGenerator was not null (i.e., not the initial creation).
+		// engine.restart() unconditionally starts the engine playing, so when the canvas is
+		// currently offscreen we immediately re-pause it (marking it as paused-by-visibility so
+		// it resumes automatically on next entry) instead of letting a newly-swapped generator
+		// burn CPU while invisible — otherwise a playlist advancing below the fold would defeat
+		// the whole point of the visibility pause.
+		if (frameGeneratorChanged && previousFrameGenerator !== null) {
+			if (isStaticGenerator) {
+				// Swapped to a static image: updateConfig() above already regenerated and
+				// painted the new screen, so all that's left is to stop the frame loop if the
+				// previous (animated) generator had it running. Never auto-resumed: a still
+				// image has nothing to resume to.
+				pausedByVisibilityRef.current = false
+				engineRef.current.pause()
+				setIsPlaying(false)
+			} else if (autoStart !== false) {
+				engineRef.current.restart()
+				if (isIntersectingRef.current) {
+					setIsPlaying(true)
+					pausedByVisibilityRef.current = false
+				} else {
+					engineRef.current.pause()
+					setIsPlaying(false)
+					pausedByVisibilityRef.current = true
+				}
 			}
 		}
 
@@ -192,6 +283,7 @@ export function AnsiVirtualDisplay({
 		pixelOffsetX,
 		pixelOffsetY,
 		supportsOverlayControls,
+		isStaticGenerator,
 		autoStart,
 	])
 
@@ -227,6 +319,8 @@ export function AnsiVirtualDisplay({
 
 	const handlePlayPause = () => {
 		if (!engineRef.current) return
+		// Explicit user action always wins over visibility-driven pause/resume tracking.
+		pausedByVisibilityRef.current = false
 		if (isPlaying) {
 			engineRef.current.pause()
 			setIsPlaying(false)
@@ -245,6 +339,7 @@ export function AnsiVirtualDisplay({
 
 	const handleRestart = () => {
 		if (!engineRef.current) return
+		pausedByVisibilityRef.current = false
 		engineRef.current.restart()
 		setCurrentBytes(0)
 		setIsPlaying(true)
@@ -264,7 +359,7 @@ export function AnsiVirtualDisplay({
 		// Only auto-hide if playing (not paused)
 		if (isPlaying) {
 			// Set new timeout to hide after 3 seconds
-			hideTimeoutRef.current = setTimeout(() => {
+			hideTimeoutRef.current = window.setTimeout(() => {
 				setIsOverlayVisible(false)
 			}, 3000)
 		}
@@ -409,8 +504,10 @@ export function AnsiVirtualDisplay({
 
 	return (
 		<div>
-			{/* Simple controls (only show if overlay controls are disabled) */}
-			{showControls && !supportsOverlayControls && (
+			{/* Simple controls (only show if overlay controls are disabled, and never for a
+			    static image — there is no playback to control, and starting the frame loop for
+			    an unchanging screen only burns CPU) */}
+			{showControls && !supportsOverlayControls && !isStaticGenerator && (
 				<>
 					<style>{`
 						.ansi-simple-btn { background: #333; }

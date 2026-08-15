@@ -1,4 +1,6 @@
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator } from '../types/types'
+import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
 
 // Default character set for fire effect
 const DEFAULT_CHARS = [' ', '.', ':', ';', '+', '=', 'x', 'X', '$', '&', '#', '@']
@@ -135,13 +137,89 @@ interface FireStateWithReadBuffer extends FireState {
 	readBuffer?: Uint8Array
 }
 
-const fireStateMap = new Map<string, FireState>()
+// State shared by all callers of generateAsciiFireFrame. Prefer
+// createAsciiFireGenerator, which gives each instance its own.
+const sharedFireStore = createGeneratorStateStore<FireState>()
 
-/**
- * Generate ASCII Fire frame
- * Creates a character frame with classic demo scene fire effect
- */
-export function generateAsciiFireFrame(
+// Memoized JSON.stringify state keys (single-slot, mirroring the memoized state-key pattern
+// used elsewhere in the generators). renderFireFrame and the sampler are each called every
+// frame with unchanged options in the common case.
+let lastFireKeyInputs: {
+	columns: number
+	rows: number
+	seed: number
+	darkenAmount: number
+	sparkMin: number
+	sparkMax: number
+	naturalHeight: number
+} | null = null
+let lastFireKeyStr: string | null = null
+
+function getFireStateKey(
+	columns: number,
+	rows: number,
+	seed: number,
+	darkenAmount: number,
+	sparkRange: [number, number],
+	naturalHeight: number
+): string {
+	const sparkMin = sparkRange[0]
+	const sparkMax = sparkRange[1]
+	const prev = lastFireKeyInputs
+	if (
+		prev &&
+		lastFireKeyStr &&
+		prev.columns === columns &&
+		prev.rows === rows &&
+		prev.seed === seed &&
+		prev.darkenAmount === darkenAmount &&
+		prev.sparkMin === sparkMin &&
+		prev.sparkMax === sparkMax &&
+		prev.naturalHeight === naturalHeight
+	) {
+		return lastFireKeyStr
+	}
+	lastFireKeyStr = JSON.stringify({ columns, rows, seed, darkenAmount, sparkRange, naturalHeight })
+	lastFireKeyInputs = { columns, rows, seed, darkenAmount, sparkMin, sparkMax, naturalHeight }
+	return lastFireKeyStr
+}
+
+let lastFireSamplerKeyInputs: {
+	seed: number
+	darkenAmount: number
+	sparkMin: number
+	sparkMax: number
+	naturalHeight: number
+} | null = null
+let lastFireSamplerKeyStr: string | null = null
+
+function getFireSamplerStateKey(
+	seed: number,
+	darkenAmount: number,
+	sparkRange: [number, number],
+	naturalHeight: number
+): string {
+	const sparkMin = sparkRange[0]
+	const sparkMax = sparkRange[1]
+	const prev = lastFireSamplerKeyInputs
+	if (
+		prev &&
+		lastFireSamplerKeyStr &&
+		prev.seed === seed &&
+		prev.darkenAmount === darkenAmount &&
+		prev.sparkMin === sparkMin &&
+		prev.sparkMax === sparkMax &&
+		prev.naturalHeight === naturalHeight
+	) {
+		return lastFireSamplerKeyStr
+	}
+	lastFireSamplerKeyStr = JSON.stringify({ seed, darkenAmount, sparkRange, naturalHeight })
+	lastFireSamplerKeyInputs = { seed, darkenAmount, sparkMin, sparkMax, naturalHeight }
+	return lastFireSamplerKeyStr
+}
+
+function renderFireFrame(
+	store: GeneratorStateStore<FireState>,
 	frame: number,
 	columns: number,
 	rows: number,
@@ -165,10 +243,10 @@ export function generateAsciiFireFrame(
 
 	// Create unique state key for this generator configuration
 	// Include naturalHeight in state key to ensure consistent buffer sizing
-	const stateKey = JSON.stringify({ columns, rows, seed, darkenAmount, sparkRange, naturalHeight })
+	const stateKey = getFireStateKey(columns, rows, seed, darkenAmount, sparkRange, naturalHeight)
 
 	// Get or create fire buffer state
-	let state = fireStateMap.get(stateKey)
+	let state = store.get(stateKey)
 	if (!state || frame < state.lastFrame) {
 		// Create buffer sized to fit the requested rows, with one extra row for fuel
 		// Start mostly black (classic fire effect), only bottom row has heat
@@ -191,11 +269,7 @@ export function generateAsciiFireFrame(
 		}
 		// Everything else stays at 0 (black)
 		state = { buffer, lastFrame: -1 } // Set to -1 so we process frame 0
-		fireStateMap.set(stateKey, state)
-		if (fireStateMap.size > 32) {
-			const firstKey = fireStateMap.keys().next().value
-			if (firstKey !== undefined) fireStateMap.delete(firstKey)
-		}
+		store.set(stateKey, state)
 	}
 
 	const fireBuffer = state.buffer
@@ -289,7 +363,35 @@ interface SamplerState {
 	lastFrame: number
 }
 
-const samplerStateMap = new Map<string, SamplerState>()
+const sharedSamplerStore = createGeneratorStateStore<SamplerState>()
+
+/**
+ * Generate an ASCII fire frame — classic demo scene fire effect.
+ *
+ * Uses process-wide state keyed on dimensions and options, so separate components with
+ * matching options will interfere with each other. Prefer {@link createAsciiFireGenerator}
+ * when rendering more than one instance.
+ */
+export function generateAsciiFireFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiFireOptions = {},
+): AnsiScreen {
+	return renderFireFrame(sharedFireStore, frame, columns, rows, options)
+}
+
+/**
+ * Create a fire generator that owns its heat buffer.
+ * Each call returns an independent instance safe to render alongside others.
+ */
+export function createAsciiFireGenerator(
+	options: AsciiFireOptions = {},
+): CharacterFrameGenerator {
+	const store = createGeneratorStateStore<FireState>()
+	return (frame: number, columns: number, rows: number) =>
+		renderFireFrame(store, frame, columns, rows, options)
+}
 
 /**
  * Create a reusable sampler for a specific frame and options.
@@ -322,15 +424,10 @@ export function createAsciiFireSampler(frame: number, options: AsciiFireOptions 
 	// Create unique state key for this sampler configuration
 	// State key should NOT include viewport-dependent values like worldHeight or worldWidth
 	// Only include physics-based parameters that determine the fire behavior
-	const stateKey = JSON.stringify({
-		seed,
-		darkenAmount,
-		sparkRange,
-		naturalHeight,
-	})
+	const stateKey = getFireSamplerStateKey(seed, darkenAmount, sparkRange, naturalHeight)
 
 	// Get or create sampler buffer state
-	let samplerState = samplerStateMap.get(stateKey)
+	let samplerState = sharedSamplerStore.get(stateKey)
 	const bufferRows = naturalHeight + 1 // Extra row for fuel
 
 	// Check if we need to resize the buffer horizontally or create new buffer
@@ -406,11 +503,7 @@ export function createAsciiFireSampler(frame: number, options: AsciiFireOptions 
 		}
 		// Everything else stays at 0 (black)
 		samplerState = { buffer, bufferCols, bufferRows, lastFrame: -1 } // Set to -1 so we process frame 0
-		samplerStateMap.set(stateKey, samplerState)
-		if (samplerStateMap.size > 32) {
-			const firstKey = samplerStateMap.keys().next().value
-			if (firstKey !== undefined) samplerStateMap.delete(firstKey)
-		}
+		sharedSamplerStore.set(stateKey, samplerState)
 	}
 
 	const virtualBuffer = samplerState.buffer
@@ -507,6 +600,6 @@ export function createAsciiFireSampler(frame: number, options: AsciiFireOptions 
  * Clear all fire state (useful for resetting effects or when switching generators)
  */
 export function clearFireState() {
-	fireStateMap.clear()
-	samplerStateMap.clear()
+	sharedFireStore.clear()
+	sharedSamplerStore.clear()
 }

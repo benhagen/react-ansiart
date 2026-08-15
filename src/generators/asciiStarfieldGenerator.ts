@@ -1,4 +1,6 @@
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator } from '../types/types'
+import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
 
 // Default options
 const DEFAULT_STARS = 200
@@ -45,8 +47,9 @@ interface StarfieldState {
 	lastFrame: number
 }
 
-// Module-level state map keyed by JSON-serialized config, capped at 32 entries with FIFO eviction
-const starfieldStateMap = new Map<string, StarfieldState>()
+// State shared by all callers of generateAsciiStarfieldFrame / createAsciiStarfieldSampler.
+// Prefer createAsciiStarfieldGenerator, which gives each instance its own.
+const sharedStore = createGeneratorStateStore<StarfieldState>()
 
 function initStars(count: number, rng: () => number): Star[] {
 	const stars: Star[] = []
@@ -66,11 +69,15 @@ function respawnStar(star: Star, rng: () => number): void {
 	star.z = 1
 }
 
-/**
- * Interpolate between bgColor-derived dim gray and fgColor-derived bright white based on brightness (0..1).
- * Parses hex fgColor to extract RGB components, then scales by brightness.
- */
-function brightnessToRgb(brightness: number, fgColor: string): string {
+// Memoized hex-color parse: fgColor is constant across an entire render (and usually
+// across many consecutive frames/instances), but brightnessToRgb was re-parsing it with
+// 3x parseInt per star per frame. Cache the last parsed RGB triple by fgColor value.
+let lastFgColorParsed: string | null = null
+let lastFgColorRgb: { r: number; g: number; b: number } = { r: 255, g: 255, b: 255 }
+
+function parseFgColor(fgColor: string): { r: number; g: number; b: number } {
+	if (lastFgColorParsed === fgColor) return lastFgColorRgb
+
 	let r = 255
 	let g = 255
 	let b = 255
@@ -89,6 +96,18 @@ function brightnessToRgb(brightness: number, fgColor: string): string {
 		}
 	}
 
+	lastFgColorParsed = fgColor
+	lastFgColorRgb = { r, g, b }
+	return lastFgColorRgb
+}
+
+/**
+ * Interpolate between bgColor-derived dim gray and fgColor-derived bright white based on brightness (0..1).
+ * Parses hex fgColor to extract RGB components, then scales by brightness.
+ */
+function brightnessToRgb(brightness: number, fgColor: string): string {
+	const { r, g, b } = parseFgColor(fgColor)
+
 	const clamped = Math.max(0, Math.min(1, brightness))
 	// Minimum brightness so far stars are still slightly visible
 	const minBrightness = 0.15
@@ -97,15 +116,53 @@ function brightnessToRgb(brightness: number, fgColor: string): string {
 	return `rgb(${Math.floor(r * scaled)},${Math.floor(g * scaled)},${Math.floor(b * scaled)})`
 }
 
+// Memoized JSON.stringify state key: renderStarfieldFrame / createAsciiStarfieldSampler are
+// called every frame with the same (starCount, speed, seed) in the overwhelming majority of
+// cases, so cache the built key string against the last inputs seen (single-slot, like the
+// numeric-key comparison pattern in asciiSonarFrameGenerator's getDistanceField).
+let lastStateKeyInputs: { starCount: number; speed: number; seed: number; sampler: boolean } | null = null
+let lastStateKeyStr: string | null = null
+
+function getStarfieldStateKey(starCount: number, speed: number, seed: number, sampler: boolean): string {
+	if (
+		lastStateKeyInputs &&
+		lastStateKeyInputs.starCount === starCount &&
+		lastStateKeyInputs.speed === speed &&
+		lastStateKeyInputs.seed === seed &&
+		lastStateKeyInputs.sampler === sampler &&
+		lastStateKeyStr
+	) {
+		return lastStateKeyStr
+	}
+
+	lastStateKeyStr = sampler
+		? JSON.stringify({ starCount, speed, seed, sampler: true })
+		: JSON.stringify({ starCount, speed, seed })
+	lastStateKeyInputs = { starCount, speed, seed, sampler }
+	return lastStateKeyStr
+}
+
+// Packed-integer keying for the sampler's projected-star lookup: screen coordinates can range
+// well outside the virtual viewport (near stars project far off-grid before being clipped), so
+// the offset/stride must comfortably cover that range while staying well within Number's safe
+// integer range.
+const STAR_KEY_OFFSET = 10_000_000
+const STAR_KEY_STRIDE = 40_000_000
+
+function packStarKey(x: number, y: number): number {
+	return (y + STAR_KEY_OFFSET) * STAR_KEY_STRIDE + (x + STAR_KEY_OFFSET)
+}
+
 /**
  * Generate ASCII Starfield frame
  * Creates a 3D starfield effect (flying through space) as a CharacterFrameGenerator
  */
-export function generateAsciiStarfieldFrame(
+function renderStarfieldFrame(
+	store: GeneratorStateStore<StarfieldState>,
 	frame: number,
 	columns: number,
 	rows: number,
-	options: AsciiStarfieldOptions = {}
+	options: AsciiStarfieldOptions
 ): AnsiScreen {
 	const {
 		stars: starCount = DEFAULT_STARS,
@@ -117,19 +174,15 @@ export function generateAsciiStarfieldFrame(
 		streaks = true,
 	} = options
 
-	const stateKey = JSON.stringify({ starCount, speed, seed })
+	const stateKey = getStarfieldStateKey(starCount, speed, seed, false)
 
-	let state = starfieldStateMap.get(stateKey)
+	let state = store.get(stateKey)
 	if (!state || frame < state.lastFrame) {
 		// Initialize stars with deterministic RNG from seed
 		const initRng = createRandom(seed)
 		const starPool = initStars(starCount, initRng)
 		state = { stars: starPool, lastFrame: -1 }
-		starfieldStateMap.set(stateKey, state)
-		if (starfieldStateMap.size > 32) {
-			const firstKey = starfieldStateMap.keys().next().value
-			if (firstKey !== undefined) starfieldStateMap.delete(firstKey)
-		}
+		store.set(stateKey, state)
 	}
 
 	const starPool = state.stars
@@ -207,6 +260,34 @@ export function generateAsciiStarfieldFrame(
 }
 
 /**
+ * Generate an ASCII 3D starfield frame (flying through space).
+ *
+ * Uses process-wide state keyed on options, so separate components with matching options
+ * will interfere with each other. Prefer {@link createAsciiStarfieldGenerator} when
+ * rendering more than one instance.
+ */
+export function generateAsciiStarfieldFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiStarfieldOptions = {}
+): AnsiScreen {
+	return renderStarfieldFrame(sharedStore, frame, columns, rows, options)
+}
+
+/**
+ * Create a starfield generator that owns its star state.
+ * Each call returns an independent instance safe to render alongside others.
+ */
+export function createAsciiStarfieldGenerator(
+	options: AsciiStarfieldOptions = {}
+): CharacterFrameGenerator {
+	const store = createGeneratorStateStore<StarfieldState>()
+	return (frame: number, columns: number, rows: number) =>
+		renderStarfieldFrame(store, frame, columns, rows, options)
+}
+
+/**
  * Create a reusable sampler for a specific frame and options.
  * Returns a function that maps world coordinates (x,y) in character cells
  * to an ANSI cell.
@@ -222,18 +303,14 @@ export function createAsciiStarfieldSampler(frame: number, options: AsciiStarfie
 		streaks = true,
 	} = options
 
-	const stateKey = JSON.stringify({ starCount, speed, seed, sampler: true })
+	const stateKey = getStarfieldStateKey(starCount, speed, seed, true)
 
-	let state = starfieldStateMap.get(stateKey)
+	let state = sharedStore.get(stateKey)
 	if (!state || frame < state.lastFrame) {
 		const initRng = createRandom(seed)
 		const starPool = initStars(starCount, initRng)
 		state = { stars: starPool, lastFrame: -1 }
-		starfieldStateMap.set(stateKey, state)
-		if (starfieldStateMap.size > 32) {
-			const firstKey = starfieldStateMap.keys().next().value
-			if (firstKey !== undefined) starfieldStateMap.delete(firstKey)
-		}
+		sharedStore.set(stateKey, state)
 	}
 
 	const starPool = state.stars
@@ -268,7 +345,7 @@ export function createAsciiStarfieldSampler(frame: number, options: AsciiStarfie
 		isStreak?: boolean
 	}
 
-	const projected = new Map<string, ProjectedStar>()
+	const projected = new Map<number, ProjectedStar>()
 
 	for (let i = 0; i < starPool.length; i++) {
 		const star = starPool[i]
@@ -280,12 +357,12 @@ export function createAsciiStarfieldSampler(frame: number, options: AsciiStarfie
 		const ch = chars[charIndex]
 		const fg = brightnessToRgb(brightness, fgColor)
 
-		const key = `${screenX},${screenY}`
+		const key = packStarKey(screenX, screenY)
 		projected.set(key, { ch, fg, bold: brightness > 0.7 })
 
 		if (streaks && star.z < 0.3) {
 			const streakY = screenY - 1
-			const streakKey = `${screenX},${streakY}`
+			const streakKey = packStarKey(screenX, streakY)
 			if (!projected.has(streakKey)) {
 				const streakBrightness = brightness * 0.5
 				const streakCharIndex = Math.max(0, charIndex - 1)
@@ -297,7 +374,7 @@ export function createAsciiStarfieldSampler(frame: number, options: AsciiStarfie
 	}
 
 	return (x: number, y: number) => {
-		const key = `${x},${y}`
+		const key = packStarKey(x, y)
 		const star = projected.get(key)
 		if (star) {
 			return { ch: star.ch, fg: star.fg, bg: bgColor, bold: star.bold }
@@ -310,5 +387,5 @@ export function createAsciiStarfieldSampler(frame: number, options: AsciiStarfie
  * Clear all starfield state (useful for resetting effects or when switching generators)
  */
 export function clearStarfieldState(): void {
-	starfieldStateMap.clear()
+	sharedStore.clear()
 }

@@ -7,6 +7,45 @@ export type BitmapFont = {
 	glyphs: Uint8Array[] // Array of 256 glyphs, each is height bytes (1 byte per row)
 	rawBitmapData?: Uint8Array // Optional raw bitmap data for debugging
 	glyphCache?: Map<string, HTMLCanvasElement> // Cache of pre-rendered glyphs as canvases
+	glyphMaskCache?: Map<number, HTMLCanvasElement> // Cache of glyph shapes, at most one per char code
+}
+
+/** How many leading bytes of a candidate region the offset heuristic inspects. */
+const OFFSET_PROBE_WINDOW = 1000
+const OFFSET_PROBE_MIN_NONZERO = 100
+const OFFSET_PROBE_MAX_NONZERO = 900
+
+/**
+ * Locate the start of raw glyph data, which may sit behind a .FON wrapper header.
+ *
+ * Heuristic: the first position whose leading bytes are neither mostly empty nor completely
+ * saturated. The non-zero count is carried across positions as a sliding window, so this is
+ * a single pass — scoring each candidate independently would be quadratic in file size.
+ *
+ * Exported for tests; callers should use {@link loadRawBitmapFont}.
+ */
+export function findFontDataOffset(bytes: Uint8Array, expectedSize: number): number {
+	if (bytes.length <= expectedSize) return 0
+
+	const lastOffset = bytes.length - expectedSize
+	const window = Math.min(OFFSET_PROBE_WINDOW, expectedSize)
+
+	let nonZero = 0
+	for (let j = 0; j < window; j++) {
+		if (bytes[j] !== 0) nonZero++
+	}
+
+	for (let i = 0; i <= lastOffset; i++) {
+		if (i > 0) {
+			if (bytes[i - 1] !== 0) nonZero--
+			if (bytes[i + window - 1] !== 0) nonZero++
+		}
+		if (nonZero > OFFSET_PROBE_MIN_NONZERO && nonZero < OFFSET_PROBE_MAX_NONZERO) {
+			return i
+		}
+	}
+
+	return 0
 }
 
 /**
@@ -22,30 +61,7 @@ export async function loadRawBitmapFont(url: string, width = 8, height = 16): Pr
 	const bytesPerGlyph = height
 	const expectedSize = 256 * bytesPerGlyph
 
-	// Try to find the font data in the file (might be in a .FON wrapper)
-	let offset = 0
-
-	// Simple heuristic: look for repeating pattern that looks like font data
-	// VGA fonts typically start at specific offsets in .FON files
-	// Common offsets: 0x0436, 0x1036, but we'll search
-	if (bytes.length > expectedSize) {
-		// Search for likely font data start - look for null glyph pattern at char 0
-		for (let i = 0; i < bytes.length - expectedSize; i++) {
-			// Check if this looks like a valid font start (first glyph usually empty or specific pattern)
-			const slice = bytes.slice(i, i + expectedSize)
-			// Simple validation: check if data looks reasonably distributed
-			let nonZero = 0
-			for (let j = 0; j < Math.min(1000, slice.length); j++) {
-				if (slice[j] !== 0) nonZero++
-			}
-			// If we have some data but not all zeros, this might be font data
-			if (nonZero > 100 && nonZero < 900) {
-				offset = i
-				break
-			}
-		}
-	}
-
+	const offset = findFontDataOffset(bytes, expectedSize)
 	const fontData = bytes.slice(offset, offset + expectedSize)
 	if (fontData.length < expectedSize) {
 		throw new Error(`Font file too small: ${fontData.length} < ${expectedSize}`)
@@ -61,44 +77,64 @@ export async function loadRawBitmapFont(url: string, width = 8, height = 16): Pr
 }
 
 /**
- * Render a single glyph to a canvas context (pixel-perfect, no scaling)
+ * Upper bound on fully-coloured glyph canvases kept per font.
+ *
+ * DOS-palette art only ever needs a few hundred (char x 16 fg x 16 bg in the worst case,
+ * far fewer in practice), so it stays entirely on the cached fast path. Generators emitting
+ * 24-bit colour produce a near-unique key per cell, which would otherwise allocate a canvas
+ * element per cell per frame; past this cap those fall back to tinting a shared mask, which
+ * allocates nothing.
  */
-// Cache for parsed colors to avoid repeated parsing
-const colorCache = new Map<string, { r: number; g: number; b: number }>()
+const MAX_COLORED_GLYPHS = 4096
 
-function parseColor(color: string): { r: number; g: number; b: number } {
-	if (colorCache.has(color)) {
-		return colorCache.get(color)!
-	}
+/** Reusable scratch canvas for tinting glyph masks. One per document, not per cell. */
+let tintScratch: HTMLCanvasElement | null = null
+let tintScratchCtx: CanvasRenderingContext2D | null = null
 
-	// Parse hex colors (#RRGGBB)
-	if (color.startsWith('#')) {
-		const hex = color.slice(1)
-		const r = parseInt(hex.slice(0, 2), 16)
-		const g = parseInt(hex.slice(2, 4), 16)
-		const b = parseInt(hex.slice(4, 6), 16)
-		const rgb = { r, g, b }
-		colorCache.set(color, rgb)
-		return rgb
+function getTintScratch(width: number, height: number): CanvasRenderingContext2D {
+	if (!tintScratch || tintScratch.width !== width || tintScratch.height !== height) {
+		tintScratch = document.createElement('canvas')
+		tintScratch.width = width
+		tintScratch.height = height
+		tintScratchCtx = tintScratch.getContext('2d', { willReadFrequently: false })!
 	}
-
-	// Fallback: use a canvas to parse the color
-	const canvas = document.createElement('canvas')
-	canvas.width = canvas.height = 1
-	const ctx = canvas.getContext('2d')
-	if (!ctx) {
-		const fallback = { r: 170, g: 170, b: 170 }
-		colorCache.set(color, fallback)
-		return fallback
-	}
-	ctx.fillStyle = color
-	ctx.fillRect(0, 0, 1, 1)
-	const data = ctx.getImageData(0, 0, 1, 1).data
-	const rgb = { r: data[0], g: data[1], b: data[2] }
-	colorCache.set(color, rgb)
-	return rgb
+	return tintScratchCtx!
 }
 
+/**
+ * Get the glyph's shape as an opaque-white-on-transparent mask, rendered once per char code.
+ * Walking the bitmap is the expensive part; tinting the result is cheap.
+ */
+function getGlyphMask(font: BitmapFont, charCode: number): HTMLCanvasElement {
+	if (!font.glyphMaskCache) {
+		font.glyphMaskCache = new Map()
+	}
+	const cached = font.glyphMaskCache.get(charCode)
+	if (cached) return cached
+
+	const glyph = font.glyphs[charCode] || font.glyphs[0]
+	const mask = document.createElement('canvas')
+	mask.width = font.width
+	mask.height = font.height
+	const maskCtx = mask.getContext('2d', { willReadFrequently: false })!
+	maskCtx.fillStyle = '#ffffff'
+	for (let row = 0; row < font.height; row++) {
+		const byte = glyph[row]
+		for (let col = 0; col < font.width; col++) {
+			const bit = 7 - col
+			if (byte & (1 << bit)) {
+				maskCtx.fillRect(col, row, 1, 1)
+			}
+		}
+	}
+
+	font.glyphMaskCache.set(charCode, mask)
+	return mask
+}
+
+/**
+ * Render a single glyph to a canvas context (pixel-perfect, no scaling).
+ */
 export function renderGlyph(
 	ctx: CanvasRenderingContext2D,
 	font: BitmapFont,
@@ -108,61 +144,62 @@ export function renderGlyph(
 	fgColor: string,
 	bgColor: string
 ) {
-	// Initialize cache if needed
 	if (!font.glyphCache) {
 		font.glyphCache = new Map()
 	}
 
-	// Create cache key — for numeric ANSI colors use a cheaper key,
-	// for string colors fall back to template literal
 	const cacheKey = `${charCode}:${fgColor}:${bgColor}`
-	let canvas = font.glyphCache.get(cacheKey)
+	const cached = font.glyphCache.get(cacheKey)
 
-	if (canvas) {
-		// LRU: move to end of Map iteration order so it's evicted last
-		font.glyphCache.delete(cacheKey)
-		font.glyphCache.set(cacheKey, canvas)
-	} else {
-		// Cache miss - render the glyph to an offscreen canvas
+	if (cached) {
+		ctx.drawImage(cached, x, y)
+		return
+	}
+
+	if (font.glyphCache.size < MAX_COLORED_GLYPHS) {
+		// Room to cache this colour combination: compose it once into its own canvas by
+		// painting the bitmap directly. Total allocations are bounded by the cap.
 		const glyph = font.glyphs[charCode] || font.glyphs[0]
-
-		// Create offscreen canvas for this glyph
-		canvas = document.createElement('canvas')
+		const canvas = document.createElement('canvas')
 		canvas.width = font.width
 		canvas.height = font.height
-		const offscreenCtx = canvas.getContext('2d', { willReadFrequently: false })!
+		const glyphCtx = canvas.getContext('2d', { willReadFrequently: false })!
 
-		// Fill background
-		offscreenCtx.fillStyle = bgColor
-		offscreenCtx.fillRect(0, 0, font.width, font.height)
+		glyphCtx.fillStyle = bgColor
+		glyphCtx.fillRect(0, 0, font.width, font.height)
 
-		// Draw foreground pixels using fillRect (but only once per glyph)
-		offscreenCtx.fillStyle = fgColor
+		glyphCtx.fillStyle = fgColor
 		for (let row = 0; row < font.height; row++) {
 			const byte = glyph[row]
 			for (let col = 0; col < font.width; col++) {
 				const bit = 7 - col
 				if (byte & (1 << bit)) {
-					offscreenCtx.fillRect(col, row, 1, 1)
+					glyphCtx.fillRect(col, row, 1, 1)
 				}
 			}
 		}
 
-		// Evict oldest entries if cache grows too large (prevents memory blow-up with RGB colors)
-		if (font.glyphCache.size > 8192) {
-			const iter = font.glyphCache.keys()
-			for (let i = 0; i < 2048; i++) {
-				const k = iter.next().value
-				if (k !== undefined) font.glyphCache.delete(k)
-			}
-		}
-
-		// Store in cache
 		font.glyphCache.set(cacheKey, canvas)
+		ctx.drawImage(canvas, x, y)
+		return
 	}
 
-	// Draw the cached canvas using drawImage (much faster than putImageData)
-	ctx.drawImage(canvas, x, y)
+	// Cache is full — tint the shared per-char-code mask through the scratch canvas instead.
+	// Slower per cell than a cache hit, but allocation-free, so a truecolour generator
+	// degrades smoothly rather than churning one canvas element per cell per frame.
+	const mask = getGlyphMask(font, charCode)
+	const scratchCtx = getTintScratch(font.width, font.height)
+	scratchCtx.globalCompositeOperation = 'source-over'
+	scratchCtx.clearRect(0, 0, font.width, font.height)
+	scratchCtx.drawImage(mask, 0, 0)
+	scratchCtx.globalCompositeOperation = 'source-in'
+	scratchCtx.fillStyle = fgColor
+	scratchCtx.fillRect(0, 0, font.width, font.height)
+	scratchCtx.globalCompositeOperation = 'source-over'
+
+	ctx.fillStyle = bgColor
+	ctx.fillRect(x, y, font.width, font.height)
+	ctx.drawImage(tintScratch!, x, y)
 }
 
 /**

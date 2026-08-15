@@ -109,12 +109,30 @@ function sampleCircleBitmap(
 }
 
 /**
+ * Compute a per-pixel luminance plane for the whole frame, once. Cells have
+ * overlapping bounding boxes (~2.25x overlap at typical cell sizes), so
+ * precomputing luminance here avoids recomputing the same weighted sum for
+ * the same pixel multiple times per frame. Uses the exact same formula/order
+ * of operations as before, so results are bit-for-bit identical.
+ */
+function computeLuminancePlane(buf: Uint8Array, w: number, h: number, out: Float64Array): void {
+	const n = w * h
+	for (let i = 0, i3 = 0; i < n; i++, i3 += 3) {
+		out[i] = 0.2126 * buf[i3] + 0.7152 * buf[i3 + 1] + 0.0722 * buf[i3 + 2]
+	}
+}
+
+/**
  * Batch-sample all 16 points (6 internal + 10 external) for a cell in one pass.
  * Computes a single bounding box that encloses all sample circles and iterates
- * pixels once, accumulating luminance for each circle a pixel falls within.
+ * pixels once, accumulating luminance (from the precomputed plane) for each
+ * circle a pixel falls within.
+ *
+ * `ptX`/`ptY`/`sums`/`counts` are caller-owned scratch buffers (size
+ * TOTAL_SAMPLES) reused across cells/frames to avoid a per-cell allocation.
  */
 function sampleCellPoints(
-	buf: Uint8Array,
+	lum: Float64Array,
 	w: number,
 	h: number,
 	cellX: number,
@@ -124,12 +142,14 @@ function sampleCellPoints(
 	sampleR: number,
 	internal: Float32Array,
 	external: Float32Array,
+	ptX: Float64Array,
+	ptY: Float64Array,
+	sums: Float64Array,
+	counts: Uint16Array,
 ): void {
 	const r2 = sampleR * sampleR
 
 	// Pre-compute absolute positions of all 16 sample points
-	const ptX = new Float64Array(TOTAL_SAMPLES)
-	const ptY = new Float64Array(TOTAL_SAMPLES)
 	for (let s = 0; s < K; s++) {
 		ptX[s] = cellX + S_PTS[s].x * cellW
 		ptY[s] = cellY + S_PTS[s].y * cellH
@@ -155,20 +175,20 @@ function sampleCellPoints(
 	const x1 = Math.min(w - 1, (outerX1 + sampleR + 1) | 0)
 	const y1 = Math.min(h - 1, (outerY1 + sampleR + 1) | 0)
 
-	// Accumulators
-	const sums = new Float64Array(TOTAL_SAMPLES)
-	const counts = new Uint16Array(TOTAL_SAMPLES)
+	// Reset accumulators (reused scratch buffers)
+	sums.fill(0)
+	counts.fill(0)
 
 	for (let y = y0; y <= y1; y++) {
+		const rowOff = y * w
 		for (let x = x0; x <= x1; x++) {
-			const i3 = (y * w + x) * 3
-			const lum = 0.2126 * buf[i3] + 0.7152 * buf[i3 + 1] + 0.0722 * buf[i3 + 2]
+			const l = lum[rowOff + x]
 
 			for (let p = 0; p < TOTAL_SAMPLES; p++) {
 				const dx = x - ptX[p]
 				const dy = y - ptY[p]
 				if (dx * dx + dy * dy <= r2) {
-					sums[p] += lum
+					sums[p] += l
 					counts[p]++
 				}
 			}
@@ -201,29 +221,46 @@ function sampleCellColor(
 	const dx = cellW * 0.25
 	const dy = cellH * 0.25
 
+	const x0 = cx - dx
+	const x1 = cx + dx
+	const y0 = cy - dy
+	const y1 = cy + dy
+
 	let sumR = 0
 	let sumG = 0
 	let sumB = 0
-	let n = 0
 
-	const pts = [
-		[cx - dx, cy - dy],
-		[cx + dx, cy - dy],
-		[cx - dx, cy + dy],
-		[cx + dx, cy + dy],
-	]
+	// 4 strategic points, same order as before: TL, TR, BL, BR — inlined to
+	// avoid allocating an array-of-points per cell (this runs per cell per frame).
+	let px = Math.min(Math.max(Math.floor(x0), 0), w - 1)
+	let py = Math.min(Math.max(Math.floor(y0), 0), h - 1)
+	let i = (py * w + px) * 3
+	sumR += buf[i]
+	sumG += buf[i + 1]
+	sumB += buf[i + 2]
 
-	for (const [sx, sy] of pts) {
-		const px = Math.min(Math.max(Math.floor(sx), 0), w - 1)
-		const py = Math.min(Math.max(Math.floor(sy), 0), h - 1)
-		const i = (py * w + px) * 3
-		sumR += buf[i]
-		sumG += buf[i + 1]
-		sumB += buf[i + 2]
-		n++
-	}
+	px = Math.min(Math.max(Math.floor(x1), 0), w - 1)
+	py = Math.min(Math.max(Math.floor(y0), 0), h - 1)
+	i = (py * w + px) * 3
+	sumR += buf[i]
+	sumG += buf[i + 1]
+	sumB += buf[i + 2]
 
-	return [sumR / n, sumG / n, sumB / n]
+	px = Math.min(Math.max(Math.floor(x0), 0), w - 1)
+	py = Math.min(Math.max(Math.floor(y1), 0), h - 1)
+	i = (py * w + px) * 3
+	sumR += buf[i]
+	sumG += buf[i + 1]
+	sumB += buf[i + 2]
+
+	px = Math.min(Math.max(Math.floor(x1), 0), w - 1)
+	py = Math.min(Math.max(Math.floor(y1), 0), h - 1)
+	i = (py * w + px) * 3
+	sumR += buf[i]
+	sumG += buf[i + 1]
+	sumB += buf[i + 2]
+
+	return [sumR / 4, sumG / 4, sumB / 4]
 }
 
 // ── Character vector building ───────────────────────────────────
@@ -328,6 +365,14 @@ function qKey(v: Float32Array): number {
 	return k
 }
 
+// qKey has a 32^6 (~1 billion) key space. Under continuously-varying input
+// (e.g. a video-like feed) a plain unbounded Map would grow forever, so cache
+// insertion stops past this cap — same "stop inserting" bounded-cache pattern
+// used by the bitmap font's glyph cache. Lookups still work past the cap;
+// they just fall back to a (still fast, distance is only over `activeIndices`)
+// linear scan instead of a memoized hit.
+const LOOKUP_CACHE_MAX = 65536
+
 /** Find nearest character by Euclidean distance in 6D space (cached) */
 function findNearest(
 	v: Float32Array,
@@ -353,7 +398,9 @@ function findNearest(
 		}
 	}
 
-	cache.set(key, bestIdx)
+	if (cache.size < LOOKUP_CACHE_MAX) {
+		cache.set(key, bestIdx)
+	}
 	return bestIdx
 }
 
@@ -431,6 +478,18 @@ export function createShapeConverter(options: ShapeConverterOptions): FrameConve
 	const inputVec = new Float32Array(K)
 	const extVals = new Float32Array(10)
 
+	// Scratch buffers for sampleCellPoints, reused across every cell/frame
+	// instead of allocating two Float64Array(TOTAL_SAMPLES), a Uint16Array(16)
+	// per cell (~10K allocations/frame at 80x25).
+	const ptXScratch = new Float64Array(TOTAL_SAMPLES)
+	const ptYScratch = new Float64Array(TOTAL_SAMPLES)
+	const sumsScratch = new Float64Array(TOTAL_SAMPLES)
+	const countsScratch = new Uint16Array(TOTAL_SAMPLES)
+
+	// Per-frame luminance plane, reused/resized as needed rather than
+	// recomputed per pixel per cell (cells overlap, so pixels get revisited).
+	let lumPlane = new Float64Array(0)
+
 	const converter: FrameConverter = (
 		frame: FrameData,
 		columns: number,
@@ -444,6 +503,13 @@ export function createShapeConverter(options: ShapeConverterOptions): FrameConve
 		const pixelsPerCellY = frame.height / rows
 		const sampleR = Math.max(1, Math.min(pixelsPerCellX, pixelsPerCellY) * 0.2)
 
+		// Precompute the luminance plane once per frame (see computeLuminancePlane).
+		const pixelCount = frame.width * frame.height
+		if (lumPlane.length !== pixelCount) {
+			lumPlane = new Float64Array(pixelCount)
+		}
+		computeLuminancePlane(frame.pixels, frame.width, frame.height, lumPlane)
+
 		for (let row = 0; row < rows; row++) {
 			const line: AnsiCell[] = []
 
@@ -453,9 +519,10 @@ export function createShapeConverter(options: ShapeConverterOptions): FrameConve
 
 				// ── Batch sample all 16 points in one pass ──
 				sampleCellPoints(
-					frame.pixels, frame.width, frame.height,
+					lumPlane, frame.width, frame.height,
 					cellX, cellY, pixelsPerCellX, pixelsPerCellY,
 					sampleR, inputVec, extVals,
+					ptXScratch, ptYScratch, sumsScratch, countsScratch,
 				)
 
 				// ── Directional contrast enhancement ──

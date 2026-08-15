@@ -139,6 +139,18 @@ function generatePermutation(seed: number): Uint8Array {
 	return perm
 }
 
+// Memoized char lookup table (like asciiFireGenerator's getFireCharLookup) — buildCharLookup
+// was being re-run every frame even though chars is constant per generator instance.
+let lastPlasmaChars: string[] | null = null
+let lastPlasmaCharLookup: string[] | null = null
+
+function getPlasmaCharLookup(chars: string[]): string[] {
+	if (lastPlasmaChars === chars && lastPlasmaCharLookup) return lastPlasmaCharLookup
+	lastPlasmaCharLookup = buildCharLookup(chars)
+	lastPlasmaChars = chars
+	return lastPlasmaCharLookup
+}
+
 // Memoize octave configs to avoid re-creating array of objects every frame
 let lastOctaveInput: OctaveConfig[] | null = null
 let lastOctaveConfigs: Array<{ scaleX: number; scaleY: number; timeScaleX: number; timeScaleY: number; amplitude: number }> | null = null
@@ -210,7 +222,7 @@ export function generateAsciiPerlinPlasmaFrame(
 
 	// Use cached permutation table and octave configs
 	const perm = getCachedPermutation(seed)
-	const charLookup = buildCharLookup(chars)
+	const charLookup = getPlasmaCharLookup(chars)
 	const octaveConfigs = getCachedOctaveConfigs(octaves)
 
 	// Generate screen
@@ -267,7 +279,7 @@ export function createAsciiPerlinPlasmaSampler(
 
 	const time = frame * timeScale
 	const perm = getCachedPermutation(seed)
-	const charLookup = buildCharLookup(chars)
+	const charLookup = getPlasmaCharLookup(chars)
 	const octaveConfigs = getCachedOctaveConfigs(octaves)
 
 	return (x: number, y: number) => {

@@ -19,9 +19,11 @@ export const ANSI_COLORS_RGB: Array<[number, number, number]> = [
 ]
 
 /**
- * Calculate Euclidean distance between two RGB colors
+ * Calculate squared Euclidean distance between two RGB colors.
+ * Avoids the sqrt() call — squared distance is monotone with true distance,
+ * so it's equivalent for finding the argmin (closest color).
  */
-function rgbDistance(
+function rgbDistanceSquared(
 	r1: number,
 	g1: number,
 	b1: number,
@@ -32,7 +34,7 @@ function rgbDistance(
 	const dr = r1 - r2
 	const dg = g1 - g2
 	const db = b1 - b2
-	return Math.sqrt(dr * dr + dg * dg + db * db)
+	return dr * dr + dg * dg + db * db
 }
 
 /**
@@ -124,20 +126,61 @@ function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
 
 export type PaletteMode = 'ansi16' | 'unconstrained' | number
 
+// Palettes are deterministic given `mode`, but generation (256 hsvToRgb calls +
+// tuple allocations) is not free and callers (frameToAnsi/shapeAsciiConverter)
+// invoke getPalette() once per frame. Memoize by mode so the same immutable
+// array instance is reused. Bounded defensively — modes seen in practice are a
+// small, fixed set ('ansi16' short-circuits below, 'unconstrained', or a handful
+// of custom sizes), but we cap insertion so a pathological caller passing many
+// distinct numeric sizes can't grow this without bound.
+const PALETTE_CACHE_MAX = 64
+const paletteCache = new Map<PaletteMode, Array<[number, number, number]>>()
+
 /**
  * Get color palette based on mode
  */
 export function getPalette(mode: PaletteMode): Array<[number, number, number]> {
 	if (mode === 'ansi16') {
 		return ANSI_COLORS_RGB
-	} else if (mode === 'unconstrained') {
-		// Use 256 colors for unconstrained mode (full 8-bit palette approximation)
-		return generateEvenlySpacedPalette(256)
-	} else {
-		// Custom palette size
-		return generateEvenlySpacedPalette(mode)
 	}
+
+	const cached = paletteCache.get(mode)
+	if (cached) return cached
+
+	// Use 256 colors for unconstrained mode (full 8-bit palette approximation),
+	// otherwise a custom palette size.
+	const palette = mode === 'unconstrained' ? generateEvenlySpacedPalette(256) : generateEvenlySpacedPalette(mode)
+
+	if (paletteCache.size < PALETTE_CACHE_MAX) {
+		paletteCache.set(mode, palette)
+	}
+
+	return palette
 }
+
+// Memoized nearest-color lookups, scoped per palette array instance via WeakMap
+// so distinct palettes (e.g. ANSI_COLORS_RGB vs a generated unconstrained
+// palette) never collide, and caches for palettes that fall out of use can be
+// garbage collected. Each palette's cache is additionally size-capped (same
+// "stop inserting past the cap" pattern used by the shape converter's
+// lookupCache and the bitmap font's glyph cache) so continuously-varying input
+// (e.g. video-like feeds) can't grow it without bound.
+//
+// NOTE on the key: an earlier version of this cache quantized (r,g,b) to an
+// integer-rounded 24-bit key. That was measured (see task report) to change
+// output at exact tie/near-tie boundaries between palette entries — two raw
+// inputs that round to the same key can legitimately have different nearest
+// palette entries, since the un-cached scan breaks ties by first-index-wins
+// on the *exact* float distance. That's a real, if rare, output difference,
+// which the task requires we not introduce. The key below is therefore exact
+// (no rounding) — same string-keyed-by-exact-inputs pattern already used by
+// the bitmap font's glyph cache (`${charCode}:${fgColor}:${bgColor}`) — so a
+// cache hit only ever occurs for a bit-for-bit-identical input, which by
+// construction returns exactly what a fresh computation would. This still
+// captures the common case well: solid/flat color regions and repeated
+// frames produce the exact same averaged float repeatedly.
+const RGB_LOOKUP_CACHE_MAX = 65536
+const rgbLookupCaches = new WeakMap<Array<[number, number, number]>, Map<string, number>>()
 
 /**
  * Convert RGB color to closest color index in the given palette
@@ -148,12 +191,39 @@ export function rgbToPaletteColor(
 	b: number,
 	palette: Array<[number, number, number]>
 ): number {
+	let cache = rgbLookupCaches.get(palette)
+	if (!cache) {
+		cache = new Map()
+		rgbLookupCaches.set(palette, cache)
+	}
+
+	const key = r + ':' + g + ':' + b
+	const cached = cache.get(key)
+	if (cached !== undefined) return cached
+
+	const closestIndex = findClosestPaletteIndex(r, g, b, palette)
+	if (cache.size < RGB_LOOKUP_CACHE_MAX) {
+		cache.set(key, closestIndex)
+	}
+	return closestIndex
+}
+
+/**
+ * Linear scan for the closest palette entry using squared distance (no sqrt —
+ * monotone with true distance, so the argmin is identical).
+ */
+function findClosestPaletteIndex(
+	r: number,
+	g: number,
+	b: number,
+	palette: Array<[number, number, number]>
+): number {
 	let minDistance = Infinity
 	let closestIndex = 0
 
 	for (let i = 0; i < palette.length; i++) {
-		const [ar, ag, ab] = palette[i]
-		const distance = rgbDistance(r, g, b, ar, ag, ab)
+		const entry = palette[i]
+		const distance = rgbDistanceSquared(r, g, b, entry[0], entry[1], entry[2])
 		if (distance < minDistance) {
 			minDistance = distance
 			closestIndex = i

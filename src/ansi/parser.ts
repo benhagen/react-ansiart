@@ -258,9 +258,9 @@ function ensureRow(
 	lines: AnsiCell[][],
 	row: number,
 	columns: number,
-	fg: number | string,
-	bg: number | string,
-	bold: boolean
+	_fg: number | string,
+	_bg: number | string,
+	_bold: boolean
 ) {
 	while (lines.length <= row) {
 		// Initialize new lines with default attributes (not current attributes)
@@ -466,10 +466,15 @@ function handleCursorPrevLine(ctx: CsiHandlerContext) {
 }
 
 function handleSGR(ctx: CsiHandlerContext) {
-	applySGR(
-		ctx.params.filter(p => !Number.isNaN(p)),
-		ctx.state
-	)
+	// Avoid the filter allocation in the common case of no NaN placeholders
+	let params = ctx.params
+	for (let i = 0; i < params.length; i++) {
+		if (Number.isNaN(params[i])) {
+			params = params.filter(p => !Number.isNaN(p))
+			break
+		}
+	}
+	applySGR(params, ctx.state)
 }
 
 function handleIceColors(ctx: CsiHandlerContext) {
@@ -720,26 +725,62 @@ type ParseAnsiOptions = {
 }
 
 /**
- * Unified ANSI parsing function that handles all parsing modes
- * @param bytesInput - Input bytes to parse
- * @param options - Parsing options (columns, maxByteIndex, encoding)
- * @returns Parsed ANSI screen
+ * Options for creating a resumable ANSI parse session
  */
-export function parseAnsiCore(bytesInput: Uint8Array, options: ParseAnsiOptions = {}): AnsiScreen {
-	const { columns, maxByteIndex, encoding = 'cp437' } = options
-	const isDynamic = columns === undefined
-	const isIncremental = maxByteIndex !== undefined
+type AnsiParseSessionOptions = {
+	/** Fixed column width (if undefined, uses dynamic column sizing) */
+	columns?: number
+	/** Character encoding to use */
+	encoding?: CharacterEncoding
+}
 
-	// Handle SAUCE metadata
+/**
+ * Resumable ANSI parse session
+ * Retains parser state between calls so animated playback can parse only the
+ * newly revealed bytes instead of re-parsing from byte 0 on every frame.
+ */
+export type AnsiParseSession = {
+	/**
+	 * Parse forward to the given byte index and return the current screen.
+	 * Moving forward parses only the delta since the previous call; moving
+	 * backward (loop/seek) resets the session and re-parses from byte 0.
+	 * The returned screen has a fresh top-level lines array, but row arrays
+	 * are shared with internal parser state — callers may replace or extend
+	 * the lines array, but must not mutate individual rows or cells.
+	 */
+	advanceTo: (byteIndex: number) => AnsiScreen
+	/** SAUCE metadata parsed once at session creation (undefined if absent) */
+	sauce: SauceMetadata | undefined
+	/** Parseable byte length (input length minus any SAUCE trailer) */
+	byteLength: number
+}
+
+/**
+ * Create a resumable ANSI parse session
+ * SAUCE metadata is stripped and parsed once at creation; each advanceTo call
+ * parses only the bytes not yet consumed.
+ * @param bytesInput - Input bytes to parse
+ * @param options - Parsing options (columns, encoding)
+ * @returns Resumable parse session
+ */
+export function createAnsiParseSession(
+	bytesInput: Uint8Array,
+	options: AnsiParseSessionOptions = {}
+): AnsiParseSession {
+	const { columns, encoding = 'cp437' } = options
+	const isDynamic = columns === undefined
+
+	// Handle SAUCE metadata once at session creation
+	// (subarray is a zero-copy view; the parser only reads from it)
 	let bytes = bytesInput
 	const sauce = parseSauce(bytesInput)
-	if (isSauceTrailer(bytes)) {
+	if (isSauceTrailer(bytesInput)) {
 		// Calculate how much to strip: SAUCE (128) + possible EOF (1) + comments
 		let stripSize = SAUCE_TRAILER_SIZE
 
 		// Check for EOF byte before SAUCE
-		const eofPos = bytes.length - SAUCE_TRAILER_SIZE - 1
-		if (eofPos >= 0 && bytes[eofPos] === SAUCE_EOF) {
+		const eofPos = bytesInput.length - SAUCE_TRAILER_SIZE - 1
+		if (eofPos >= 0 && bytesInput[eofPos] === SAUCE_EOF) {
 			stripSize += 1
 		}
 
@@ -748,31 +789,39 @@ export function parseAnsiCore(bytesInput: Uint8Array, options: ParseAnsiOptions 
 			stripSize += COMMENT_ID_SIZE + sauce.comments * COMMENT_SIZE
 		}
 
-		bytes = bytes.slice(0, bytes.length - stripSize)
+		bytes = bytesInput.subarray(0, bytesInput.length - stripSize)
 	}
 
-	// Determine stop point for incremental parsing
-	const stopAt = isIncremental ? Math.min(maxByteIndex!, bytes.length) : bytes.length
+	// Retained parser state (single source of truth)
+	let state: ParserState
+	// Parser state machine (retained because a stop point may land mid-escape-sequence)
+	let parserState: 'normal' | 'esc' | 'csi'
+	let csiParams: number[]
+	// Next byte index to parse
+	let nextIndex: number
+	// Set once a soft EOF byte is consumed; no further bytes are parsed
+	let sawEof: boolean
 
-	// Initialize parser state (single source of truth)
-	const state: ParserState = {
-		lines: [],
-		cur: { row: 0, col: 0 },
-		savedCur: { row: 0, col: 0 },
-		fg: DEFAULT_FG,
-		bg: DEFAULT_BG,
-		bold: false,
-		lineWrap: true,
-		iceColors: false,
-		columns: columns,
-		maxCol: isDynamic ? 0 : undefined,
-		isDynamic: isDynamic,
+	const reset = () => {
+		state = {
+			lines: [],
+			cur: { row: 0, col: 0 },
+			savedCur: { row: 0, col: 0 },
+			fg: DEFAULT_FG,
+			bg: DEFAULT_BG,
+			bold: false,
+			lineWrap: true,
+			iceColors: false,
+			columns: columns,
+			maxCol: isDynamic ? 0 : undefined,
+			isDynamic: isDynamic,
+		}
+		parserState = 'normal'
+		csiParams = []
+		nextIndex = 0
+		sawEof = false
 	}
-
-	// Parser state machine
-	let i = 0
-	let parserState: 'normal' | 'esc' | 'csi' = 'normal'
-	let csiParams: number[] = []
+	reset()
 
 	// Create writeChar function based on mode
 	const writeChar = (ch: string) => {
@@ -834,115 +883,143 @@ export function parseAnsiCore(bytesInput: Uint8Array, options: ParseAnsiOptions 
 		}
 	}
 
-	// Main parsing loop
-	while (i < stopAt) {
-		const b = bytes[i++]
-		if (b === SOFT_EOF) break // soft EOF
+	// Build the current screen without mutating retained parser state, so a
+	// later advanceTo continues exactly as an uninterrupted parse would.
+	// The top-level lines array is a fresh copy; row arrays are shared except
+	// for short rows, which are replaced by padded copies.
+	const buildScreen = (): AnsiScreen => {
+		const lines = state.lines.slice()
 
-		switch (parserState) {
-			case 'normal': {
-				if (b === ESC) {
-					parserState = 'esc'
-					break
+		// Post-processing: ensure at least one line exists
+		if (lines.length === 0) {
+			lines.push(isDynamic ? [] : createEmptyLine(columns!))
+		}
+
+		// Calculate final dimensions
+		// Dynamic mode: pad all lines to the same width (max column seen)
+		// Fixed mode: ensure all lines are exactly `columns` wide
+		const finalColumns = isDynamic ? Math.max(1, state.maxCol || 0) : columns!
+		for (let r = 0; r < lines.length; r++) {
+			const line = lines[r]
+			if (!line) {
+				lines[r] = createEmptyLine(finalColumns)
+			} else if (line.length < finalColumns) {
+				const padded = line.slice()
+				while (padded.length < finalColumns) {
+					padded.push({ ...DEFAULT_CELL })
 				}
-				writeChar(byteToChar(b, encoding))
+				lines[r] = padded
+			}
+		}
+
+		return { lines, columns: finalColumns, sauce }
+	}
+
+	const advanceTo = (byteIndex: number): AnsiScreen => {
+		const target = Math.max(0, Math.min(byteIndex, bytes.length))
+
+		// Rewind (loop/seek backward): reset and re-parse from byte 0
+		if (target < nextIndex) {
+			reset()
+		}
+
+		// Main parsing loop — only the delta [nextIndex, target)
+		let i = nextIndex
+		while (i < target && !sawEof) {
+			const b = bytes[i++]
+			if (b === SOFT_EOF) {
+				// soft EOF
+				sawEof = true
 				break
 			}
-			case 'esc': {
-				if (b === CSI_BRACKET) {
-					// CSI
-					parserState = 'csi'
-					csiParams = []
-					break
-				}
-				// Unrecognized ESC sequence; ignore and reset
-				parserState = 'normal'
-				break
-			}
-			case 'csi': {
-				const ch = String.fromCharCode(b)
-				if ((b >= PARAMETER_BYTE_MIN && b <= PARAMETER_BYTE_MAX) || ch === ' ' || ch === '?') {
-					// Prevent excessively long parameter strings (malformed input protection)
-					if (csiParams.length < MAX_CSI_PARAMS) {
-						csiParams.push(b)
+
+			switch (parserState) {
+				case 'normal': {
+					if (b === ESC) {
+						parserState = 'esc'
+						break
 					}
+					writeChar(byteToChar(b, encoding))
 					break
 				}
-				// Final byte - validate it's actually a valid command character
-				if (!isValidCsiCommand(ch)) {
-					// Invalid CSI command, reset and continue
+				case 'esc': {
+					if (b === CSI_BRACKET) {
+						// CSI
+						parserState = 'csi'
+						csiParams = []
+						break
+					}
+					// Unrecognized ESC sequence; ignore and reset
+					parserState = 'normal'
+					break
+				}
+				case 'csi': {
+					// Parameter bytes — compare numerically ('?' is 0x3f, inside the
+					// parameter range); defer string conversion to the final byte
+					if ((b >= PARAMETER_BYTE_MIN && b <= PARAMETER_BYTE_MAX) || b === SPACE) {
+						// Prevent excessively long parameter strings (malformed input protection)
+						if (csiParams.length < MAX_CSI_PARAMS) {
+							csiParams.push(b)
+						}
+						break
+					}
+					// Final byte - validate it's actually a valid command character
+					const ch = String.fromCharCode(b)
+					if (!isValidCsiCommand(ch)) {
+						// Invalid CSI command, reset and continue
+						parserState = 'normal'
+						csiParams = []
+						break
+					}
+
+					const params = parseCsiParams(csiParams)
+					const get = (idx: number, def: number) =>
+						Number.isNaN(params[idx]) || params[idx] === undefined ? def : params[idx]
+
+					const handler = CSI_HANDLERS[ch]
+					if (handler) {
+						const ctx: CsiHandlerContext = {
+							state: state,
+							params,
+							get,
+							columns: columns || 0,
+							ensureRow: () => {
+								if (isDynamic) {
+									while (state.lines.length <= state.cur.row) {
+										state.lines.push([])
+									}
+								} else {
+									ensureRow(state.lines, state.cur.row, columns!, state.fg, state.bg, state.bold)
+								}
+							},
+						}
+						handler(ctx)
+					}
+
 					parserState = 'normal'
 					csiParams = []
 					break
 				}
-
-				const params = parseCsiParams(csiParams)
-				const get = (idx: number, def: number) =>
-					Number.isNaN(params[idx]) || params[idx] === undefined ? def : params[idx]
-
-				const handler = CSI_HANDLERS[ch]
-				if (handler) {
-					const ctx: CsiHandlerContext = {
-						state: state,
-						params,
-						get,
-						columns: columns || 0,
-						ensureRow: () => {
-							if (isDynamic) {
-								while (state.lines.length <= state.cur.row) {
-									state.lines.push([])
-								}
-							} else {
-								ensureRow(state.lines, state.cur.row, columns!, state.fg, state.bg, state.bold)
-							}
-						},
-					}
-					handler(ctx)
-				}
-
-				parserState = 'normal'
-				csiParams = []
-				break
 			}
 		}
+		nextIndex = target
+
+		return buildScreen()
 	}
 
-	// Post-processing: ensure at least one line exists
-	if (state.lines.length === 0) {
-		if (isDynamic) {
-			state.lines.push([])
-		} else {
-			state.lines.push(createEmptyLine(columns!))
-		}
-	}
+	return { advanceTo, sauce, byteLength: bytes.length }
+}
 
-	// Calculate final dimensions
-	let finalColumns: number
-	if (isDynamic) {
-		finalColumns = Math.max(1, state.maxCol || 0)
-		// Pad all lines to the same width (max column seen)
-		for (let r = 0; r < state.lines.length; r++) {
-			const line = state.lines[r]
-			while (line.length < finalColumns) {
-				line.push({ ...DEFAULT_CELL })
-			}
-		}
-	} else {
-		finalColumns = columns!
-		// Ensure all lines are exactly `columns` wide
-		for (let r = 0; r < state.lines.length; r++) {
-			const line = state.lines[r]
-			if (!line) {
-				state.lines[r] = createEmptyLine(columns!)
-			} else {
-				while (line.length < columns!) {
-					line.push({ ...DEFAULT_CELL })
-				}
-			}
-		}
-	}
-
-	return { lines: state.lines, columns: finalColumns, sauce }
+/**
+ * Unified ANSI parsing function that handles all parsing modes
+ * @param bytesInput - Input bytes to parse
+ * @param options - Parsing options (columns, maxByteIndex, encoding)
+ * @returns Parsed ANSI screen
+ */
+export function parseAnsiCore(bytesInput: Uint8Array, options: ParseAnsiOptions = {}): AnsiScreen {
+	const { columns, maxByteIndex, encoding = 'cp437' } = options
+	const session = createAnsiParseSession(bytesInput, { columns, encoding })
+	return session.advanceTo(maxByteIndex !== undefined ? maxByteIndex : Number.MAX_SAFE_INTEGER)
 }
 
 /**
@@ -1076,7 +1153,7 @@ export function parseAscii(bytes: Uint8Array, encoding: CharacterEncoding = 'cp4
 			stripSize += COMMENT_ID_SIZE + sauce.comments * COMMENT_SIZE
 		}
 
-		bytesToParse = bytes.slice(0, bytes.length - stripSize)
+		bytesToParse = bytes.subarray(0, bytes.length - stripSize)
 	}
 
 	const lines: AnsiCell[][] = []
@@ -1226,7 +1303,6 @@ export function findNextCursorMove(
 	let csiParams: number[] = []
 	let normalCharCount = 0
 	let newlineCount = 0
-	let foundAnyCursorCommand = false
 
 	while (i < bytes.length) {
 		const b = bytes[i++]
@@ -1288,7 +1364,6 @@ export function findNextCursorMove(
 				csiParams = []
 
 				if (isCursorMove) {
-					foundAnyCursorCommand = true
 					normalCharCount = 0 // Reset after cursor move
 					newlineCount = 0
 					// This is a cursor move - render here!

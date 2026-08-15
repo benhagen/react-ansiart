@@ -1,4 +1,7 @@
 import type { AnsiScreen } from '../ansi/types'
+import type { CharacterFrameGenerator } from '../types/types'
+import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
+import { catchupSteps } from './simulationCatchup'
 
 const DEFAULT_DENSITY = 0.3
 const DEFAULT_FG_COLOR = '#55ff55'
@@ -67,29 +70,77 @@ function lerpColor(
 	return `rgb(${r},${g},${bl})`
 }
 
+// `t = min(age, 50) / 50` only ever takes 51 distinct values (age 0..50, and
+// age > 50 clamps to the same value as age === 50), so precompute the full
+// ramp once per fgColor instead of lerping per live cell every frame.
+let lastFgColorForAgeTable: string | null = null
+let lastAgeColorTable: string[] | null = null
+
+function getAgeColorTable(fgColor: string): string[] {
+	if (lastFgColorForAgeTable === fgColor && lastAgeColorTable) return lastAgeColorTable
+
+	const fgRgb = parseColor(fgColor)
+	const dimRgb: [number, number, number] = [
+		Math.round(fgRgb[0] * 0.2),
+		Math.round(fgRgb[1] * 0.2),
+		Math.round(fgRgb[2] * 0.2),
+	]
+
+	const table = new Array<string>(51)
+	for (let i = 0; i <= 50; i++) {
+		table[i] = lerpColor(fgRgb, dimRgb, i / 50)
+	}
+
+	lastFgColorForAgeTable = fgColor
+	lastAgeColorTable = table
+	return table
+}
+
 interface GameOfLifeState {
 	cells: Uint8Array
 	next: Uint8Array
 	lastFrame: number
 }
 
-const stateMap = new Map<string, GameOfLifeState>()
+// State shared by all callers of generateAsciiGameOfLifeFrame. Prefer
+// createAsciiGameOfLifeGenerator, which gives each instance its own.
+const sharedStore = createGeneratorStateStore<GameOfLifeState>()
 
 /**
- * Clear all Game of Life state (useful for resetting effects or when switching generators)
+ * Clear the Game of Life state shared by generateAsciiGameOfLifeFrame callers.
+ * Instances from createAsciiGameOfLifeGenerator own their state and are unaffected.
  */
 export function clearGameOfLifeState(): void {
-	stateMap.clear()
+	sharedStore.clear()
 }
 
-/**
- * Generate an ASCII Game of Life frame with age-based coloring
- */
-export function generateAsciiGameOfLifeFrame(
+// Memoized state-key builder — avoids a JSON.stringify allocation every
+// frame when the options driving the key haven't changed since last call.
+let lastStateKeyParams: { columns: number; rows: number; seed: number; density: number } | null = null
+let lastStateKey: string | null = null
+
+function getStateKey(columns: number, rows: number, seed: number, density: number): string {
+	if (
+		lastStateKeyParams &&
+		lastStateKeyParams.columns === columns &&
+		lastStateKeyParams.rows === rows &&
+		lastStateKeyParams.seed === seed &&
+		lastStateKeyParams.density === density &&
+		lastStateKey
+	) {
+		return lastStateKey
+	}
+	lastStateKeyParams = { columns, rows, seed, density }
+	lastStateKey = JSON.stringify(lastStateKeyParams)
+	return lastStateKey
+}
+
+function renderGameOfLifeFrame(
+	store: GeneratorStateStore<GameOfLifeState>,
 	frame: number,
 	columns: number,
 	rows: number,
-	options: AsciiGameOfLifeOptions = {},
+	options: AsciiGameOfLifeOptions,
 ): AnsiScreen {
 	const {
 		density = DEFAULT_DENSITY,
@@ -101,9 +152,9 @@ export function generateAsciiGameOfLifeFrame(
 	} = options
 
 	const totalCells = columns * rows
-	const stateKey = JSON.stringify({ columns, rows, seed, density })
+	const stateKey = getStateKey(columns, rows, seed, density)
 
-	let state = stateMap.get(stateKey)
+	let state = store.get(stateKey)
 	if (!state || frame < state.lastFrame) {
 		const cells = new Uint8Array(totalCells)
 		const next = new Uint8Array(totalCells)
@@ -112,33 +163,40 @@ export function generateAsciiGameOfLifeFrame(
 			cells[i] = random() < density ? 1 : 0
 		}
 		state = { cells, next, lastFrame: -1 }
-		stateMap.set(stateKey, state)
-		if (stateMap.size > 32) {
-			const firstKey = stateMap.keys().next().value
-			if (firstKey !== undefined) stateMap.delete(firstKey)
-		}
+		store.set(stateKey, state)
 	}
 
 	const { cells, next } = state
 
-	// Simulate forward from lastFrame to current frame
-	const framesToSimulate = frame - state.lastFrame
+	// Simulate forward from lastFrame to current frame, capped so a large jump
+	// (backgrounded tab, seek) cannot block the main thread proportionally to the gap.
+	const framesToSimulate = catchupSteps(frame, state.lastFrame)
 	for (let f = 0; f < framesToSimulate; f++) {
 		// Compute next generation
 		for (let y = 0; y < rows; y++) {
-			for (let x = 0; x < columns; x++) {
-				const idx = y * columns + x
+			// Hoist the wrapped row lookups once per row instead of paying two
+			// modulo ops per neighbor (8 neighbors/cell) for every cell.
+			const yUp = y > 0 ? y - 1 : rows - 1
+			const yDown = y < rows - 1 ? y + 1 : 0
+			const rowUp = yUp * columns
+			const rowDown = yDown * columns
+			const row = y * columns
 
-				// Count live neighbors (wrapping)
+			for (let x = 0; x < columns; x++) {
+				const xLeft = x > 0 ? x - 1 : columns - 1
+				const xRight = x < columns - 1 ? x + 1 : 0
+				const idx = row + x
+
+				// Count live neighbors (wrapping), branch instead of modulo
 				let neighbors = 0
-				for (let dy = -1; dy <= 1; dy++) {
-					for (let dx = -1; dx <= 1; dx++) {
-						if (dy === 0 && dx === 0) continue
-						const ny = (y + dy + rows) % rows
-						const nx = (x + dx + columns) % columns
-						if (cells[ny * columns + nx] > 0) neighbors++
-					}
-				}
+				if (cells[rowUp + xLeft] > 0) neighbors++
+				if (cells[rowUp + x] > 0) neighbors++
+				if (cells[rowUp + xRight] > 0) neighbors++
+				if (cells[row + xLeft] > 0) neighbors++
+				if (cells[row + xRight] > 0) neighbors++
+				if (cells[rowDown + xLeft] > 0) neighbors++
+				if (cells[rowDown + x] > 0) neighbors++
+				if (cells[rowDown + xRight] > 0) neighbors++
 
 				if (cells[idx] > 0) {
 					// Alive: survive on 2-3 neighbors, die otherwise
@@ -176,13 +234,8 @@ export function generateAsciiGameOfLifeFrame(
 
 	state.lastFrame = frame
 
-	// Parse colors for lerp
-	const fgRgb = parseColor(fgColor)
-	const dimRgb: [number, number, number] = [
-		Math.round(fgRgb[0] * 0.2),
-		Math.round(fgRgb[1] * 0.2),
-		Math.round(fgRgb[2] * 0.2),
-	]
+	// Precomputed 51-entry age->color ramp (t = min(age, 50) / 50 only takes 51 distinct values)
+	const ageColorTable = getAgeColorTable(fgColor)
 
 	// Build screen
 	const lines: AnsiScreen['lines'] = []
@@ -204,13 +257,7 @@ export function generateAsciiGameOfLifeFrame(
 				ch = '\u2591' // ░
 			}
 
-			let fg: string
-			if (age === 0) {
-				fg = bgColor
-			} else {
-				const t = Math.min(age, 50) / 50
-				fg = lerpColor(fgRgb, dimRgb, t)
-			}
+			const fg = age === 0 ? bgColor : ageColorTable[age < 50 ? age : 50]
 
 			line.push({ ch, fg, bg: bgColor, bold: false })
 		}
@@ -221,6 +268,34 @@ export function generateAsciiGameOfLifeFrame(
 }
 
 /**
+ * Generate an ASCII Game of Life frame with age-based coloring.
+ *
+ * Uses process-wide state keyed on dimensions and options, so separate components with
+ * matching options will interfere with each other. Prefer
+ * {@link createAsciiGameOfLifeGenerator} when rendering more than one instance.
+ */
+export function generateAsciiGameOfLifeFrame(
+	frame: number,
+	columns: number,
+	rows: number,
+	options: AsciiGameOfLifeOptions = {},
+): AnsiScreen {
+	return renderGameOfLifeFrame(sharedStore, frame, columns, rows, options)
+}
+
+/**
+ * Create a Game of Life generator that owns its simulation state.
+ * Each call returns an independent instance safe to render alongside others.
+ */
+export function createAsciiGameOfLifeGenerator(
+	options: AsciiGameOfLifeOptions = {},
+): CharacterFrameGenerator {
+	const store = createGeneratorStateStore<GameOfLifeState>()
+	return (frame: number, columns: number, rows: number) =>
+		renderGameOfLifeFrame(store, frame, columns, rows, options)
+}
+
+/**
  * Create a reusable sampler for a specific frame and options.
  * Returns a function that maps world coordinates (x, y) to an ANSI cell.
  */
@@ -228,17 +303,7 @@ export function createAsciiGameOfLifeSampler(
 	frame: number,
 	options: AsciiGameOfLifeOptions = {},
 ) {
-	const {
-		fgColor = DEFAULT_FG_COLOR,
-		bgColor = DEFAULT_BG_COLOR,
-	} = options
-
-	const fgRgb = parseColor(fgColor)
-	const dimRgb: [number, number, number] = [
-		Math.round(fgRgb[0] * 0.2),
-		Math.round(fgRgb[1] * 0.2),
-		Math.round(fgRgb[2] * 0.2),
-	]
+	const { bgColor = DEFAULT_BG_COLOR } = options
 
 	// We need a backing grid. Use a reasonable default size.
 	const cols = 200

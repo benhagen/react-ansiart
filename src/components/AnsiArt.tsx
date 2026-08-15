@@ -7,6 +7,7 @@ import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
 import { createAnsiArtFrameGenerator } from '../generators/ansiFrameGenerator'
 import { SauceMetadataModal } from './SauceMetadataModal'
 import { SauceOverlay } from './SauceOverlay'
+import type { AnsiScreen } from '../ansi/types'
 import type { CharacterFrameGenerator } from '../types/types'
 
 export type AnsiArtProps = {
@@ -49,28 +50,20 @@ export function AnsiArt({
 	const [ansiData, setAnsiData] = useState<Uint8Array | null>(null)
 	const [error, setError] = useState<string | null>(null)
 	const [isDragging, setIsDragging] = useState(false)
-	const [fileName, setFileName] = useState<string | null>(null)
 	const [dynamicColumns, setDynamicColumns] = useState<number>(80)
 	const [dynamicRows, setDynamicRows] = useState<number>(25)
-	const [detectedFinalRows, setDetectedFinalRows] = useState<number | null>(null) // Detected content height for final mode
-	const [finalHeightForAnimated, setFinalHeightForAnimated] = useState<number | null>(null) // Final height for animated mode with rows='auto'
-	const [scrollViewY, setScrollViewY] = useState<number>(0)
-	const [virtualRows, setVirtualRows] = useState<number>(25)
 	const [sauce, setSauce] = useState<SauceMetadata | undefined>(undefined)
 	const [isSauceModalOpen, setIsSauceModalOpen] = useState(false)
 	const [isSauceOverlayVisible, setIsSauceOverlayVisible] = useState(false)
-	const [detectedMode, setDetectedMode] = useState<'animated' | 'final'>('final')
 	const sauceOverlayTimeoutRef = useRef<number | null>(null)
 
-	// Detect animation when mode is 'auto' and ansiData is available
-	useEffect(() => {
-		if (mode === 'auto' && ansiData) {
-			const isAnimated = detectAnimation(ansiData)
-			setDetectedMode(isAnimated ? 'animated' : 'final')
-		} else if (mode !== 'auto') {
-			// Reset detected mode when mode is not 'auto'
-			setDetectedMode('final')
-		}
+	// Detect animation once per loaded file when mode is 'auto'.
+	// Derived rather than state-set-from-an-effect so the resolved mode is known on the very
+	// render the data arrives — otherwise the first render would build (and parse) a 'final'
+	// generator that the follow-up effect immediately threw away.
+	const detectedMode = useMemo<'animated' | 'final'>(() => {
+		if (mode !== 'auto' || !ansiData) return 'final'
+		return detectAnimation(ansiData) ? 'animated' : 'final'
 	}, [mode, ansiData])
 
 	// Derive effective mode: use detected mode if mode is 'auto', otherwise use mode prop
@@ -81,6 +74,47 @@ export function AnsiArt({
 		// When mode is not 'auto', it must be 'animated' or 'final'
 		return mode as 'animated' | 'final'
 	}, [mode, detectedMode])
+
+	// A full parse is needed for final mode (the generator displays the finished screen) and
+	// for animated mode with rows='auto' (the canvas height must be known before playback
+	// starts). Animated mode with a fixed row count never needs one — that generator parses
+	// progressively, frame by frame.
+	const needsFullParse = effectiveMode === 'final' || rows === 'auto'
+
+	// THE parse. Exactly one full parse per (file, columns) — its result drives dimension
+	// detection AND is handed to the final-mode generator below, so a file is never parsed
+	// more than once per load.
+	const parseResult = useMemo<{ screen: AnsiScreen | null; error: string | null } | null>(() => {
+		if (!ansiData || !needsFullParse) return null
+		try {
+			const effectiveColumns = columns === 'auto' ? undefined : columns
+			const screen = parseAnsiCore(
+				ansiData,
+				effectiveColumns !== undefined ? { columns: effectiveColumns } : {}
+			)
+			return { screen, error: null }
+		} catch (e: unknown) {
+			return { screen: null, error: e instanceof Error ? e.message : String(e) }
+		}
+	}, [ansiData, columns, needsFullParse])
+
+	const parsedScreen = parseResult?.screen ?? null
+
+	// Surface parse failures (the old detection effect did this inline with a try/catch)
+	useEffect(() => {
+		if (parseResult?.error) {
+			setError(parseResult.error)
+		}
+	}, [parseResult])
+
+	// Content height detected from the single parse above. Derived (not state) so it is
+	// available on the same render as the parse: previously this arrived one render late,
+	// which made animated+rows='auto' build a second generator and restart the engine
+	// immediately after load.
+	const detectedFinalRows =
+		effectiveMode === 'final' ? (rows === 'auto' ? parsedScreen?.lines.length ?? null : rows) : null
+	const finalHeightForAnimated =
+		effectiveMode === 'animated' && rows === 'auto' ? parsedScreen?.lines.length ?? null : null
 
 	// Parse SAUCE metadata when ansiData changes
 	useEffect(() => {
@@ -97,30 +131,28 @@ export function AnsiArt({
 	// Load ANSI file from URL
 	useEffect(() => {
 		let cancelled = false
+		const controller = new AbortController()
 		async function load() {
 			setError(null)
-			// Reset scroll state when loading new file
-			setScrollViewY(0)
-			setVirtualRows(typeof rows === 'number' ? rows : 25)
-			setDetectedFinalRows(null) // Reset detected height for new file
-			setFinalHeightForAnimated(null) // Reset final height for animated mode
 			try {
-				const res = await fetch(src)
+				const res = await fetch(src, { signal: controller.signal })
 				if (!res.ok) throw new Error(`Failed to fetch ${src}: ${res.status}`)
 				const buf = new Uint8Array(await res.arrayBuffer())
 				if (!cancelled) {
 					setAnsiData(buf)
-					setFileName(null)
 				}
 			} catch (e: unknown) {
-				if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+				if (cancelled) return
+				if (e instanceof DOMException && e.name === 'AbortError') return
+				setError(e instanceof Error ? e.message : String(e))
 			}
 		}
 		load()
 		return () => {
 			cancelled = true
+			controller.abort()
 		}
-	}, [src, rows])
+	}, [src])
 
 	// Handle drag and drop
 	const onDragEnter = (e: React.DragEvent) => {
@@ -147,67 +179,29 @@ export function AnsiArt({
 		if (!file) return
 		try {
 			const buf = new Uint8Array(await file.arrayBuffer())
-			setDetectedFinalRows(null) // Reset detected height for new file
-			setFinalHeightForAnimated(null) // Reset final height for animated mode
+			setError(null)
 			setAnsiData(buf)
-			setFileName(file.name)
 		} catch (err: unknown) {
 			setError(err instanceof Error ? err.message : String(err))
 		}
 	}
 
-	// Detect dimensions for final mode and animated mode with rows='auto'
+	// Seed the dynamic (callback-driven) canvas sizing state. Detected heights are derived
+	// directly from the single parse above; only the values the animated generator grows at
+	// runtime via onDimensionsChange still live in state.
 	useEffect(() => {
 		if (!ansiData) return
 
-		try {
-			if (effectiveMode === 'final') {
-				// Final mode: detect dimensions based on columns and rows settings
-				if (columns === 'auto' || rows === 'auto') {
-					// Need to detect dimensions
-					const effectiveColumns = columns === 'auto' ? undefined : columns
-					const screen = parseAnsiCore(
-						ansiData,
-						effectiveColumns !== undefined ? { columns: effectiveColumns } : {}
-					)
-
-					if (columns === 'auto') {
-						setDynamicColumns(screen.columns)
-					}
-					if (rows === 'auto') {
-						setDetectedFinalRows(screen.lines.length)
-					} else if (typeof rows === 'number') {
-						setDetectedFinalRows(rows)
-					}
-				} else {
-					// Both columns and rows are numbers
-					setDetectedFinalRows(rows)
-				}
-			} else if (effectiveMode === 'animated' && rows === 'auto') {
-				// Animated mode with rows='auto': detect final height upfront
-				const effectiveColumns = columns === 'auto' ? undefined : columns
-				const screen = parseAnsiCore(
-					ansiData,
-					effectiveColumns !== undefined ? { columns: effectiveColumns } : {}
-				)
-				setFinalHeightForAnimated(screen.lines.length)
-
-				if (columns === 'auto') {
-					setDynamicColumns(screen.columns)
-				}
-			} else if (effectiveMode === 'animated' && columns === 'auto') {
-				// Animated mode with columns='auto' but rows is a number: start at 80, will grow
-				setDynamicColumns(80)
-				setDynamicRows(typeof rows === 'number' ? rows : 25)
-			} else {
-				// Animated mode with both columns and rows as numbers: reset dynamic state
-				setDynamicColumns(80)
-				setDynamicRows(typeof rows === 'number' ? rows : 25)
-			}
-		} catch (e: unknown) {
-			setError(e instanceof Error ? e.message : String(e))
+		if (columns === 'auto' && parsedScreen) {
+			// Width is known from the parse (final mode, or animated with rows='auto')
+			setDynamicColumns(parsedScreen.columns)
+		} else if (effectiveMode === 'animated' && rows !== 'auto') {
+			// Animated mode with a fixed row count: start at 80 columns and let the generator's
+			// onDimensionsChange callback grow it as the animation reveals content.
+			setDynamicColumns(80)
+			setDynamicRows(rows)
 		}
-	}, [effectiveMode, ansiData, columns, rows])
+	}, [effectiveMode, ansiData, columns, rows, parsedScreen])
 
 	// Handle dimension changes for auto mode
 	const handleDimensionsChange = useCallback(
@@ -226,21 +220,12 @@ export function AnsiArt({
 		[effectiveMode, columns, rows]
 	)
 
-	// Handle scroll changes for fixed animated mode (when both columns and rows are numbers)
-	const handleScrollChange = useCallback(
-		(scroll: { viewY: number; contentRows: number }) => {
-			if (effectiveMode === 'animated' && typeof columns === 'number' && typeof rows === 'number') {
-				const newVirtualRows = Math.max(rows, scroll.contentRows)
-				setScrollViewY(scroll.viewY)
-				setVirtualRows(newVirtualRows)
-			}
-		},
-		[effectiveMode, columns, rows]
-	)
-
 	// Create frame generator
 	const frameGenerator = useMemo<CharacterFrameGenerator | null>(() => {
 		if (!ansiData) return null
+		// The parse failed: don't let the generator re-throw during render — the effect above
+		// surfaces the error and the next render shows it.
+		if (parseResult?.error) return null
 
 		// Determine effective columns and rows values
 		const effectiveColumns = columns === 'auto' ? undefined : columns
@@ -258,20 +243,20 @@ export function AnsiArt({
 			mode: effectiveMode,
 			columns: effectiveColumns,
 			rows: effectiveRows,
-			finalHeightForAnimated:
-				effectiveMode === 'animated' && rows === 'auto'
-					? finalHeightForAnimated ?? undefined
-					: undefined,
+			finalHeightForAnimated: finalHeightForAnimated ?? undefined,
+			// Final mode reuses the single parse instead of parsing the file a second time.
+			preparsedScreen: effectiveMode === 'final' ? parsedScreen ?? undefined : undefined,
 			bytesPerSecond,
 			fps,
 			onDimensionsChange: handleDimensionsChange,
-			onScrollChange: handleScrollChange,
 			debugCursorCodes,
 		})
 
 		return generator
 	}, [
 		ansiData,
+		parseResult,
+		parsedScreen,
 		effectiveMode,
 		columns,
 		rows,
@@ -279,18 +264,22 @@ export function AnsiArt({
 		bytesPerSecond,
 		fps,
 		handleDimensionsChange,
-		handleScrollChange,
 		debugCursorCodes,
 	])
 
 	// Determine display dimensions
 	const displayColumns = useMemo(() => {
-		if (columns === 'auto') {
-			return dynamicColumns
-		} else {
+		if (columns !== 'auto') {
 			return columns
 		}
-	}, [columns, dynamicColumns])
+		// Final mode: the parse already knows the natural width, so use it on the same render
+		// rather than waiting for the seeding effect. Animated mode keeps using the state value,
+		// which the generator's onDimensionsChange callback grows as content is revealed.
+		if (effectiveMode === 'final' && parsedScreen) {
+			return parsedScreen.columns
+		}
+		return dynamicColumns
+	}, [columns, effectiveMode, parsedScreen, dynamicColumns])
 
 	const displayRows = useMemo(() => {
 		if (effectiveMode === 'final') {
@@ -334,7 +323,7 @@ export function AnsiArt({
 				clearTimeout(sauceOverlayTimeoutRef.current)
 			}
 			// Hide after 3 seconds
-			sauceOverlayTimeoutRef.current = setTimeout(() => {
+			sauceOverlayTimeoutRef.current = window.setTimeout(() => {
 				setIsSauceOverlayVisible(false)
 			}, 3000)
 		}

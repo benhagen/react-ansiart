@@ -59,6 +59,75 @@ const TWO_PI = Math.PI * 2
 const TUNNEL_SCALE = 1.0
 const FOG_FACTOR = 0.1
 
+// distance, angle, and the fog-attenuated fgColor rgb() string are all pure functions of
+// (x, y, columns, rows, aspectY, fgColor) — none depend on frame — yet were being recomputed
+// (including a Math.sqrt + Math.atan2 + string-building rgb()) for every cell on every frame.
+// Cache them as flat Float64Arrays / a string array, keyed on the dimensions/aspect/color,
+// mirroring the cached distance field in asciiSonarFrameGenerator. Float64 (not Float32) is
+// required here: distance feeds the `distance < 0.5` singularity threshold and a 1/distance
+// division, so rounding to float32 measurably shifted output at cell boundaries.
+interface TunnelFieldCache {
+	columns: number
+	rows: number
+	aspectY: number
+	fgColor: string
+	distance: Float64Array
+	angle: Float64Array
+	fgRgbStrings: string[]
+}
+
+let tunnelFieldCache: TunnelFieldCache | null = null
+
+function getTunnelFields(
+	columns: number,
+	rows: number,
+	aspectY: number,
+	fgColor: string,
+	fgR: number,
+	fgG: number,
+	fgB: number
+): TunnelFieldCache {
+	const cached = tunnelFieldCache
+	if (
+		cached &&
+		cached.columns === columns &&
+		cached.rows === rows &&
+		cached.aspectY === aspectY &&
+		cached.fgColor === fgColor
+	) {
+		return cached
+	}
+
+	const centerX = columns / 2
+	const centerY = rows / 2
+	const n = columns * rows
+	const distance = new Float64Array(n)
+	const angle = new Float64Array(n)
+	const fgRgbStrings = new Array<string>(n)
+
+	let i = 0
+	for (let y = 0; y < rows; y++) {
+		const actualY = (y - centerY) * aspectY
+		for (let x = 0; x < columns; x++) {
+			const actualX = x - centerX
+			const dist = Math.sqrt(actualX * actualX + actualY * actualY)
+			distance[i] = dist
+			angle[i] = Math.atan2(actualY, actualX)
+
+			const fog = 1 / (1 + dist * FOG_FACTOR)
+			const r = Math.floor(fgR * fog)
+			const g = Math.floor(fgG * fog)
+			const b = Math.floor(fgB * fog)
+			fgRgbStrings[i] = `rgb(${r},${g},${b})`
+			i++
+		}
+	}
+
+	const next: TunnelFieldCache = { columns, rows, aspectY, fgColor, distance, angle, fgRgbStrings }
+	tunnelFieldCache = next
+	return next
+}
+
 /**
  * Generate ASCII Tunnel frame
  * Creates a classic demo scene rotating/zooming tunnel with checkerboard texture.
@@ -83,27 +152,33 @@ export function generateAsciiTunnelFrame(
 	const charLookup = getTunnelCharLookup(chars)
 	const [fgR, fgG, fgB] = parseHexColor(fgColor)
 
-	const centerX = columns / 2
-	const centerY = rows / 2
+	const { distance: distanceField, angle: angleField, fgRgbStrings } = getTunnelFields(
+		columns,
+		rows,
+		aspectY,
+		fgColor,
+		fgR,
+		fgG,
+		fgB
+	)
 
 	const lines: AnsiScreen['lines'] = []
+	let idx = 0
 
 	for (let y = 0; y < rows; y++) {
 		const line: AnsiScreen['lines'][number] = []
 
 		for (let x = 0; x < columns; x++) {
-			const actualX = x - centerX
-			const actualY = (y - centerY) * aspectY
-
-			const distance = Math.sqrt(actualX * actualX + actualY * actualY)
+			const distance = distanceField[idx]
 
 			// Center singularity: render as empty space
 			if (distance < 0.5) {
 				line.push({ ch: ' ', fg: bgColor, bg: bgColor, bold: false })
+				idx++
 				continue
 			}
 
-			const angle = Math.atan2(actualY, actualX)
+			const angle = angleField[idx]
 
 			// Texture coordinates
 			let u = angle / TWO_PI + 0.5
@@ -125,13 +200,12 @@ export function generateAsciiTunnelFrame(
 
 			const ch = charLookup[clampedBrightness]
 
-			// Color: lerp from full fgColor (near) to dim version (far) based on fog
-			const r = Math.floor(fgR * fog)
-			const g = Math.floor(fgG * fog)
-			const b = Math.floor(fgB * fog)
-			const cellFg = `rgb(${r},${g},${b})`
+			// Color: lerp from full fgColor (near) to dim version (far) based on fog.
+			// fog depends only on distance (frame-independent), so this string is precomputed.
+			const cellFg = fgRgbStrings[idx]
 
 			line.push({ ch, fg: cellFg, bg: bgColor, bold: false })
+			idx++
 		}
 
 		lines.push(line)
