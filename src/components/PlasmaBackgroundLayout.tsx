@@ -3,7 +3,6 @@ import type { AnsiScreen } from '../ansi/types'
 import type { DisplayFrameGenerator } from '../types/types'
 import { AnsiVirtualDisplay } from './AnsiVirtualDisplay'
 import type { BitmapFont } from '../font/bitmapFont'
-import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
 import { getEmbeddedVgaFont } from '../font/embeddedVgaFont'
 import type { AsciiPerlinPlasmaOptions } from '../generators/asciiPerlinPlasmaGenerator'
 import {
@@ -100,6 +99,9 @@ export function PlasmaBackgroundLayout({
 		let cancelled = false
 		async function loadFont() {
 			try {
+				// Imported on demand — see AnsiVirtualDisplay: the .FON parser only matters
+				// when a font URL is supplied, and backgrounds default to the embedded font.
+				const { loadBitmapFontFromUrl } = await import('../font/bitmapFontLoader')
 				const font = await loadBitmapFontFromUrl(bitmapFontUrl!)
 				if (!cancelled) {
 					setBitmapFont(font)

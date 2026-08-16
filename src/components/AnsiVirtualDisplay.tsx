@@ -1,17 +1,22 @@
 'use client'
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SauceMetadata } from '../utils/sauce'
-import { AnsiPlayerOverlay } from './AnsiPlayerOverlay'
 import { AnsiVirtualDisplayEngine } from '../engines/AnsiVirtualDisplayEngine'
 import { BitmapFont } from '../font/bitmapFont'
-import { loadBitmapFontFromUrl } from '../font/bitmapFontLoader'
 import { getEmbeddedVgaFont } from '../font/embeddedVgaFont'
 import type {
 	CharacterFrameGeneratorWithMetadata,
 	DisplayFrameGenerator,
 	GeneratorCapabilities,
 } from '../types/types'
+
+// Playback transport UI. Gated behind `showOverlayControls` (default false) *and* a generator
+// that reports seek/speed capabilities, so the common cases — static art, procedural background
+// generators — can never mount it. Loading it lazily keeps it out of their bundles entirely.
+const AnsiPlayerOverlay = lazy(() =>
+	import('./AnsiPlayerOverlay').then(m => ({ default: m.AnsiPlayerOverlay }))
+)
 
 export type AnsiVirtualDisplayProps = {
 	columns?: number // default 80
@@ -308,6 +313,9 @@ export function AnsiVirtualDisplay({
 
 		let cancelled = false
 		async function loadFont() {
+			// Imported on demand: the .FON parser and font cache are only reachable via
+			// `bitmapFontUrl`, so consumers on the embedded font never download them.
+			const { loadBitmapFontFromUrl } = await import('../font/bitmapFontLoader')
 			const font = await loadBitmapFontFromUrl(bitmapFontUrl!)
 			if (!cancelled) setBitmapFont(font)
 		}
@@ -542,22 +550,24 @@ export function AnsiVirtualDisplay({
 
 				{/* YouTube-style overlay controls */}
 				{supportsOverlayControls && (
-					<AnsiPlayerOverlay
-						isPlaying={isPlaying}
-						currentBytes={currentBytes}
-						totalBytes={totalBytes}
-						currentSpeed={currentSpeed}
-						isVisible={isOverlayVisible}
-						onPlayPause={handlePlayPause}
-						onRestart={handleRestart}
-						onSeek={handleSeek}
-						onSpeedChange={handleSpeedChange}
-						onAdvanceByte={handleAdvanceByte}
-						onRewindByte={handleRewindByte}
-						onMouseMove={handleMouseMove}
-						sauce={sauce}
-						onSauceClick={onSauceClick}
-					/>
+					<Suspense fallback={null}>
+						<AnsiPlayerOverlay
+							isPlaying={isPlaying}
+							currentBytes={currentBytes}
+							totalBytes={totalBytes}
+							currentSpeed={currentSpeed}
+							isVisible={isOverlayVisible}
+							onPlayPause={handlePlayPause}
+							onRestart={handleRestart}
+							onSeek={handleSeek}
+							onSpeedChange={handleSpeedChange}
+							onAdvanceByte={handleAdvanceByte}
+							onRewindByte={handleRewindByte}
+							onMouseMove={handleMouseMove}
+							sauce={sauce}
+							onSauceClick={onSauceClick}
+						/>
+					</Suspense>
 				)}
 				{/* Debug info - only show when overlay is visible */}
 				{supportsOverlayControls && isOverlayVisible && typeof window !== 'undefined' && (
