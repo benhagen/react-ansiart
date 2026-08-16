@@ -1,5 +1,7 @@
 # react-ansiart
 
+> 🤖❤️ **Built by human-assisted and curated AI — for the love of ANSI art.** The code, tests, and docs in this library were written by AI agents working under human direction, review, and curation.
+
 React components for rendering ANSI art files (.ANS, .ASC) and creating animated virtual displays. Includes support for CP437 character encoding, cursor control codes, progressive animation playback, and procedural frame generators (plasma, fire, sonar, datamosh, metaballs).
 
 ## Features
