@@ -1,14 +1,5 @@
 import { cp437ByteToChar } from '../utils/cp437'
-import {
-	isSauceTrailer,
-	parseSauce,
-	getSauceInfo,
-	SAUCE_TRAILER_SIZE,
-	SAUCE_EOF,
-	COMMENT_ID_SIZE,
-	COMMENT_SIZE,
-	type SauceMetadata,
-} from '../utils/sauce'
+import { parseSauce, getSauceInfo, getSauceStripSize, type SauceMetadata } from '../utils/sauce'
 import type { AnsiCell, AnsiScreen } from './types'
 
 // Re-export types for backward compatibility
@@ -167,6 +158,19 @@ const LETTER_LOWER_MAX = 0x7a // 'z'
 
 // Valid CSI command characters
 const VALID_CSI_COMMANDS = 'ABCDEFGHIJKLMPSTXYZhfmlrmsu'
+
+// Animation detection (see detectAnimation)
+const CSI_BYTE_CURSOR_POSITION = 0x48 // 'H'
+const CSI_BYTE_CURSOR_POSITION_ALT = 0x66 // 'f'
+const CSI_BYTE_ERASE_DISPLAY = 0x4a // 'J'
+const ERASE_DISPLAY_ALL = 2
+const ERASE_DISPLAY_ALL_AND_SCROLLBACK = 3
+const DEL = 0x7f
+const NBSP_CP437 = 0xff
+/** Score contributed by a full-screen erase that happens after content was drawn */
+const CLEAR_SCREEN_SCORE = 2
+/** Total score at which a file is considered an animation */
+const ANIMATION_SCORE_THRESHOLD = 2
 
 // ============================================================================
 // Core Helpers
@@ -774,21 +778,9 @@ export function createAnsiParseSession(
 	// (subarray is a zero-copy view; the parser only reads from it)
 	let bytes = bytesInput
 	const sauce = parseSauce(bytesInput)
-	if (isSauceTrailer(bytesInput)) {
-		// Calculate how much to strip: SAUCE (128) + possible EOF (1) + comments
-		let stripSize = SAUCE_TRAILER_SIZE
-
-		// Check for EOF byte before SAUCE
-		const eofPos = bytesInput.length - SAUCE_TRAILER_SIZE - 1
-		if (eofPos >= 0 && bytesInput[eofPos] === SAUCE_EOF) {
-			stripSize += 1
-		}
-
-		// Check for comments before SAUCE
-		if (sauce && sauce.comments > 0) {
-			stripSize += COMMENT_ID_SIZE + sauce.comments * COMMENT_SIZE
-		}
-
+	// Strip the SAUCE record, its comment block and the EOF marker preceding them
+	const stripSize = getSauceStripSize(bytesInput)
+	if (stripSize > 0) {
 		bytes = bytesInput.subarray(0, bytesInput.length - stripSize)
 	}
 
@@ -1090,41 +1082,128 @@ export function parseAnsiIncrementalDynamic(
 // ============================================================================
 
 /**
- * Detect if an ANSI file contains animation sequences
- * Returns true if the file appears to be animated (contains cursor positioning commands)
+ * Read the nth (0-based) numeric parameter of a CSI sequence.
+ * Parameter bytes run from `start` (inclusive) to `end` (exclusive, the final
+ * command letter). Missing or empty parameters yield `fallback`, matching the
+ * ANSI convention where an omitted parameter takes its default value.
+ */
+function readCsiParam(
+	bytes: Uint8Array,
+	start: number,
+	end: number,
+	index: number,
+	fallback: number
+): number {
+	let param = 0
+	let value = 0
+	let hasDigits = false
+	for (let i = start; i < end; i++) {
+		const b = bytes[i]
+		if (b >= DIGIT_MIN && b <= DIGIT_MAX) {
+			value = value * 10 + (b - DIGIT_MIN)
+			hasDigits = true
+			continue
+		}
+		if (b === SEMICOLON) {
+			if (param === index) return hasDigits ? value : fallback
+			param++
+			value = 0
+			hasDigits = false
+		}
+		// Any other byte (private markers such as '?') is not part of a numeric parameter
+	}
+	if (param === index && hasDigits) return value
+	return fallback
+}
+
+/**
+ * Whether a byte counts as artwork content for animation detection.
+ * Control bytes, whitespace and the CP437 blank glyphs are excluded so that a
+ * leading clear-screen/home preamble (optionally padded with newlines or
+ * spaces) is not mistaken for a redraw of output that was already painted.
+ */
+function isContentByte(byte: number): boolean {
+	return byte > SPACE && byte !== DEL && byte !== NBSP_CP437
+}
+
+/**
+ * Detect if an ANSI file is an ANSImation (multi-frame artwork) rather than a
+ * static piece that is simply drawn top to bottom.
+ *
+ * A leading `ESC[2J` / `ESC[H` preamble is near-universal in static artwork, so
+ * the presence of cursor positioning alone means nothing. What separates an
+ * animation is *overdrawing*: after content has been written, it clears the
+ * screen for a new frame or jumps the cursor back to already-painted output.
+ * Static artwork positions monotonically forward (row 2, 3, 4 ...) and never
+ * erases what it drew.
+ *
+ * Scoring (any single signal may be a quirk, so a small budget is required):
+ * - full-screen erase after content: strong, counts as {@link CLEAR_SCREEN_SCORE}
+ * - jump back to the home position after content: 1
+ * - jump to a position before the previous absolute position: 1
+ *
+ * @param bytes - Full file bytes (a SAUCE trailer, if any, is ignored)
+ * @returns True if the file should be played back as an animation
  */
 export function detectAnimation(bytes: Uint8Array): boolean {
-	// Check SAUCE metadata first
+	// Check SAUCE metadata first - an explicit Ansimation marker is authoritative
 	const sauce = parseSauce(bytes)
 	if (sauce && sauce.dataType === 1 && sauce.fileType === 2) {
-		// SAUCE indicates Ansimation type
 		return true
 	}
 
-	// Scan for cursor positioning commands (H and f) in first 2048 bytes
-	const maxCheck = Math.min(2048, bytes.length)
+	// Scan the artwork data only; SAUCE/comment/EOF bytes are not ANSI content.
+	// (sauce.fileSize is the data length with those trailing bytes excluded.)
+	const end = sauce ? sauce.fileSize : bytes.length
+
+	let score = 0
+	let sawContent = false
+	// Row/column of the previous absolute cursor positioning command (-1 = none yet)
+	let lastRow = -1
+	let lastCol = -1
 	let i = 0
 
-	while (i < maxCheck) {
+	while (i < end) {
 		const b = bytes[i++]
-		if (b === ESC) {
-			// ESC
-			if (i < maxCheck && bytes[i] === CSI_BRACKET) {
-				// [
-				i++ // skip [
-				// Skip parameter bytes until we find a letter
-				while (i < maxCheck && !isLetter(bytes[i])) {
-					i++
-				}
-				if (i < maxCheck) {
-					const cmd = bytes[i]
-					if (cmd === 0x48 || cmd === 0x66) {
-						// H or f (cursor positioning)
-						return true
-					}
+		if (b !== ESC) {
+			if (!sawContent && isContentByte(b)) sawContent = true
+			continue
+		}
+		if (i >= end || bytes[i] !== CSI_BRACKET) continue
+		i++ // skip '['
+		const paramStart = i
+		// Skip parameter bytes until the final command letter
+		while (i < end && !isLetter(bytes[i])) {
+			i++
+		}
+		if (i >= end) break
+		const cmd = bytes[i]
+		const paramEnd = i
+		i++
+
+		if (cmd === CSI_BYTE_CURSOR_POSITION || cmd === CSI_BYTE_CURSOR_POSITION_ALT) {
+			const row = readCsiParam(bytes, paramStart, paramEnd, 0, 1) || 1
+			const col = readCsiParam(bytes, paramStart, paramEnd, 1, 1) || 1
+			if (sawContent) {
+				if (row <= 1 && col <= 1) {
+					// Back to the top-left corner mid-file: the start of a new frame
+					score += 1
+				} else if (lastRow >= 0 && (row < lastRow || (row === lastRow && col < lastCol))) {
+					// Backwards jump into already-painted output
+					score += 1
 				}
 			}
+			lastRow = row
+			lastCol = col
+		} else if (cmd === CSI_BYTE_ERASE_DISPLAY && sawContent) {
+			const mode = readCsiParam(bytes, paramStart, paramEnd, 0, 0)
+			if (mode === ERASE_DISPLAY_ALL || mode === ERASE_DISPLAY_ALL_AND_SCROLLBACK) {
+				// Wiping the screen after drawing only makes sense between frames
+				score += CLEAR_SCREEN_SCORE
+			}
 		}
+
+		if (score >= ANIMATION_SCORE_THRESHOLD) return true
 	}
 
 	return false
@@ -1138,21 +1217,8 @@ export function parseAscii(bytes: Uint8Array, encoding: CharacterEncoding = 'cp4
 	// Handle SAUCE metadata - strip it before parsing
 	let bytesToParse = bytes
 	const sauce = parseSauce(bytes)
-	if (isSauceTrailer(bytes)) {
-		// Calculate how much to strip: SAUCE (128) + possible EOF (1) + comments
-		let stripSize = SAUCE_TRAILER_SIZE
-
-		// Check for EOF byte before SAUCE
-		const eofPos = bytes.length - SAUCE_TRAILER_SIZE - 1
-		if (eofPos >= 0 && bytes[eofPos] === SAUCE_EOF) {
-			stripSize += 1
-		}
-
-		// Check for comments before SAUCE
-		if (sauce && sauce.comments > 0) {
-			stripSize += COMMENT_ID_SIZE + sauce.comments * COMMENT_SIZE
-		}
-
+	const stripSize = getSauceStripSize(bytes)
+	if (stripSize > 0) {
 		bytesToParse = bytes.subarray(0, bytes.length - stripSize)
 	}
 
