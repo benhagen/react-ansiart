@@ -10,6 +10,9 @@ import {
 	clearReactionDiffusionState,
 	clearStarfieldState,
 	clearWaterRippleState,
+	clearCyclicAutomatonState,
+	clearFallingSandState,
+	clearBoidsState,
 	generateAsciiDatamoshFrame,
 	generateAsciiFireFrame,
 	generateAsciiGameOfLifeFrame,
@@ -26,11 +29,28 @@ import {
 	generateAsciiAuroraBorealisFrame,
 	generateAsciiReactionDiffusionFrame,
 	generateAsciiTerrainFlyoverFrame,
+	generateAsciiRotozoomerFrame,
+	generateAsciiMoireFrame,
+	generateAsciiKefrensBarsFrame,
+	generateAsciiTwisterFrame,
+	generateAsciiSineScrollerFrame,
+	generateAsciiBoingBallFrame,
+	generateAsciiCyclicAutomatonFrame,
+	generateAsciiFallingSandFrame,
+	generateAsciiBumpMappingFrame,
+	generateAsciiJuliaFrame,
+	generateAsciiBoidsFrame,
 	generateMandelbrotPixels,
 	createShapeConverter,
 	getEmbeddedVgaFont,
+	composeAnsiEffects,
+	createLensEffect,
+	createScanlineEffect,
+	createVhsTrackingEffect,
 	type FrameData,
 	type DisplayFrameGenerator,
+	type CharacterFrameGenerator,
+	type AnsiPostEffect,
 } from 'react-ansiart'
 import { CodePreview } from '../_components/CodePreview'
 import { ControlGroup } from '../_components/ControlGroup'
@@ -54,6 +74,17 @@ import {
 	TUNNEL_DEFAULTS,
 	VIRTUAL_DISPLAY_DEFAULTS,
 	WATER_RIPPLE_DEFAULTS,
+	ROTOZOOMER_DEFAULTS,
+	MOIRE_DEFAULTS,
+	KEFRENS_BARS_DEFAULTS,
+	TWISTER_DEFAULTS,
+	SINE_SCROLLER_DEFAULTS,
+	BOING_BALL_DEFAULTS,
+	CYCLIC_AUTOMATON_DEFAULTS,
+	FALLING_SAND_DEFAULTS,
+	BUMP_MAPPING_DEFAULTS,
+	JULIA_DEFAULTS,
+	BOIDS_DEFAULTS,
 } from '../_lib/defaults'
 import { PlasmaPanel } from './_panels/PlasmaPanel'
 import { FirePanel } from './_panels/FirePanel'
@@ -71,8 +102,19 @@ import { CrtStaticPanel } from './_panels/CrtStaticPanel'
 import { AuroraBorealisPanel } from './_panels/AuroraBorealisPanel'
 import { ReactionDiffusionPanel } from './_panels/ReactionDiffusionPanel'
 import { TerrainFlyoverPanel } from './_panels/TerrainFlyoverPanel'
+import { RotozoomerPanel } from './_panels/RotozoomerPanel'
+import { MoirePanel } from './_panels/MoirePanel'
+import { KefrensBarsPanel } from './_panels/KefrensBarsPanel'
+import { TwisterPanel } from './_panels/TwisterPanel'
+import { SineScrollerPanel } from './_panels/SineScrollerPanel'
+import { BoingBallPanel } from './_panels/BoingBallPanel'
+import { CyclicAutomatonPanel } from './_panels/CyclicAutomatonPanel'
+import { FallingSandPanel } from './_panels/FallingSandPanel'
+import { BumpMappingPanel } from './_panels/BumpMappingPanel'
+import { JuliaPanel } from './_panels/JuliaPanel'
+import { BoidsPanel } from './_panels/BoidsPanel'
 
-type GeneratorType = 'perlinPlasma' | 'fire' | 'sonar' | 'datamosh' | 'metaballs' | 'matrix' | 'starfield' | 'tunnel' | 'gameOfLife' | 'waterRipple' | 'mandelbrot' | 'copperBars' | 'crtStatic' | 'auroraBorealis' | 'reactionDiffusion' | 'terrainFlyover'
+type GeneratorType = 'perlinPlasma' | 'fire' | 'sonar' | 'datamosh' | 'metaballs' | 'matrix' | 'starfield' | 'tunnel' | 'gameOfLife' | 'waterRipple' | 'mandelbrot' | 'copperBars' | 'crtStatic' | 'auroraBorealis' | 'reactionDiffusion' | 'terrainFlyover' | 'rotozoomer' | 'moire' | 'kefrensBars' | 'twister' | 'sineScroller' | 'boingBall' | 'cyclicAutomaton' | 'fallingSand' | 'bumpMapping' | 'julia' | 'boids'
 
 const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'perlinPlasma', label: 'Plasma' },
@@ -91,6 +133,17 @@ const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'auroraBorealis', label: 'Aurora' },
 	{ key: 'reactionDiffusion', label: 'Reaction-Diff' },
 	{ key: 'terrainFlyover', label: 'Terrain' },
+	{ key: 'rotozoomer', label: 'Rotozoomer' },
+	{ key: 'moire', label: 'Moire' },
+	{ key: 'kefrensBars', label: 'Kefrens Bars' },
+	{ key: 'twister', label: 'Twister' },
+	{ key: 'sineScroller', label: 'Sine Scroller' },
+	{ key: 'boingBall', label: 'Boing Ball' },
+	{ key: 'cyclicAutomaton', label: 'Cyclic Automaton' },
+	{ key: 'fallingSand', label: 'Falling Sand' },
+	{ key: 'bumpMapping', label: 'Bump Mapping' },
+	{ key: 'julia', label: 'Julia' },
+	{ key: 'boids', label: 'Boids' },
 ]
 
 export default function GeneratorsPage() {
@@ -260,6 +313,95 @@ export default function GeneratorsPage() {
 	const [terrainChars, setTerrainChars] = useState(TERRAIN_FLYOVER_DEFAULTS.chars)
 	const [terrainSeed, setTerrainSeed] = useState(TERRAIN_FLYOVER_DEFAULTS.seed)
 
+	// Rotozoomer state
+	const [rotoRotationSpeed, setRotoRotationSpeed] = useState(ROTOZOOMER_DEFAULTS.rotationSpeed)
+	const [rotoZoomSpeed, setRotoZoomSpeed] = useState(ROTOZOOMER_DEFAULTS.zoomSpeed)
+	const [rotoBaseZoom, setRotoBaseZoom] = useState(ROTOZOOMER_DEFAULTS.baseZoom)
+	const [rotoPattern, setRotoPattern] = useState<string>(ROTOZOOMER_DEFAULTS.pattern)
+	const [rotoBgColor, setRotoBgColor] = useState(ROTOZOOMER_DEFAULTS.bgColor)
+
+	// Moire state
+	const [moireRingWidth, setMoireRingWidth] = useState(MOIRE_DEFAULTS.ringWidth)
+	const [moireSpeed1, setMoireSpeed1] = useState(MOIRE_DEFAULTS.speed1)
+	const [moireSpeed2, setMoireSpeed2] = useState(MOIRE_DEFAULTS.speed2)
+	const [moirePaletteSpeed, setMoirePaletteSpeed] = useState(MOIRE_DEFAULTS.paletteSpeed)
+	const [moireBgColor, setMoireBgColor] = useState(MOIRE_DEFAULTS.bgColor)
+
+	// Kefrens Bars state
+	const [kefrensBarWidth, setKefrensBarWidth] = useState(KEFRENS_BARS_DEFAULTS.barWidth)
+	const [kefrensHueSpeed, setKefrensHueSpeed] = useState(KEFRENS_BARS_DEFAULTS.hueSpeed)
+	const [kefrensHueRowStep, setKefrensHueRowStep] = useState(KEFRENS_BARS_DEFAULTS.hueRowStep)
+	const [kefrensBgColor, setKefrensBgColor] = useState(KEFRENS_BARS_DEFAULTS.bgColor)
+	const [kefrensChars, setKefrensChars] = useState(KEFRENS_BARS_DEFAULTS.chars)
+
+	// Twister state
+	const [twisterRotationSpeed, setTwisterRotationSpeed] = useState(TWISTER_DEFAULTS.rotationSpeed)
+	const [twisterWaveFreq, setTwisterWaveFreq] = useState(TWISTER_DEFAULTS.waveFreq)
+	const [twisterWaveSpeed, setTwisterWaveSpeed] = useState(TWISTER_DEFAULTS.waveSpeed)
+	const [twisterWaveDepth, setTwisterWaveDepth] = useState(TWISTER_DEFAULTS.waveDepth)
+	const [twisterBgColor, setTwisterBgColor] = useState(TWISTER_DEFAULTS.bgColor)
+
+	// Sine Scroller state
+	const [scrollerText, setScrollerText] = useState(SINE_SCROLLER_DEFAULTS.text)
+	const [scrollerSpeed, setScrollerSpeed] = useState(SINE_SCROLLER_DEFAULTS.speed)
+	const [scrollerAmplitude, setScrollerAmplitude] = useState(SINE_SCROLLER_DEFAULTS.amplitude)
+	const [scrollerWaveSpeed, setScrollerWaveSpeed] = useState(SINE_SCROLLER_DEFAULTS.waveSpeed)
+	const [scrollerFgColor, setScrollerFgColor] = useState(SINE_SCROLLER_DEFAULTS.fgColor)
+	const [scrollerBgColor, setScrollerBgColor] = useState(SINE_SCROLLER_DEFAULTS.bgColor)
+
+	// Boing Ball state
+	const [boingScale, setBoingScale] = useState(BOING_BALL_DEFAULTS.scale)
+	const [boingBounceSpeed, setBoingBounceSpeed] = useState(BOING_BALL_DEFAULTS.bounceSpeed)
+	const [boingDriftSpeed, setBoingDriftSpeed] = useState(BOING_BALL_DEFAULTS.driftSpeed)
+	const [boingCheckerDensity, setBoingCheckerDensity] = useState(BOING_BALL_DEFAULTS.checkerDensity)
+	const [boingBallRedColor, setBoingBallRedColor] = useState(BOING_BALL_DEFAULTS.ballRedColor)
+	const [boingBgColor, setBoingBgColor] = useState(BOING_BALL_DEFAULTS.bgColor)
+
+	// Cyclic Automaton state
+	const [cyclicStates, setCyclicStates] = useState(CYCLIC_AUTOMATON_DEFAULTS.states)
+	const [cyclicThreshold, setCyclicThreshold] = useState(CYCLIC_AUTOMATON_DEFAULTS.threshold)
+	const [cyclicNeighborhood, setCyclicNeighborhood] = useState<string>(CYCLIC_AUTOMATON_DEFAULTS.neighborhood)
+	const [cyclicSaturation, setCyclicSaturation] = useState(CYCLIC_AUTOMATON_DEFAULTS.saturation)
+	const [cyclicLightness, setCyclicLightness] = useState(CYCLIC_AUTOMATON_DEFAULTS.lightness)
+	const [cyclicSeed, setCyclicSeed] = useState(CYCLIC_AUTOMATON_DEFAULTS.seed)
+
+	// Falling Sand state
+	const [sandSpoutCount, setSandSpoutCount] = useState(FALLING_SAND_DEFAULTS.spoutCount)
+	const [sandSpoutRate, setSandSpoutRate] = useState(FALLING_SAND_DEFAULTS.spoutRate)
+	const [sandDrainOpenThreshold, setSandDrainOpenThreshold] = useState(FALLING_SAND_DEFAULTS.drainOpenThreshold)
+	const [sandWallColor, setSandWallColor] = useState(FALLING_SAND_DEFAULTS.wallColor)
+	const [sandBgColor, setSandBgColor] = useState(FALLING_SAND_DEFAULTS.bgColor)
+	const [sandSeed, setSandSeed] = useState(FALLING_SAND_DEFAULTS.seed)
+
+	// Bump Mapping state
+	const [bumpNoiseScale, setBumpNoiseScale] = useState(BUMP_MAPPING_DEFAULTS.noiseScale)
+	const [bumpOrbitSpeed, setBumpOrbitSpeed] = useState(BUMP_MAPPING_DEFAULTS.orbitSpeed)
+	const [bumpLightHeight, setBumpLightHeight] = useState(BUMP_MAPPING_DEFAULTS.lightHeight)
+	const [bumpBumpStrength, setBumpBumpStrength] = useState(BUMP_MAPPING_DEFAULTS.bumpStrength)
+	const [bumpSpecularPower, setBumpSpecularPower] = useState(BUMP_MAPPING_DEFAULTS.specularPower)
+	const [bumpBgColor, setBumpBgColor] = useState(BUMP_MAPPING_DEFAULTS.bgColor)
+
+	// Julia state
+	const [juliaMaxIter, setJuliaMaxIter] = useState(JULIA_DEFAULTS.maxIter)
+	const [juliaMorphSpeed, setJuliaMorphSpeed] = useState(JULIA_DEFAULTS.morphSpeed)
+	const [juliaRadius, setJuliaRadius] = useState(JULIA_DEFAULTS.radius)
+	const [juliaColorMode, setJuliaColorMode] = useState<string>(JULIA_DEFAULTS.colorMode)
+	const [juliaFgColor, setJuliaFgColor] = useState(JULIA_DEFAULTS.fgColor)
+	const [juliaBgColor, setJuliaBgColor] = useState(JULIA_DEFAULTS.bgColor)
+
+	// Boids state
+	const [boidsCount, setBoidsCount] = useState(BOIDS_DEFAULTS.count)
+	const [boidsSepWeight, setBoidsSepWeight] = useState(BOIDS_DEFAULTS.sepWeight)
+	const [boidsAlignWeight, setBoidsAlignWeight] = useState(BOIDS_DEFAULTS.alignWeight)
+	const [boidsCohWeight, setBoidsCohWeight] = useState(BOIDS_DEFAULTS.cohWeight)
+	const [boidsHeadColor, setBoidsHeadColor] = useState(BOIDS_DEFAULTS.headColor)
+	const [boidsBgColor, setBoidsBgColor] = useState(BOIDS_DEFAULTS.bgColor)
+
+	// Post FX state
+	const [fxLens, setFxLens] = useState(false)
+	const [fxScanline, setFxScanline] = useState(false)
+	const [fxVhs, setFxVhs] = useState(false)
+
 	useEffect(() => {
 		clearFireState()
 		clearDatamoshState()
@@ -268,6 +410,9 @@ export default function GeneratorsPage() {
 		clearGameOfLifeState()
 		clearWaterRippleState()
 		clearReactionDiffusionState()
+		clearCyclicAutomatonState()
+		clearFallingSandState()
+		clearBoidsState()
 	}, [generatorType])
 
 	const parseOptionalNumber = (value: string): number | undefined => {
@@ -482,6 +627,123 @@ export default function GeneratorsPage() {
 					seed: terrainSeed,
 				})
 		}
+		if (generatorType === 'rotozoomer') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiRotozoomerFrame(frame, cols, r, {
+					rotationSpeed: rotoRotationSpeed,
+					zoomSpeed: rotoZoomSpeed,
+					baseZoom: rotoBaseZoom,
+					pattern: rotoPattern as 'checker' | 'xor',
+					bgColor: rotoBgColor,
+				})
+		}
+		if (generatorType === 'moire') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiMoireFrame(frame, cols, r, {
+					ringWidth: moireRingWidth,
+					speed1: moireSpeed1,
+					speed2: moireSpeed2,
+					paletteSpeed: moirePaletteSpeed,
+					bgColor: moireBgColor,
+				})
+		}
+		if (generatorType === 'kefrensBars') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiKefrensBarsFrame(frame, cols, r, {
+					barWidth: kefrensBarWidth,
+					hueSpeed: kefrensHueSpeed,
+					hueRowStep: kefrensHueRowStep,
+					bgColor: kefrensBgColor,
+					chars: kefrensChars.trim() ? Array.from(kefrensChars) : undefined,
+				})
+		}
+		if (generatorType === 'twister') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiTwisterFrame(frame, cols, r, {
+					rotationSpeed: twisterRotationSpeed,
+					waveFreq: twisterWaveFreq,
+					waveSpeed: twisterWaveSpeed,
+					waveDepth: twisterWaveDepth,
+					bgColor: twisterBgColor,
+				})
+		}
+		if (generatorType === 'sineScroller') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiSineScrollerFrame(frame, cols, r, {
+					text: scrollerText,
+					speed: scrollerSpeed,
+					amplitude: scrollerAmplitude,
+					waveSpeed: scrollerWaveSpeed,
+					fgColor: scrollerFgColor.trim() || undefined,
+					bgColor: scrollerBgColor,
+				})
+		}
+		if (generatorType === 'boingBall') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiBoingBallFrame(frame, cols, r, {
+					scale: boingScale,
+					bounceSpeed: boingBounceSpeed,
+					driftSpeed: boingDriftSpeed,
+					checkerDensity: boingCheckerDensity,
+					ballRedColor: boingBallRedColor,
+					bgColor: boingBgColor,
+				})
+		}
+		if (generatorType === 'cyclicAutomaton') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiCyclicAutomatonFrame(frame, cols, r, {
+					states: cyclicStates,
+					threshold: cyclicThreshold,
+					neighborhood: cyclicNeighborhood as 'moore' | 'vonNeumann',
+					saturation: cyclicSaturation,
+					lightness: cyclicLightness,
+					seed: cyclicSeed,
+				})
+		}
+		if (generatorType === 'fallingSand') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiFallingSandFrame(frame, cols, r, {
+					spoutCount: sandSpoutCount,
+					spoutRate: sandSpoutRate,
+					drainOpenThreshold: sandDrainOpenThreshold,
+					wallColor: sandWallColor,
+					bgColor: sandBgColor,
+					seed: sandSeed,
+				})
+		}
+		if (generatorType === 'bumpMapping') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiBumpMappingFrame(frame, cols, r, {
+					noiseScale: bumpNoiseScale,
+					orbitSpeed: bumpOrbitSpeed,
+					lightHeight: bumpLightHeight,
+					bumpStrength: bumpBumpStrength,
+					specularPower: bumpSpecularPower,
+					bgColor: bumpBgColor,
+				})
+		}
+		if (generatorType === 'julia') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiJuliaFrame(frame, cols, r, {
+					maxIter: juliaMaxIter,
+					morphSpeed: juliaMorphSpeed,
+					radius: juliaRadius,
+					colorMode: juliaColorMode as 'spectrum' | 'mono',
+					fgColor: juliaFgColor,
+					bgColor: juliaBgColor,
+				})
+		}
+		if (generatorType === 'boids') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiBoidsFrame(frame, cols, r, {
+					count: boidsCount,
+					sepWeight: boidsSepWeight,
+					alignWeight: boidsAlignWeight,
+					cohWeight: boidsCohWeight,
+					headColor: boidsHeadColor,
+					bgColor: boidsBgColor,
+				})
+		}
 		return (frame: number, cols: number, r: number) =>
 			generateAsciiPerlinPlasmaFrame(frame, cols, r, {
 				chars: plasmaChars.trim() ? Array.from(plasmaChars) : undefined,
@@ -515,6 +777,17 @@ export default function GeneratorsPage() {
 		auroraCurtainCount, auroraSpeed, auroraIntensity, auroraBgColor, auroraChars, auroraSeed,
 		rdFeedRate, rdKillRate, rdDiffusionU, rdDiffusionV, rdStepsPerFrame, rdColorMode, rdFgColor, rdBgColor, rdChars, rdSeed,
 		terrainScrollSpeed, terrainHeightScale, terrainFogDistance, terrainColorMode, terrainFgColor, terrainBgColor, terrainSkyColor, terrainChars, terrainSeed,
+		rotoRotationSpeed, rotoZoomSpeed, rotoBaseZoom, rotoPattern, rotoBgColor,
+		moireRingWidth, moireSpeed1, moireSpeed2, moirePaletteSpeed, moireBgColor,
+		kefrensBarWidth, kefrensHueSpeed, kefrensHueRowStep, kefrensBgColor, kefrensChars,
+		twisterRotationSpeed, twisterWaveFreq, twisterWaveSpeed, twisterWaveDepth, twisterBgColor,
+		scrollerText, scrollerSpeed, scrollerAmplitude, scrollerWaveSpeed, scrollerFgColor, scrollerBgColor,
+		boingScale, boingBounceSpeed, boingDriftSpeed, boingCheckerDensity, boingBallRedColor, boingBgColor,
+		cyclicStates, cyclicThreshold, cyclicNeighborhood, cyclicSaturation, cyclicLightness, cyclicSeed,
+		sandSpoutCount, sandSpoutRate, sandDrainOpenThreshold, sandWallColor, sandBgColor, sandSeed,
+		bumpNoiseScale, bumpOrbitSpeed, bumpLightHeight, bumpBumpStrength, bumpSpecularPower, bumpBgColor,
+		juliaMaxIter, juliaMorphSpeed, juliaRadius, juliaColorMode, juliaFgColor, juliaBgColor,
+		boidsCount, boidsSepWeight, boidsAlignWeight, boidsCohWeight, boidsHeadColor, boidsBgColor,
 	])
 
 	const generatorOptionsMap: Record<GeneratorType, { options: Record<string, unknown>; defaults: Record<string, unknown> }> = {
@@ -582,18 +855,80 @@ export default function GeneratorsPage() {
 			options: { scrollSpeed: terrainScrollSpeed, heightScale: terrainHeightScale, fogDistance: terrainFogDistance, colorMode: terrainColorMode, fgColor: terrainFgColor, bgColor: terrainBgColor, skyColor: terrainSkyColor, chars: terrainChars, seed: terrainSeed },
 			defaults: TERRAIN_FLYOVER_DEFAULTS,
 		},
+		rotozoomer: {
+			options: { rotationSpeed: rotoRotationSpeed, zoomSpeed: rotoZoomSpeed, baseZoom: rotoBaseZoom, pattern: rotoPattern, bgColor: rotoBgColor },
+			defaults: ROTOZOOMER_DEFAULTS,
+		},
+		moire: {
+			options: { ringWidth: moireRingWidth, speed1: moireSpeed1, speed2: moireSpeed2, paletteSpeed: moirePaletteSpeed, bgColor: moireBgColor },
+			defaults: MOIRE_DEFAULTS,
+		},
+		kefrensBars: {
+			options: { barWidth: kefrensBarWidth, hueSpeed: kefrensHueSpeed, hueRowStep: kefrensHueRowStep, bgColor: kefrensBgColor, chars: kefrensChars },
+			defaults: KEFRENS_BARS_DEFAULTS,
+		},
+		twister: {
+			options: { rotationSpeed: twisterRotationSpeed, waveFreq: twisterWaveFreq, waveSpeed: twisterWaveSpeed, waveDepth: twisterWaveDepth, bgColor: twisterBgColor },
+			defaults: TWISTER_DEFAULTS,
+		},
+		sineScroller: {
+			options: { text: scrollerText, speed: scrollerSpeed, amplitude: scrollerAmplitude, waveSpeed: scrollerWaveSpeed, fgColor: scrollerFgColor, bgColor: scrollerBgColor },
+			defaults: SINE_SCROLLER_DEFAULTS,
+		},
+		boingBall: {
+			options: { scale: boingScale, bounceSpeed: boingBounceSpeed, driftSpeed: boingDriftSpeed, checkerDensity: boingCheckerDensity, ballRedColor: boingBallRedColor, bgColor: boingBgColor },
+			defaults: BOING_BALL_DEFAULTS,
+		},
+		cyclicAutomaton: {
+			options: { states: cyclicStates, threshold: cyclicThreshold, neighborhood: cyclicNeighborhood, saturation: cyclicSaturation, lightness: cyclicLightness, seed: cyclicSeed },
+			defaults: CYCLIC_AUTOMATON_DEFAULTS,
+		},
+		fallingSand: {
+			options: { spoutCount: sandSpoutCount, spoutRate: sandSpoutRate, drainOpenThreshold: sandDrainOpenThreshold, wallColor: sandWallColor, bgColor: sandBgColor, seed: sandSeed },
+			defaults: FALLING_SAND_DEFAULTS,
+		},
+		bumpMapping: {
+			options: { noiseScale: bumpNoiseScale, orbitSpeed: bumpOrbitSpeed, lightHeight: bumpLightHeight, bumpStrength: bumpBumpStrength, specularPower: bumpSpecularPower, bgColor: bumpBgColor },
+			defaults: BUMP_MAPPING_DEFAULTS,
+		},
+		julia: {
+			options: { maxIter: juliaMaxIter, morphSpeed: juliaMorphSpeed, radius: juliaRadius, colorMode: juliaColorMode, fgColor: juliaFgColor, bgColor: juliaBgColor },
+			defaults: JULIA_DEFAULTS,
+		},
+		boids: {
+			options: { count: boidsCount, sepWeight: boidsSepWeight, alignWeight: boidsAlignWeight, cohWeight: boidsCohWeight, headColor: boidsHeadColor, bgColor: boidsBgColor },
+			defaults: BOIDS_DEFAULTS,
+		},
 	}
 
 	const activeGen = generatorOptionsMap[generatorType]
+
+	// Post FX: composed left-to-right (lens -> scanline -> vhs) onto whichever generator is
+	// currently active. Memoized separately from `frameGenerator` so toggling an effect alone
+	// doesn't rebuild the underlying generator, and vice versa.
+	const postEffects = useMemo<AnsiPostEffect[]>(() => {
+		const list: AnsiPostEffect[] = []
+		if (fxLens) list.push(createLensEffect())
+		if (fxScanline) list.push(createScanlineEffect())
+		if (fxVhs) list.push(createVhsTrackingEffect())
+		return list
+	}, [fxLens, fxScanline, fxVhs])
+
+	const composedGenerator = useMemo(() => {
+		if (postEffects.length === 0 || typeof frameGenerator !== 'function') return frameGenerator
+		return composeAnsiEffects(frameGenerator as CharacterFrameGenerator, postEffects)
+	}, [frameGenerator, postEffects])
+
 	const code = useMemo(() => {
 		return generateGeneratorCode(
 			generatorType,
 			{ columns, rows, fps, showPerformanceOverlay },
 			VIRTUAL_DISPLAY_DEFAULTS,
 			activeGen.options,
-			activeGen.defaults
+			activeGen.defaults,
+			{ lens: fxLens, scanline: fxScanline, vhs: fxVhs }
 		)
-	}, [generatorType, columns, rows, fps, showPerformanceOverlay, activeGen.options, activeGen.defaults])
+	}, [generatorType, columns, rows, fps, showPerformanceOverlay, activeGen.options, activeGen.defaults, fxLens, fxScanline, fxVhs])
 
 	return (
 		<>
@@ -607,7 +942,7 @@ export default function GeneratorsPage() {
 						columns={columns}
 						rows={rows}
 						fps={fps}
-						frameGenerator={frameGenerator}
+						frameGenerator={composedGenerator}
 						showPerformanceOverlay={showPerformanceOverlay}
 					/>
 				</div>
@@ -626,6 +961,12 @@ export default function GeneratorsPage() {
 						<NumberInput label="Rows" value={rows} onChange={setRows} min={10} step={1} />
 						<NumberInput label="FPS" value={fps} onChange={setFps} min={1} step={1} />
 						<ToggleInput label="Performance Overlay" value={showPerformanceOverlay} onChange={setShowPerformanceOverlay} />
+					</ControlGroup>
+
+					<ControlGroup label="Post FX">
+						<ToggleInput label="Lens" value={fxLens} onChange={setFxLens} />
+						<ToggleInput label="Scanline" value={fxScanline} onChange={setFxScanline} />
+						<ToggleInput label="VHS Tracking" value={fxVhs} onChange={setFxVhs} />
 					</ControlGroup>
 
 					{generatorType === 'perlinPlasma' && (
@@ -833,6 +1174,123 @@ export default function GeneratorsPage() {
 							skyColor={terrainSkyColor} setSkyColor={setTerrainSkyColor}
 							chars={terrainChars} setChars={setTerrainChars}
 							seed={terrainSeed} setSeed={setTerrainSeed}
+						/>
+					)}
+
+					{generatorType === 'rotozoomer' && (
+						<RotozoomerPanel
+							rotationSpeed={rotoRotationSpeed} setRotationSpeed={setRotoRotationSpeed}
+							zoomSpeed={rotoZoomSpeed} setZoomSpeed={setRotoZoomSpeed}
+							baseZoom={rotoBaseZoom} setBaseZoom={setRotoBaseZoom}
+							pattern={rotoPattern} setPattern={setRotoPattern}
+							bgColor={rotoBgColor} setBgColor={setRotoBgColor}
+						/>
+					)}
+
+					{generatorType === 'moire' && (
+						<MoirePanel
+							ringWidth={moireRingWidth} setRingWidth={setMoireRingWidth}
+							speed1={moireSpeed1} setSpeed1={setMoireSpeed1}
+							speed2={moireSpeed2} setSpeed2={setMoireSpeed2}
+							paletteSpeed={moirePaletteSpeed} setPaletteSpeed={setMoirePaletteSpeed}
+							bgColor={moireBgColor} setBgColor={setMoireBgColor}
+						/>
+					)}
+
+					{generatorType === 'kefrensBars' && (
+						<KefrensBarsPanel
+							barWidth={kefrensBarWidth} setBarWidth={setKefrensBarWidth}
+							hueSpeed={kefrensHueSpeed} setHueSpeed={setKefrensHueSpeed}
+							hueRowStep={kefrensHueRowStep} setHueRowStep={setKefrensHueRowStep}
+							bgColor={kefrensBgColor} setBgColor={setKefrensBgColor}
+							chars={kefrensChars} setChars={setKefrensChars}
+						/>
+					)}
+
+					{generatorType === 'twister' && (
+						<TwisterPanel
+							rotationSpeed={twisterRotationSpeed} setRotationSpeed={setTwisterRotationSpeed}
+							waveFreq={twisterWaveFreq} setWaveFreq={setTwisterWaveFreq}
+							waveSpeed={twisterWaveSpeed} setWaveSpeed={setTwisterWaveSpeed}
+							waveDepth={twisterWaveDepth} setWaveDepth={setTwisterWaveDepth}
+							bgColor={twisterBgColor} setBgColor={setTwisterBgColor}
+						/>
+					)}
+
+					{generatorType === 'sineScroller' && (
+						<SineScrollerPanel
+							text={scrollerText} setText={setScrollerText}
+							speed={scrollerSpeed} setSpeed={setScrollerSpeed}
+							amplitude={scrollerAmplitude} setAmplitude={setScrollerAmplitude}
+							waveSpeed={scrollerWaveSpeed} setWaveSpeed={setScrollerWaveSpeed}
+							fgColor={scrollerFgColor} setFgColor={setScrollerFgColor}
+							bgColor={scrollerBgColor} setBgColor={setScrollerBgColor}
+						/>
+					)}
+
+					{generatorType === 'boingBall' && (
+						<BoingBallPanel
+							scale={boingScale} setScale={setBoingScale}
+							bounceSpeed={boingBounceSpeed} setBounceSpeed={setBoingBounceSpeed}
+							driftSpeed={boingDriftSpeed} setDriftSpeed={setBoingDriftSpeed}
+							checkerDensity={boingCheckerDensity} setCheckerDensity={setBoingCheckerDensity}
+							ballRedColor={boingBallRedColor} setBallRedColor={setBoingBallRedColor}
+							bgColor={boingBgColor} setBgColor={setBoingBgColor}
+						/>
+					)}
+
+					{generatorType === 'cyclicAutomaton' && (
+						<CyclicAutomatonPanel
+							states={cyclicStates} setStates={setCyclicStates}
+							threshold={cyclicThreshold} setThreshold={setCyclicThreshold}
+							neighborhood={cyclicNeighborhood} setNeighborhood={setCyclicNeighborhood}
+							saturation={cyclicSaturation} setSaturation={setCyclicSaturation}
+							lightness={cyclicLightness} setLightness={setCyclicLightness}
+							seed={cyclicSeed} setSeed={setCyclicSeed}
+						/>
+					)}
+
+					{generatorType === 'fallingSand' && (
+						<FallingSandPanel
+							spoutCount={sandSpoutCount} setSpoutCount={setSandSpoutCount}
+							spoutRate={sandSpoutRate} setSpoutRate={setSandSpoutRate}
+							drainOpenThreshold={sandDrainOpenThreshold} setDrainOpenThreshold={setSandDrainOpenThreshold}
+							wallColor={sandWallColor} setWallColor={setSandWallColor}
+							bgColor={sandBgColor} setBgColor={setSandBgColor}
+							seed={sandSeed} setSeed={setSandSeed}
+						/>
+					)}
+
+					{generatorType === 'bumpMapping' && (
+						<BumpMappingPanel
+							noiseScale={bumpNoiseScale} setNoiseScale={setBumpNoiseScale}
+							orbitSpeed={bumpOrbitSpeed} setOrbitSpeed={setBumpOrbitSpeed}
+							lightHeight={bumpLightHeight} setLightHeight={setBumpLightHeight}
+							bumpStrength={bumpBumpStrength} setBumpStrength={setBumpBumpStrength}
+							specularPower={bumpSpecularPower} setSpecularPower={setBumpSpecularPower}
+							bgColor={bumpBgColor} setBgColor={setBumpBgColor}
+						/>
+					)}
+
+					{generatorType === 'julia' && (
+						<JuliaPanel
+							maxIter={juliaMaxIter} setMaxIter={setJuliaMaxIter}
+							morphSpeed={juliaMorphSpeed} setMorphSpeed={setJuliaMorphSpeed}
+							radius={juliaRadius} setRadius={setJuliaRadius}
+							colorMode={juliaColorMode} setColorMode={setJuliaColorMode}
+							fgColor={juliaFgColor} setFgColor={setJuliaFgColor}
+							bgColor={juliaBgColor} setBgColor={setJuliaBgColor}
+						/>
+					)}
+
+					{generatorType === 'boids' && (
+						<BoidsPanel
+							count={boidsCount} setCount={setBoidsCount}
+							sepWeight={boidsSepWeight} setSepWeight={setBoidsSepWeight}
+							alignWeight={boidsAlignWeight} setAlignWeight={setBoidsAlignWeight}
+							cohWeight={boidsCohWeight} setCohWeight={setBoidsCohWeight}
+							headColor={boidsHeadColor} setHeadColor={setBoidsHeadColor}
+							bgColor={boidsBgColor} setBgColor={setBoidsBgColor}
 						/>
 					)}
 

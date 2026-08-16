@@ -205,3 +205,98 @@ export const METABALLS_DEFAULTS = {
 	bgColor: '#000000',
 	chars: ' .,:;+=xX$&#@',
 }
+
+export const ROTOZOOMER_DEFAULTS = {
+	rotationSpeed: 0.035,
+	zoomSpeed: 0.02,
+	baseZoom: 1.0,
+	pattern: 'checker' as const,
+	bgColor: '#000000',
+}
+
+export const MOIRE_DEFAULTS = {
+	ringWidth: 6,
+	speed1: 0.015,
+	speed2: 0.023,
+	paletteSpeed: 0.01,
+	bgColor: '#000000',
+}
+
+export const KEFRENS_BARS_DEFAULTS = {
+	barWidth: 7,
+	hueSpeed: 0.15,
+	hueRowStep: 0.4,
+	bgColor: '#000000',
+	chars: '█▓▒░',
+}
+
+export const TWISTER_DEFAULTS = {
+	rotationSpeed: 0.05,
+	waveFreq: 0.25,
+	waveSpeed: 0.04,
+	waveDepth: 0.6,
+	bgColor: '#000000',
+}
+
+export const SINE_SCROLLER_DEFAULTS = {
+	text: 'REACT-ANSIART ♦ GREETINGS TO THE SCENE ♦ ',
+	speed: 1.5,
+	amplitude: 3,
+	waveSpeed: 0.06,
+	fgColor: '',
+	bgColor: '#000000',
+}
+
+export const BOING_BALL_DEFAULTS = {
+	scale: 1,
+	bounceSpeed: 0.15,
+	driftSpeed: 0.045,
+	checkerDensity: 8,
+	ballRedColor: '#cc2222',
+	bgColor: '#c9c9cf',
+}
+
+export const CYCLIC_AUTOMATON_DEFAULTS = {
+	states: 10,
+	threshold: 1,
+	neighborhood: 'moore' as const,
+	saturation: 0.75,
+	lightness: 0.5,
+	seed: 1337,
+}
+
+export const FALLING_SAND_DEFAULTS = {
+	spoutCount: 3,
+	spoutRate: 0.55,
+	drainOpenThreshold: 0.55,
+	wallColor: '#5c5c6b',
+	bgColor: '#0a0a12',
+	seed: 424242,
+}
+
+export const BUMP_MAPPING_DEFAULTS = {
+	noiseScale: 0.15,
+	orbitSpeed: 0.05,
+	lightHeight: 6,
+	bumpStrength: 6,
+	specularPower: 12,
+	bgColor: '#050302',
+}
+
+export const JULIA_DEFAULTS = {
+	maxIter: 64,
+	morphSpeed: 0.015,
+	radius: 0.7885,
+	colorMode: 'spectrum' as const,
+	fgColor: '#00ccff',
+	bgColor: '#000000',
+}
+
+export const BOIDS_DEFAULTS = {
+	count: 60,
+	sepWeight: 1.4,
+	alignWeight: 1.0,
+	cohWeight: 0.8,
+	headColor: '#eafcff',
+	bgColor: '#000006',
+}
