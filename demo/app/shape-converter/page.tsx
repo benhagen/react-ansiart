@@ -26,6 +26,7 @@ import {
 import { ControlGroup } from '../_components/ControlGroup'
 import { NumberInput, SelectInput, TextInput, ToggleInput } from '../_components/ControlRow'
 import { CodePreview } from '../_components/CodePreview'
+import { ShapeConverterErrorBoundary } from './ErrorBoundary'
 
 const CHAR_SET_OPTIONS = [
 	{ value: 'cp437', label: 'CP437 (ASCII + blocks)' },
@@ -173,10 +174,22 @@ export default function ShapeConverterPage() {
 	const [rgbColor, setRgbColor] = useState(false)
 	const [showPerformanceOverlay, setShowPerformanceOverlay] = useState(false)
 
+	// Set when the 3D/WebGL scene fails to initialize or render (e.g. no WebGL
+	// support in the current browser/environment). Once set, we stop trying to
+	// drive the scene and show a friendly notice instead of the live preview.
+	const [sceneError, setSceneError] = useState<string | null>(null)
+
 	const font = useMemo(() => getEmbeddedVgaFont(), [])
 
 	// Three.js scene persists across renders
 	const sceneRef = useRef<Scene3D | null>(null)
+
+	// Guards against reporting/tearing down the scene more than once per failure
+	const sceneFailedRef = useRef(false)
+
+	// Memoized blank/fallback frame, keyed on pixel dimensions, so the
+	// failure path doesn't allocate a fresh Uint8Array on every frame.
+	const blankFrameRef = useRef<{ pixelW: number; pixelH: number; frame: FrameData } | null>(null)
 
 	// Visible preview canvas
 	const previewCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -185,7 +198,11 @@ export default function ShapeConverterPage() {
 	useEffect(() => {
 		return () => {
 			if (sceneRef.current) {
-				sceneRef.current.renderer.dispose()
+				try {
+					sceneRef.current.renderer.dispose()
+				} catch {
+					// Renderer may already be in a broken state — nothing to clean up.
+				}
 				sceneRef.current = null
 			}
 		}
@@ -203,30 +220,70 @@ export default function ShapeConverterPage() {
 			rgbColor,
 		})
 
+		// Fallback blank frame — returned whenever the 3D scene can't be
+		// produced, so the render loop (which does not catch generator errors
+		// itself) never throws. Only allocated on the failure paths, and
+		// memoized per pixel-dimension so repeated failed frames don't
+		// reallocate.
+		const getBlankFrame = (pixelW: number, pixelH: number): FrameData => {
+			const cached = blankFrameRef.current
+			if (cached && cached.pixelW === pixelW && cached.pixelH === pixelH) {
+				return cached.frame
+			}
+			const frame: FrameData = { width: pixelW, height: pixelH, pixels: new Uint8Array(pixelW * pixelH * 3) }
+			blankFrameRef.current = { pixelW, pixelH, frame }
+			return frame
+		}
+
 		const generator = (frame: number, cols: number, r: number): FrameData => {
 			const pixelW = cols * 6
 			const pixelH = r * 12
 
-			if (!sceneRef.current) {
-				sceneRef.current = createScene3D(pixelW, pixelH)
-			}
-			resizeScene3D(sceneRef.current, pixelW, pixelH)
+			if (sceneFailedRef.current) return getBlankFrame(pixelW, pixelH)
 
-			const frameData = renderScene3D(sceneRef.current, frame)
-
-			// Mirror to visible preview canvas
-			const preview = previewCanvasRef.current
-			if (preview) {
-				const srcCanvas = sceneRef.current.renderer.domElement
-				if (preview.width !== pixelW || preview.height !== pixelH) {
-					preview.width = pixelW
-					preview.height = pixelH
+			try {
+				if (!sceneRef.current) {
+					sceneRef.current = createScene3D(pixelW, pixelH)
 				}
-				const pctx = preview.getContext('2d')
-				if (pctx) pctx.drawImage(srcCanvas, 0, 0)
-			}
+				resizeScene3D(sceneRef.current, pixelW, pixelH)
 
-			return frameData
+				const frameData = renderScene3D(sceneRef.current, frame)
+
+				// Mirror to visible preview canvas
+				const preview = previewCanvasRef.current
+				if (preview) {
+					const srcCanvas = sceneRef.current.renderer.domElement
+					if (preview.width !== pixelW || preview.height !== pixelH) {
+						preview.width = pixelW
+						preview.height = pixelH
+					}
+					const pctx = preview.getContext('2d')
+					if (pctx) pctx.drawImage(srcCanvas, 0, 0)
+				}
+
+				return frameData
+			} catch (err) {
+				// WebGL context creation (or rendering) failed — most commonly
+				// because the browser/environment has no WebGL support (headless
+				// Chrome without GPU/software rendering, WebGL disabled, etc).
+				// This runs inside the display engine's requestAnimationFrame
+				// loop, which has no try/catch of its own, so an uncaught error
+				// here would otherwise take down the whole page.
+				sceneFailedRef.current = true
+				if (sceneRef.current) {
+					try {
+						sceneRef.current.renderer.dispose()
+					} catch {
+						// Already broken — ignore.
+					}
+					sceneRef.current = null
+				}
+				const message = err instanceof Error ? err.message : String(err)
+				// Defer the state update out of the render-loop callback so we
+				// never call setState synchronously from inside it.
+				queueMicrotask(() => setSceneError(message))
+				return getBlankFrame(pixelW, pixelH)
+			}
 		}
 
 		return { generator, converter }
@@ -273,26 +330,74 @@ export default function ShapeConverterPage() {
 			</div>
 			<div className="playground">
 				<div className="playground-canvas">
-					<AnsiVirtualDisplay
-						columns={columns}
-						rows={rows}
-						fps={fps}
-						frameGenerator={frameGenerator}
-						showPerformanceOverlay={showPerformanceOverlay}
-					/>
-					<div style={{ marginTop: 12 }}>
-						<div style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 4 }}>Source canvas</div>
-						<canvas
-							ref={previewCanvasRef}
-							style={{
-								width: '100%',
-								maxWidth: columns * 8,
-								imageRendering: 'pixelated',
-								borderRadius: 4,
-								border: '1px solid var(--surface-border)',
-							}}
-						/>
-					</div>
+					<ShapeConverterErrorBoundary
+						fallback={
+							<div
+								style={{
+									width: '100%',
+									maxWidth: 640,
+									padding: '20px 24px',
+									borderRadius: 8,
+									background: 'var(--bg-elevated)',
+									border: '1px solid var(--border-default)',
+									color: 'var(--text-secondary)',
+									fontSize: 13,
+									lineHeight: 1.5,
+								}}
+							>
+								Something went wrong rendering the 3D preview. Try reloading the page.
+							</div>
+						}
+					>
+						{sceneError ? (
+							<div
+								style={{
+									width: '100%',
+									maxWidth: 640,
+									padding: '20px 24px',
+									borderRadius: 8,
+									background: 'var(--bg-elevated)',
+									border: '1px solid var(--border-default)',
+									color: 'var(--text-secondary)',
+									fontSize: 13,
+									lineHeight: 1.5,
+								}}
+							>
+								<div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: 6 }}>
+									3D preview unavailable
+								</div>
+								This browser or environment doesn&apos;t support WebGL, so the Shape Converter
+								can&apos;t render its 3D scene. Try a different browser, or make sure hardware
+								acceleration is enabled.
+								<div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+									{sceneError}
+								</div>
+							</div>
+						) : (
+							<>
+								<AnsiVirtualDisplay
+									columns={columns}
+									rows={rows}
+									fps={fps}
+									frameGenerator={frameGenerator}
+									showPerformanceOverlay={showPerformanceOverlay}
+								/>
+								<div style={{ marginTop: 12 }}>
+									<div style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 4 }}>Source canvas</div>
+									<canvas
+										ref={previewCanvasRef}
+										style={{
+											width: '100%',
+											maxWidth: columns * 8,
+											imageRendering: 'pixelated',
+											borderRadius: 4,
+											border: '1px solid var(--surface-border)',
+										}}
+									/>
+								</div>
+							</>
+						)}
+					</ShapeConverterErrorBoundary>
 				</div>
 				<div className="controls-panel">
 					<ControlGroup label="Display">

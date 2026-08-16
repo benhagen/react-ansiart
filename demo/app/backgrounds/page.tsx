@@ -94,8 +94,41 @@ export default function BackgroundsPage() {
 			fps={fps}
 			showPerformanceOverlay={showPerformanceOverlay}
 			bgColor={bgColor || undefined}
+			// The layout's content layer sits inside the root layout's `.page-body`,
+			// which already adds a 48px top offset to clear the fixed navbar. That
+			// offset stacks with this layer's own minHeight: 100vh, pushing the
+			// document 48px taller than the viewport. Since the animated background
+			// is `position: fixed` (always exactly one viewport tall), that extra
+			// 48px of scrollable space renders as a plain black band below it.
+			// Cancel the duplicate offset here so the page never grows past 100vh.
+			contentStyle={{ marginTop: -48 }}
 		>
-			<div style={{ minHeight: '100vh', padding: '68px 20px 20px 20px' }}>
+			<div className="backgrounds-page" style={{ minHeight: '100vh', padding: '68px 20px 20px 20px' }}>
+				<style>{`
+					.backgrounds-page .floating-panel {
+						background: rgba(9, 9, 11, 0.94);
+						backdrop-filter: blur(18px);
+						-webkit-backdrop-filter: blur(18px);
+						border: 1px solid var(--border-default);
+						box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+					}
+					.backgrounds-page .code-block {
+						margin-top: 4px;
+						max-width: 100%;
+					}
+					.backgrounds-page .code-block-copy {
+						position: static;
+						display: block;
+						width: max-content;
+						margin: 8px 8px 0 auto;
+					}
+					.backgrounds-page .code-block pre {
+						margin: 0;
+						overflow-x: auto;
+						max-width: 100%;
+						white-space: pre;
+					}
+				`}</style>
 				<div className="floating-panel">
 					<h2 style={{ margin: '0 0 12px 0', fontSize: 14, fontFamily: 'var(--font-mono)' }}>
 						Generator Background

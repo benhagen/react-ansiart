@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePathname, useSearchParams } from 'next/navigation'
 import {
 	AnsiVirtualDisplay,
 	clearDatamoshState,
@@ -41,6 +42,16 @@ import {
 	generateAsciiJuliaFrame,
 	generateAsciiBoidsFrame,
 	generateMandelbrotPixels,
+	createAsciiBoidsGenerator,
+	createAsciiCyclicAutomatonGenerator,
+	createAsciiDatamoshGenerator,
+	createAsciiFallingSandGenerator,
+	createAsciiFireGenerator,
+	createAsciiGameOfLifeGenerator,
+	createAsciiMatrixRainGenerator,
+	createAsciiReactionDiffusionGenerator,
+	createAsciiStarfieldGenerator,
+	createAsciiWaterRippleGenerator,
 	createShapeConverter,
 	getEmbeddedVgaFont,
 	composeAnsiEffects,
@@ -55,6 +66,8 @@ import {
 import { CodePreview } from '../_components/CodePreview'
 import { ControlGroup } from '../_components/ControlGroup'
 import { NumberInput, SelectInput, ToggleInput } from '../_components/ControlRow'
+import { GeneratorThumb } from '../_components/GeneratorThumb'
+import { Stage } from '../_components/Stage'
 import { generateGeneratorCode } from '../_lib/generateCode'
 import {
 	AURORA_BOREALIS_DEFAULTS,
@@ -146,8 +159,136 @@ const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'boids', label: 'Boids' },
 ]
 
+/** Sine Scroller leads: its editable text field is the most inviting first control. */
+const DEFAULT_GENERATOR: GeneratorType = 'sineScroller'
+
+function parseGeneratorType(value: string | null): GeneratorType | null {
+	if (!value) return null
+	return TABS.some((tab) => tab.key === value) ? (value as GeneratorType) : null
+}
+
+const COLUMNS_RANGE = { min: 10, max: 400 } as const
+const ROWS_RANGE = { min: 10, max: 400 } as const
+const FPS_RANGE = { min: 1, max: 120 } as const
+
+/** Floors and clamps a raw numeric value into [min, max]; returns null if not finite. */
+function clampInt(value: number, min: number, max: number): number | null {
+	if (!Number.isFinite(value)) return null
+	return Math.min(max, Math.max(min, Math.floor(value)))
+}
+
+/* ─── Thumbnail previews ─────────────────────────────────────────────────────
+   Built ONCE at module scope with each generator's library defaults, so every
+   tile keeps a stable function identity for the lifetime of the page (a new
+   identity restarts the tile's render engine). Tiles are previews of what a
+   generator *is*, deliberately not mirrors of the panel options.
+
+   Stateful sims get a private instance from the library's create* factory:
+   the bare generateAscii*Frame helpers share one process-wide store, so 27
+   tiles plus the main display would otherwise fight over the same simulation.
+   Stateless generators get a per-tile frame offset so the grid isn't a wall of
+   synchronised clones. */
+
+const STATELESS_THUMB_GENERATORS: Partial<Record<GeneratorType, CharacterFrameGenerator>> = {
+	perlinPlasma: (f, c, r) => generateAsciiPerlinPlasmaFrame(f, c, r),
+	sonar: (f, c, r) => generateAsciiSonarFrame(f, c, r),
+	metaballs: (f, c, r) => generateAsciiMetaballsFrame(f, c, r),
+	tunnel: (f, c, r) => generateAsciiTunnelFrame(f, c, r),
+	mandelbrot: (f, c, r) => generateAsciiMandelbrotFrame(f, c, r),
+	copperBars: (f, c, r) => generateAsciiCopperBarsFrame(f, c, r),
+	crtStatic: (f, c, r) => generateAsciiCrtStaticFrame(f, c, r),
+	auroraBorealis: (f, c, r) => generateAsciiAuroraBorealisFrame(f, c, r),
+	terrainFlyover: (f, c, r) => generateAsciiTerrainFlyoverFrame(f, c, r),
+	rotozoomer: (f, c, r) => generateAsciiRotozoomerFrame(f, c, r),
+	moire: (f, c, r) => generateAsciiMoireFrame(f, c, r),
+	kefrensBars: (f, c, r) => generateAsciiKefrensBarsFrame(f, c, r),
+	twister: (f, c, r) => generateAsciiTwisterFrame(f, c, r),
+	sineScroller: (f, c, r) => generateAsciiSineScrollerFrame(f, c, r),
+	boingBall: (f, c, r) => generateAsciiBoingBallFrame(f, c, r),
+	bumpMapping: (f, c, r) => generateAsciiBumpMappingFrame(f, c, r),
+	julia: (f, c, r) => generateAsciiJuliaFrame(f, c, r),
+}
+
+function createThumbGenerator(type: GeneratorType, index: number): CharacterFrameGenerator {
+	switch (type) {
+		case 'fire': return createAsciiFireGenerator()
+		case 'datamosh': return createAsciiDatamoshGenerator()
+		case 'matrix': return createAsciiMatrixRainGenerator()
+		case 'starfield': return createAsciiStarfieldGenerator()
+		case 'gameOfLife': return createAsciiGameOfLifeGenerator()
+		case 'waterRipple': return createAsciiWaterRippleGenerator()
+		case 'reactionDiffusion': return createAsciiReactionDiffusionGenerator()
+		case 'cyclicAutomaton': return createAsciiCyclicAutomatonGenerator()
+		case 'fallingSand': return createAsciiFallingSandGenerator()
+		case 'boids': return createAsciiBoidsGenerator()
+		default: break
+	}
+	const base = STATELESS_THUMB_GENERATORS[type] ?? ((f, c, r) => generateAsciiPerlinPlasmaFrame(f, c, r))
+	const offset = 120 * index + 60
+	return (frame: number, cols: number, r: number) => base(frame + offset, cols, r)
+}
+
+const THUMB_TILES: { key: GeneratorType; label: string; generator: CharacterFrameGenerator }[] =
+	TABS.map((tab, index) => ({ key: tab.key, label: tab.label, generator: createThumbGenerator(tab.key, index) }))
+
+const THUMB_COLUMNS = 40
+const THUMB_ROWS = 12
+const THUMB_FPS = 8
+const THUMB_WIDTH = 160
+
+/* ─── URL state ──────────────────────────────────────────────────────────────
+   Only values that differ from their default are serialized, so a pristine
+   playground has a bare URL and a shared link is short. Unknown or unparseable
+   params are ignored rather than surfaced as errors. */
+
+type UrlParam = {
+	key: string
+	value: string | number | boolean
+	def: string | number | boolean
+	apply: (raw: string) => void
+}
+
+const strParam = (key: string, value: string, def: string, set: (v: string) => void): UrlParam =>
+	({ key, value, def, apply: set })
+
+const numParam = (key: string, value: number, def: number, set: (v: number) => void): UrlParam => ({
+	key,
+	value,
+	def,
+	apply: (raw: string) => {
+		const n = Number(raw)
+		if (raw.trim() !== '' && Number.isFinite(n)) set(n)
+	},
+})
+
+const boolParam = (key: string, value: boolean, def: boolean, set: (v: boolean) => void): UrlParam =>
+	({ key, value, def, apply: (raw: string) => set(raw === '1' || raw === 'true') })
+
+const serializeParam = (value: string | number | boolean): string =>
+	typeof value === 'boolean' ? (value ? '1' : '0') : String(value)
+
 export default function GeneratorsPage() {
-	const [generatorType, setGeneratorType] = useState<GeneratorType>('perlinPlasma')
+	// useSearchParams opts this subtree into client-side rendering; Next requires
+	// the Suspense boundary so the rest of the route can still prerender.
+	return (
+		<Suspense fallback={null}>
+			<GeneratorsPlayground />
+		</Suspense>
+	)
+}
+
+function GeneratorsPlayground() {
+	const pathname = usePathname()
+	const searchParams = useSearchParams()
+	// Snapshot of the params present on first paint — later edits rewrite the URL,
+	// and re-reading it would fight the user's own input.
+	const [initialParams] = useState(() => new URLSearchParams(searchParams.toString()))
+
+	const [generatorType, setGeneratorType] = useState<GeneratorType>(
+		() => parseGeneratorType(initialParams.get('g')) ?? DEFAULT_GENERATOR
+	)
+	const [pickerExpanded, setPickerExpanded] = useState(false)
+	const [urlReady, setUrlReady] = useState(false)
 	const [columns, setColumns] = useState(80)
 	const [rows, setRows] = useState(25)
 	const [fps, setFps] = useState(30)
@@ -902,6 +1043,336 @@ export default function GeneratorsPage() {
 	}
 
 	const activeGen = generatorOptionsMap[generatorType]
+	const activeLabel = TABS.find((tab) => tab.key === generatorType)?.label ?? generatorType
+
+	// One entry per editable option, per generator: current value, default, and how to
+	// parse it back off the URL. Plasma's `octaves` is intentionally absent — it is a
+	// nested array of objects and would dominate the query string.
+	const urlParams: Record<GeneratorType, UrlParam[]> = {
+		perlinPlasma: [
+			strParam('chars', plasmaChars, PLASMA_DEFAULTS.chars, setPlasmaChars),
+			numParam('timeScale', plasmaTimeScale, PLASMA_DEFAULTS.timeScale, setPlasmaTimeScale),
+			strParam('fgColor', plasmaFgColor, PLASMA_DEFAULTS.fgColor, setPlasmaFgColor),
+			strParam('bgColor', plasmaBgColor, PLASMA_DEFAULTS.bgColor, setPlasmaBgColor),
+			numParam('seed', plasmaSeed, PLASMA_DEFAULTS.seed, setPlasmaSeed),
+		],
+		fire: [
+			strParam('chars', fireChars, FIRE_DEFAULTS.chars, setFireChars),
+			numParam('darkenAmount', fireDarkenAmount, FIRE_DEFAULTS.darkenAmount, setFireDarkenAmount),
+			numParam('sparkMin', fireSparkMin, FIRE_DEFAULTS.sparkMin, setFireSparkMin),
+			numParam('sparkMax', fireSparkMax, FIRE_DEFAULTS.sparkMax, setFireSparkMax),
+			strParam('bgColor', fireBgColor, FIRE_DEFAULTS.bgColor, setFireBgColor),
+			numParam('seed', fireSeed, FIRE_DEFAULTS.seed, setFireSeed),
+		],
+		sonar: [
+			numParam('frequency', sonarFrequency, SONAR_DEFAULTS.frequency, setSonarFrequency),
+			numParam('intensity', sonarIntensity, SONAR_DEFAULTS.intensity, setSonarIntensity),
+			strParam('fgColor', sonarFgColor, SONAR_DEFAULTS.fgColor, setSonarFgColor),
+			strParam('bgColor', sonarBgColor, SONAR_DEFAULTS.bgColor, setSonarBgColor),
+			strParam('dotChar', sonarDotChar, SONAR_DEFAULTS.dotChar, setSonarDotChar),
+			numParam('speed', sonarSpeed, SONAR_DEFAULTS.speed, setSonarSpeed),
+			numParam('bandWidth', sonarBandWidth, SONAR_DEFAULTS.bandWidth, setSonarBandWidth),
+			numParam('decay', sonarDecay, SONAR_DEFAULTS.decay, setSonarDecay),
+			numParam('baseAlpha', sonarBaseAlpha, SONAR_DEFAULTS.baseAlpha, setSonarBaseAlpha),
+			numParam('alphaSteps', sonarAlphaSteps, SONAR_DEFAULTS.alphaSteps, setSonarAlphaSteps),
+			strParam('centerX', sonarCenterX, SONAR_DEFAULTS.centerX, setSonarCenterX),
+			strParam('centerY', sonarCenterY, SONAR_DEFAULTS.centerY, setSonarCenterY),
+			numParam('aspectY', sonarAspectY, SONAR_DEFAULTS.aspectY, setSonarAspectY),
+			numParam('maxRings', sonarMaxRings, SONAR_DEFAULTS.maxRings, setSonarMaxRings),
+		],
+		datamosh: [
+			numParam('seed', datamoshSeed, DATAMOSH_DEFAULTS.seed, setDatamoshSeed),
+			numParam('keyframeIntervalFrames', datamoshKeyframeIntervalFrames, DATAMOSH_DEFAULTS.keyframeIntervalFrames, setDatamoshKeyframeIntervalFrames),
+			numParam('blockOpsPerFrame', datamoshBlockOpsPerFrame, DATAMOSH_DEFAULTS.blockOpsPerFrame, setDatamoshBlockOpsPerFrame),
+			numParam('minBlockSize', datamoshMinBlockSize, DATAMOSH_DEFAULTS.minBlockSize, setDatamoshMinBlockSize),
+			numParam('maxBlockSize', datamoshMaxBlockSize, DATAMOSH_DEFAULTS.maxBlockSize, setDatamoshMaxBlockSize),
+			numParam('maxShift', datamoshMaxShift, DATAMOSH_DEFAULTS.maxShift, setDatamoshMaxShift),
+			strParam('bgColor', datamoshBgColor, DATAMOSH_DEFAULTS.bgColor, setDatamoshBgColor),
+		],
+		metaballs: [
+			numParam('seed', metaballsSeed, METABALLS_DEFAULTS.seed, setMetaballsSeed),
+			numParam('balls', metaballsBalls, METABALLS_DEFAULTS.balls, setMetaballsBalls),
+			numParam('speed', metaballsSpeed, METABALLS_DEFAULTS.speed, setMetaballsSpeed),
+			numParam('radiusMin', metaballsRadiusMin, METABALLS_DEFAULTS.radiusMin, setMetaballsRadiusMin),
+			numParam('radiusMax', metaballsRadiusMax, METABALLS_DEFAULTS.radiusMax, setMetaballsRadiusMax),
+			numParam('intensity', metaballsIntensity, METABALLS_DEFAULTS.intensity, setMetaballsIntensity),
+			numParam('aspectY', metaballsAspectY, METABALLS_DEFAULTS.aspectY, setMetaballsAspectY),
+			strParam('fgColor', metaballsFgColor, METABALLS_DEFAULTS.fgColor, setMetaballsFgColor),
+			strParam('bgColor', metaballsBgColor, METABALLS_DEFAULTS.bgColor, setMetaballsBgColor),
+			strParam('chars', metaballsChars, METABALLS_DEFAULTS.chars, setMetaballsChars),
+		],
+		matrix: [
+			numParam('speed', matrixSpeed, MATRIX_DEFAULTS.speed, setMatrixSpeed),
+			numParam('density', matrixDensity, MATRIX_DEFAULTS.density, setMatrixDensity),
+			numParam('trailLength', matrixTrailLength, MATRIX_DEFAULTS.trailLength, setMatrixTrailLength),
+			strParam('headColor', matrixHeadColor, MATRIX_DEFAULTS.headColor, setMatrixHeadColor),
+			strParam('trailColor', matrixTrailColor, MATRIX_DEFAULTS.trailColor, setMatrixTrailColor),
+			strParam('bgColor', matrixBgColor, MATRIX_DEFAULTS.bgColor, setMatrixBgColor),
+			strParam('chars', matrixChars, MATRIX_DEFAULTS.chars, setMatrixChars),
+			numParam('seed', matrixSeed, MATRIX_DEFAULTS.seed, setMatrixSeed),
+		],
+		starfield: [
+			numParam('stars', starfieldStars, STARFIELD_DEFAULTS.stars, setStarfieldStars),
+			numParam('speed', starfieldSpeed, STARFIELD_DEFAULTS.speed, setStarfieldSpeed),
+			strParam('fgColor', starfieldFgColor, STARFIELD_DEFAULTS.fgColor, setStarfieldFgColor),
+			strParam('bgColor', starfieldBgColor, STARFIELD_DEFAULTS.bgColor, setStarfieldBgColor),
+			strParam('chars', starfieldChars, STARFIELD_DEFAULTS.chars, setStarfieldChars),
+			numParam('seed', starfieldSeed, STARFIELD_DEFAULTS.seed, setStarfieldSeed),
+			boolParam('streaks', starfieldStreaks, STARFIELD_DEFAULTS.streaks, setStarfieldStreaks),
+		],
+		tunnel: [
+			numParam('speed', tunnelSpeed, TUNNEL_DEFAULTS.speed, setTunnelSpeed),
+			numParam('rotationSpeed', tunnelRotationSpeed, TUNNEL_DEFAULTS.rotationSpeed, setTunnelRotationSpeed),
+			numParam('tiles', tunnelTiles, TUNNEL_DEFAULTS.tiles, setTunnelTiles),
+			strParam('fgColor', tunnelFgColor, TUNNEL_DEFAULTS.fgColor, setTunnelFgColor),
+			strParam('bgColor', tunnelBgColor, TUNNEL_DEFAULTS.bgColor, setTunnelBgColor),
+			strParam('chars', tunnelChars, TUNNEL_DEFAULTS.chars, setTunnelChars),
+			numParam('aspectY', tunnelAspectY, TUNNEL_DEFAULTS.aspectY, setTunnelAspectY),
+		],
+		gameOfLife: [
+			numParam('density', lifeDensity, GAME_OF_LIFE_DEFAULTS.density, setLifeDensity),
+			strParam('fgColor', lifeFgColor, GAME_OF_LIFE_DEFAULTS.fgColor, setLifeFgColor),
+			strParam('bgColor', lifeBgColor, GAME_OF_LIFE_DEFAULTS.bgColor, setLifeBgColor),
+			numParam('seed', lifeSeed, GAME_OF_LIFE_DEFAULTS.seed, setLifeSeed),
+			boolParam('autoSeed', lifeAutoSeed, GAME_OF_LIFE_DEFAULTS.autoSeed, setLifeAutoSeed),
+			numParam('autoSeedThreshold', lifeAutoSeedThreshold, GAME_OF_LIFE_DEFAULTS.autoSeedThreshold, setLifeAutoSeedThreshold),
+		],
+		waterRipple: [
+			numParam('damping', rippleDamping, WATER_RIPPLE_DEFAULTS.damping, setRippleDamping),
+			numParam('dropFrequency', rippleDropFrequency, WATER_RIPPLE_DEFAULTS.dropFrequency, setRippleDropFrequency),
+			numParam('dropStrength', rippleDropStrength, WATER_RIPPLE_DEFAULTS.dropStrength, setRippleDropStrength),
+			strParam('fgColor', rippleFgColor, WATER_RIPPLE_DEFAULTS.fgColor, setRippleFgColor),
+			strParam('bgColor', rippleBgColor, WATER_RIPPLE_DEFAULTS.bgColor, setRippleBgColor),
+			strParam('chars', rippleChars, WATER_RIPPLE_DEFAULTS.chars, setRippleChars),
+			numParam('seed', rippleSeed, WATER_RIPPLE_DEFAULTS.seed, setRippleSeed),
+		],
+		mandelbrot: [
+			numParam('maxIter', mandelbrotMaxIter, MANDELBROT_DEFAULTS.maxIter, setMandelbrotMaxIter),
+			numParam('zoomSpeed', mandelbrotZoomSpeed, MANDELBROT_DEFAULTS.zoomSpeed, setMandelbrotZoomSpeed),
+			numParam('zoomX', mandelbrotZoomX, MANDELBROT_DEFAULTS.zoomX, setMandelbrotZoomX),
+			numParam('zoomY', mandelbrotZoomY, MANDELBROT_DEFAULTS.zoomY, setMandelbrotZoomY),
+			numParam('initialZoom', mandelbrotInitialZoom, MANDELBROT_DEFAULTS.initialZoom, setMandelbrotInitialZoom),
+			strParam('fgColor', mandelbrotFgColor, MANDELBROT_DEFAULTS.fgColor, setMandelbrotFgColor),
+			strParam('bgColor', mandelbrotBgColor, MANDELBROT_DEFAULTS.bgColor, setMandelbrotBgColor),
+			strParam('chars', mandelbrotChars, MANDELBROT_DEFAULTS.chars, setMandelbrotChars),
+			numParam('aspectY', mandelbrotAspectY, MANDELBROT_DEFAULTS.aspectY, setMandelbrotAspectY),
+			strParam('colorMode', mandelbrotColorMode, MANDELBROT_DEFAULTS.colorMode, setMandelbrotColorMode),
+			boolParam('shapeMode', mandelbrotShapeMode, false, setMandelbrotShapeMode),
+		],
+		copperBars: [
+			numParam('barCount', copperBarCount, COPPER_BARS_DEFAULTS.barCount, setCopperBarCount),
+			numParam('barHeight', copperBarHeight, COPPER_BARS_DEFAULTS.barHeight, setCopperBarHeight),
+			numParam('speed', copperSpeed, COPPER_BARS_DEFAULTS.speed, setCopperSpeed),
+			strParam('bgColor', copperBgColor, COPPER_BARS_DEFAULTS.bgColor, setCopperBgColor),
+			strParam('chars', copperChars, COPPER_BARS_DEFAULTS.chars, setCopperChars),
+			numParam('seed', copperSeed, COPPER_BARS_DEFAULTS.seed, setCopperSeed),
+		],
+		crtStatic: [
+			numParam('signalStrength', crtSignalStrength, CRT_STATIC_DEFAULTS.signalStrength, setCrtSignalStrength),
+			numParam('scanlineIntensity', crtScanlineIntensity, CRT_STATIC_DEFAULTS.scanlineIntensity, setCrtScanlineIntensity),
+			numParam('tearFrequency', crtTearFrequency, CRT_STATIC_DEFAULTS.tearFrequency, setCrtTearFrequency),
+			numParam('rollingBarSpeed', crtRollingBarSpeed, CRT_STATIC_DEFAULTS.rollingBarSpeed, setCrtRollingBarSpeed),
+			boolParam('vhsMode', crtVhsMode, CRT_STATIC_DEFAULTS.vhsMode, setCrtVhsMode),
+			strParam('bgColor', crtBgColor, CRT_STATIC_DEFAULTS.bgColor, setCrtBgColor),
+			strParam('chars', crtChars, CRT_STATIC_DEFAULTS.chars, setCrtChars),
+			numParam('seed', crtSeed, CRT_STATIC_DEFAULTS.seed, setCrtSeed),
+		],
+		auroraBorealis: [
+			numParam('curtainCount', auroraCurtainCount, AURORA_BOREALIS_DEFAULTS.curtainCount, setAuroraCurtainCount),
+			numParam('speed', auroraSpeed, AURORA_BOREALIS_DEFAULTS.speed, setAuroraSpeed),
+			numParam('intensity', auroraIntensity, AURORA_BOREALIS_DEFAULTS.intensity, setAuroraIntensity),
+			strParam('bgColor', auroraBgColor, AURORA_BOREALIS_DEFAULTS.bgColor, setAuroraBgColor),
+			strParam('chars', auroraChars, AURORA_BOREALIS_DEFAULTS.chars, setAuroraChars),
+			numParam('seed', auroraSeed, AURORA_BOREALIS_DEFAULTS.seed, setAuroraSeed),
+		],
+		reactionDiffusion: [
+			numParam('feedRate', rdFeedRate, REACTION_DIFFUSION_DEFAULTS.feedRate, setRdFeedRate),
+			numParam('killRate', rdKillRate, REACTION_DIFFUSION_DEFAULTS.killRate, setRdKillRate),
+			numParam('diffusionU', rdDiffusionU, REACTION_DIFFUSION_DEFAULTS.diffusionU, setRdDiffusionU),
+			numParam('diffusionV', rdDiffusionV, REACTION_DIFFUSION_DEFAULTS.diffusionV, setRdDiffusionV),
+			numParam('stepsPerFrame', rdStepsPerFrame, REACTION_DIFFUSION_DEFAULTS.stepsPerFrame, setRdStepsPerFrame),
+			strParam('colorMode', rdColorMode, REACTION_DIFFUSION_DEFAULTS.colorMode, setRdColorMode),
+			strParam('fgColor', rdFgColor, REACTION_DIFFUSION_DEFAULTS.fgColor, setRdFgColor),
+			strParam('bgColor', rdBgColor, REACTION_DIFFUSION_DEFAULTS.bgColor, setRdBgColor),
+			strParam('chars', rdChars, REACTION_DIFFUSION_DEFAULTS.chars, setRdChars),
+			numParam('seed', rdSeed, REACTION_DIFFUSION_DEFAULTS.seed, setRdSeed),
+		],
+		terrainFlyover: [
+			numParam('scrollSpeed', terrainScrollSpeed, TERRAIN_FLYOVER_DEFAULTS.scrollSpeed, setTerrainScrollSpeed),
+			numParam('heightScale', terrainHeightScale, TERRAIN_FLYOVER_DEFAULTS.heightScale, setTerrainHeightScale),
+			numParam('fogDistance', terrainFogDistance, TERRAIN_FLYOVER_DEFAULTS.fogDistance, setTerrainFogDistance),
+			strParam('colorMode', terrainColorMode, TERRAIN_FLYOVER_DEFAULTS.colorMode, setTerrainColorMode),
+			strParam('fgColor', terrainFgColor, TERRAIN_FLYOVER_DEFAULTS.fgColor, setTerrainFgColor),
+			strParam('bgColor', terrainBgColor, TERRAIN_FLYOVER_DEFAULTS.bgColor, setTerrainBgColor),
+			strParam('skyColor', terrainSkyColor, TERRAIN_FLYOVER_DEFAULTS.skyColor, setTerrainSkyColor),
+			strParam('chars', terrainChars, TERRAIN_FLYOVER_DEFAULTS.chars, setTerrainChars),
+			numParam('seed', terrainSeed, TERRAIN_FLYOVER_DEFAULTS.seed, setTerrainSeed),
+		],
+		rotozoomer: [
+			numParam('rotationSpeed', rotoRotationSpeed, ROTOZOOMER_DEFAULTS.rotationSpeed, setRotoRotationSpeed),
+			numParam('zoomSpeed', rotoZoomSpeed, ROTOZOOMER_DEFAULTS.zoomSpeed, setRotoZoomSpeed),
+			numParam('baseZoom', rotoBaseZoom, ROTOZOOMER_DEFAULTS.baseZoom, setRotoBaseZoom),
+			strParam('pattern', rotoPattern, ROTOZOOMER_DEFAULTS.pattern, setRotoPattern),
+			strParam('bgColor', rotoBgColor, ROTOZOOMER_DEFAULTS.bgColor, setRotoBgColor),
+		],
+		moire: [
+			numParam('ringWidth', moireRingWidth, MOIRE_DEFAULTS.ringWidth, setMoireRingWidth),
+			numParam('speed1', moireSpeed1, MOIRE_DEFAULTS.speed1, setMoireSpeed1),
+			numParam('speed2', moireSpeed2, MOIRE_DEFAULTS.speed2, setMoireSpeed2),
+			numParam('paletteSpeed', moirePaletteSpeed, MOIRE_DEFAULTS.paletteSpeed, setMoirePaletteSpeed),
+			strParam('bgColor', moireBgColor, MOIRE_DEFAULTS.bgColor, setMoireBgColor),
+		],
+		kefrensBars: [
+			numParam('barWidth', kefrensBarWidth, KEFRENS_BARS_DEFAULTS.barWidth, setKefrensBarWidth),
+			numParam('hueSpeed', kefrensHueSpeed, KEFRENS_BARS_DEFAULTS.hueSpeed, setKefrensHueSpeed),
+			numParam('hueRowStep', kefrensHueRowStep, KEFRENS_BARS_DEFAULTS.hueRowStep, setKefrensHueRowStep),
+			strParam('bgColor', kefrensBgColor, KEFRENS_BARS_DEFAULTS.bgColor, setKefrensBgColor),
+			strParam('chars', kefrensChars, KEFRENS_BARS_DEFAULTS.chars, setKefrensChars),
+		],
+		twister: [
+			numParam('rotationSpeed', twisterRotationSpeed, TWISTER_DEFAULTS.rotationSpeed, setTwisterRotationSpeed),
+			numParam('waveFreq', twisterWaveFreq, TWISTER_DEFAULTS.waveFreq, setTwisterWaveFreq),
+			numParam('waveSpeed', twisterWaveSpeed, TWISTER_DEFAULTS.waveSpeed, setTwisterWaveSpeed),
+			numParam('waveDepth', twisterWaveDepth, TWISTER_DEFAULTS.waveDepth, setTwisterWaveDepth),
+			strParam('bgColor', twisterBgColor, TWISTER_DEFAULTS.bgColor, setTwisterBgColor),
+		],
+		sineScroller: [
+			strParam('text', scrollerText, SINE_SCROLLER_DEFAULTS.text, setScrollerText),
+			numParam('speed', scrollerSpeed, SINE_SCROLLER_DEFAULTS.speed, setScrollerSpeed),
+			numParam('amplitude', scrollerAmplitude, SINE_SCROLLER_DEFAULTS.amplitude, setScrollerAmplitude),
+			numParam('waveSpeed', scrollerWaveSpeed, SINE_SCROLLER_DEFAULTS.waveSpeed, setScrollerWaveSpeed),
+			strParam('fgColor', scrollerFgColor, SINE_SCROLLER_DEFAULTS.fgColor, setScrollerFgColor),
+			strParam('bgColor', scrollerBgColor, SINE_SCROLLER_DEFAULTS.bgColor, setScrollerBgColor),
+		],
+		boingBall: [
+			numParam('scale', boingScale, BOING_BALL_DEFAULTS.scale, setBoingScale),
+			numParam('bounceSpeed', boingBounceSpeed, BOING_BALL_DEFAULTS.bounceSpeed, setBoingBounceSpeed),
+			numParam('driftSpeed', boingDriftSpeed, BOING_BALL_DEFAULTS.driftSpeed, setBoingDriftSpeed),
+			numParam('checkerDensity', boingCheckerDensity, BOING_BALL_DEFAULTS.checkerDensity, setBoingCheckerDensity),
+			strParam('ballRedColor', boingBallRedColor, BOING_BALL_DEFAULTS.ballRedColor, setBoingBallRedColor),
+			strParam('bgColor', boingBgColor, BOING_BALL_DEFAULTS.bgColor, setBoingBgColor),
+		],
+		cyclicAutomaton: [
+			numParam('states', cyclicStates, CYCLIC_AUTOMATON_DEFAULTS.states, setCyclicStates),
+			numParam('threshold', cyclicThreshold, CYCLIC_AUTOMATON_DEFAULTS.threshold, setCyclicThreshold),
+			strParam('neighborhood', cyclicNeighborhood, CYCLIC_AUTOMATON_DEFAULTS.neighborhood, setCyclicNeighborhood),
+			numParam('saturation', cyclicSaturation, CYCLIC_AUTOMATON_DEFAULTS.saturation, setCyclicSaturation),
+			numParam('lightness', cyclicLightness, CYCLIC_AUTOMATON_DEFAULTS.lightness, setCyclicLightness),
+			numParam('seed', cyclicSeed, CYCLIC_AUTOMATON_DEFAULTS.seed, setCyclicSeed),
+		],
+		fallingSand: [
+			numParam('spoutCount', sandSpoutCount, FALLING_SAND_DEFAULTS.spoutCount, setSandSpoutCount),
+			numParam('spoutRate', sandSpoutRate, FALLING_SAND_DEFAULTS.spoutRate, setSandSpoutRate),
+			numParam('drainOpenThreshold', sandDrainOpenThreshold, FALLING_SAND_DEFAULTS.drainOpenThreshold, setSandDrainOpenThreshold),
+			strParam('wallColor', sandWallColor, FALLING_SAND_DEFAULTS.wallColor, setSandWallColor),
+			strParam('bgColor', sandBgColor, FALLING_SAND_DEFAULTS.bgColor, setSandBgColor),
+			numParam('seed', sandSeed, FALLING_SAND_DEFAULTS.seed, setSandSeed),
+		],
+		bumpMapping: [
+			numParam('noiseScale', bumpNoiseScale, BUMP_MAPPING_DEFAULTS.noiseScale, setBumpNoiseScale),
+			numParam('orbitSpeed', bumpOrbitSpeed, BUMP_MAPPING_DEFAULTS.orbitSpeed, setBumpOrbitSpeed),
+			numParam('lightHeight', bumpLightHeight, BUMP_MAPPING_DEFAULTS.lightHeight, setBumpLightHeight),
+			numParam('bumpStrength', bumpBumpStrength, BUMP_MAPPING_DEFAULTS.bumpStrength, setBumpBumpStrength),
+			numParam('specularPower', bumpSpecularPower, BUMP_MAPPING_DEFAULTS.specularPower, setBumpSpecularPower),
+			strParam('bgColor', bumpBgColor, BUMP_MAPPING_DEFAULTS.bgColor, setBumpBgColor),
+		],
+		julia: [
+			numParam('maxIter', juliaMaxIter, JULIA_DEFAULTS.maxIter, setJuliaMaxIter),
+			numParam('morphSpeed', juliaMorphSpeed, JULIA_DEFAULTS.morphSpeed, setJuliaMorphSpeed),
+			numParam('radius', juliaRadius, JULIA_DEFAULTS.radius, setJuliaRadius),
+			strParam('colorMode', juliaColorMode, JULIA_DEFAULTS.colorMode, setJuliaColorMode),
+			strParam('fgColor', juliaFgColor, JULIA_DEFAULTS.fgColor, setJuliaFgColor),
+			strParam('bgColor', juliaBgColor, JULIA_DEFAULTS.bgColor, setJuliaBgColor),
+		],
+		boids: [
+			numParam('count', boidsCount, BOIDS_DEFAULTS.count, setBoidsCount),
+			numParam('sepWeight', boidsSepWeight, BOIDS_DEFAULTS.sepWeight, setBoidsSepWeight),
+			numParam('alignWeight', boidsAlignWeight, BOIDS_DEFAULTS.alignWeight, setBoidsAlignWeight),
+			numParam('cohWeight', boidsCohWeight, BOIDS_DEFAULTS.cohWeight, setBoidsCohWeight),
+			strParam('headColor', boidsHeadColor, BOIDS_DEFAULTS.headColor, setBoidsHeadColor),
+			strParam('bgColor', boidsBgColor, BOIDS_DEFAULTS.bgColor, setBoidsBgColor),
+		],
+	}
+
+	// Setters are stable, so a ref keeps the mount/shuffle handlers off the render-scoped
+	// spec without re-subscribing every keystroke.
+	const urlParamsRef = useRef(urlParams)
+	urlParamsRef.current = urlParams
+
+	// Hydrate state from the query string once, after mount. generatorType is already
+	// seeded from the URL by useState, so only its options and the display/FX flags remain.
+	useEffect(() => {
+		const type = parseGeneratorType(initialParams.get('g')) ?? DEFAULT_GENERATOR
+		for (const param of urlParamsRef.current[type]) {
+			const raw = initialParams.get(param.key)
+			if (raw !== null) param.apply(raw)
+		}
+		const rawCols = initialParams.get('cols')
+		if (rawCols !== null) {
+			const cols = clampInt(Number(rawCols), COLUMNS_RANGE.min, COLUMNS_RANGE.max)
+			if (cols !== null) setColumns(cols)
+		}
+		const rawRows = initialParams.get('rows')
+		if (rawRows !== null) {
+			const rws = clampInt(Number(rawRows), ROWS_RANGE.min, ROWS_RANGE.max)
+			if (rws !== null) setRows(rws)
+		}
+		const rawFps = initialParams.get('fps')
+		if (rawFps !== null) {
+			const f = clampInt(Number(rawFps), FPS_RANGE.min, FPS_RANGE.max)
+			if (f !== null) setFps(f)
+		}
+		if (initialParams.get('perf') !== null) setShowPerformanceOverlay(initialParams.get('perf') === '1')
+		const fx = initialParams.get('fx')
+		if (fx !== null) {
+			const active = fx.split(',')
+			setFxLens(active.includes('lens'))
+			setFxScanline(active.includes('scanline'))
+			setFxVhs(active.includes('vhs'))
+		}
+		setUrlReady(true)
+	}, [initialParams])
+
+	const search = (() => {
+		const params = new URLSearchParams()
+		if (generatorType !== DEFAULT_GENERATOR) params.set('g', generatorType)
+		for (const param of urlParams[generatorType]) {
+			if (param.value !== param.def) params.set(param.key, serializeParam(param.value))
+		}
+		if (columns !== VIRTUAL_DISPLAY_DEFAULTS.columns) params.set('cols', String(columns))
+		if (rows !== VIRTUAL_DISPLAY_DEFAULTS.rows) params.set('rows', String(rows))
+		if (fps !== VIRTUAL_DISPLAY_DEFAULTS.fps) params.set('fps', String(fps))
+		if (showPerformanceOverlay) params.set('perf', '1')
+		const fx = [fxLens ? 'lens' : '', fxScanline ? 'scanline' : '', fxVhs ? 'vhs' : ''].filter(Boolean)
+		if (fx.length) params.set('fx', fx.join(','))
+		return params.toString()
+	})()
+
+	// Debounced so a slider drag leaves one URL behind, not sixty. replaceState keeps
+	// Next's own history entry (and its router state) intact.
+	useEffect(() => {
+		if (!urlReady) return
+		const timer = window.setTimeout(() => {
+			window.history.replaceState(window.history.state, '', search ? `${pathname}?${search}` : pathname)
+		}, 250)
+		return () => window.clearTimeout(timer)
+	}, [search, pathname, urlReady])
+
+	// Stable per-tile click handlers: GeneratorThumb is memoized, and a fresh closure
+	// every render would re-render all 27 live previews on every slider tick.
+	const selectHandlers = useMemo(() => {
+		const map = {} as Record<GeneratorType, () => void>
+		for (const tab of TABS) map[tab.key] = () => setGeneratorType(tab.key)
+		return map
+	}, [])
+
+	const shuffleGenerator = useCallback(() => {
+		const pool = TABS.filter((tab) => tab.key !== generatorType)
+		const next = pool[Math.floor(Math.random() * pool.length)].key
+		// Land on the generator's own defaults so the shared URL stays clean.
+		for (const param of urlParamsRef.current[next]) param.apply(serializeParam(param.def))
+		setGeneratorType(next)
+	}, [generatorType])
 
 	// Post FX: composed left-to-right (lens -> scanline -> vhs) onto whichever generator is
 	// currently active. Memoized separately from `frameGenerator` so toggling an effect alone
@@ -937,14 +1408,58 @@ export default function GeneratorsPage() {
 				<p>Procedural frame generators rendered with AnsiVirtualDisplay</p>
 			</div>
 			<div className="playground">
-				<div className="playground-canvas">
-					<AnsiVirtualDisplay
-						columns={columns}
-						rows={rows}
-						fps={fps}
-						frameGenerator={composedGenerator}
-						showPerformanceOverlay={showPerformanceOverlay}
-					/>
+				{/* Deliberately not `.playground-canvas`: that class forces `max-width:100%`
+				    on every descendant canvas, which fights Stage's and the thumbnails' own
+				    pixel-exact scaling. */}
+				<div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, overflow: 'hidden', background: 'var(--bg-root)' }}>
+					<div className="stack-8">
+						<div className="wrap-row" style={{ justifyContent: 'space-between' }}>
+							<span className="section-title" style={{ margin: 0 }}>
+								Generator — <span style={{ color: 'var(--accent)' }}>{activeLabel}</span>
+							</span>
+							<span className="wrap-row">
+								<button type="button" className="btn-sm" onClick={shuffleGenerator} title="Jump to a random generator">
+									🎲 Shuffle
+								</button>
+								<button
+									type="button"
+									className="btn-sm"
+									onClick={() => setPickerExpanded((v) => !v)}
+									aria-expanded={pickerExpanded}
+								>
+									{pickerExpanded ? 'Collapse' : `Browse all ${TABS.length}`}
+								</button>
+							</span>
+						</div>
+						<div
+							className={pickerExpanded ? 'gen-thumb-grid' : 'scroll-x'}
+							style={pickerExpanded ? undefined : { display: 'flex', flexWrap: 'nowrap', gap: 12, paddingBottom: 4 }}
+						>
+							{THUMB_TILES.map((tile) => (
+								<div key={tile.key} style={pickerExpanded ? undefined : { flex: '0 0 auto' }}>
+									<GeneratorThumb
+										generator={tile.generator}
+										label={tile.label}
+										selected={tile.key === generatorType}
+										onClick={selectHandlers[tile.key]}
+										columns={THUMB_COLUMNS}
+										rows={THUMB_ROWS}
+										fps={THUMB_FPS}
+										width={THUMB_WIDTH}
+									/>
+								</div>
+							))}
+						</div>
+					</div>
+					<Stage style={{ ['--stage-height' as string]: 'clamp(280px, calc(100vh - 300px), 900px)' } as React.CSSProperties}>
+						<AnsiVirtualDisplay
+							columns={columns}
+							rows={rows}
+							fps={fps}
+							frameGenerator={composedGenerator}
+							showPerformanceOverlay={showPerformanceOverlay}
+						/>
+					</Stage>
 				</div>
 				<div className="controls-panel">
 					<ControlGroup label="Generator">

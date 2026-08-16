@@ -13,6 +13,9 @@ const NAV_LINKS = [
 	{ href: '/shape-converter', label: 'Shape Converter' },
 ]
 
+const GITHUB_URL = 'https://github.com/benhagen/react-ansiart'
+const NPM_URL = 'https://www.npmjs.com/package/react-ansiart'
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 	const pathname = usePathname()
 
@@ -34,6 +37,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 					</div>
 				</nav>
 				<div className="page-body">{children}</div>
+				<footer className="site-footer" id="site-footer">
+					<div className="site-footer-links">
+						<a href={GITHUB_URL} target="_blank" rel="noreferrer noopener">
+							GitHub
+						</a>
+						<span className="site-footer-sep" aria-hidden="true">
+							/
+						</span>
+						<a href={NPM_URL} target="_blank" rel="noreferrer noopener">
+							npm
+						</a>
+					</div>
+					<p className="site-footer-note">
+						🤖❤️ Built by human-assisted and curated AI — for the love of ANSI art.
+					</p>
+				</footer>
 			</body>
 		</html>
 	)
