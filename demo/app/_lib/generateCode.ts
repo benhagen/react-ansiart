@@ -64,7 +64,8 @@ export function generateGeneratorCode(
 	displayProps: Record<string, unknown>,
 	displayDefaults: Record<string, unknown>,
 	generatorOptions: Record<string, unknown>,
-	generatorDefaults: Record<string, unknown>
+	generatorDefaults: Record<string, unknown>,
+	effects?: { lens: boolean; scanline: boolean; vhs: boolean }
 ): string {
 	const generatorMap: Record<string, { fn: string; type: string }> = {
 		perlinPlasma: { fn: 'generateAsciiPerlinPlasmaFrame', type: 'AsciiPerlinPlasmaOptions' },
@@ -83,6 +84,17 @@ export function generateGeneratorCode(
 		auroraBorealis: { fn: 'generateAsciiAuroraBorealisFrame', type: 'AsciiAuroraBorealisOptions' },
 		reactionDiffusion: { fn: 'generateAsciiReactionDiffusionFrame', type: 'AsciiReactionDiffusionOptions' },
 		terrainFlyover: { fn: 'generateAsciiTerrainFlyoverFrame', type: 'AsciiTerrainFlyoverOptions' },
+		rotozoomer: { fn: 'generateAsciiRotozoomerFrame', type: 'AsciiRotozoomerOptions' },
+		moire: { fn: 'generateAsciiMoireFrame', type: 'AsciiMoireOptions' },
+		kefrensBars: { fn: 'generateAsciiKefrensBarsFrame', type: 'AsciiKefrensBarsOptions' },
+		twister: { fn: 'generateAsciiTwisterFrame', type: 'AsciiTwisterOptions' },
+		sineScroller: { fn: 'generateAsciiSineScrollerFrame', type: 'AsciiSineScrollerOptions' },
+		boingBall: { fn: 'generateAsciiBoingBallFrame', type: 'AsciiBoingBallOptions' },
+		cyclicAutomaton: { fn: 'generateAsciiCyclicAutomatonFrame', type: 'AsciiCyclicAutomatonOptions' },
+		fallingSand: { fn: 'generateAsciiFallingSandFrame', type: 'AsciiFallingSandOptions' },
+		bumpMapping: { fn: 'generateAsciiBumpMappingFrame', type: 'AsciiBumpMappingOptions' },
+		julia: { fn: 'generateAsciiJuliaFrame', type: 'AsciiJuliaOptions' },
+		boids: { fn: 'generateAsciiBoidsFrame', type: 'AsciiBoidsOptions' },
 	}
 
 	const gen = generatorMap[generatorType]
@@ -105,16 +117,27 @@ export function generateGeneratorCode(
 	const displayAttrs = propsToAttributes(displayProps, displayDefaults)
 	const displayAttrStr = displayAttrs.length > 0 ? `\n    ${displayAttrs.join('\n    ')}\n    ` : ' '
 
+	const effectFactories: string[] = []
+	if (effects?.lens) effectFactories.push('createLensEffect()')
+	if (effects?.scanline) effectFactories.push('createScanlineEffect()')
+	if (effects?.vhs) effectFactories.push('createVhsTrackingEffect()')
+	const hasEffects = effectFactories.length > 0
+
 	const imports = [gen.fn, 'AnsiVirtualDisplay']
 	if (optionAttrs.length > 0) imports.push(gen.type)
+	if (hasEffects) imports.push('composeAnsiEffects', ...effectFactories.map((f) => f.slice(0, -2)))
+
+	const baseGenerator = `(frame: number, cols: number, rows: number) =>\n      ${gen.fn}(frame, cols, rows${optionsArg})`
+	const generatorExpr = hasEffects
+		? `composeAnsiEffects(\n      ${baseGenerator},\n      ${effectFactories.join(', ')}\n    )`
+		: baseGenerator
 
 	return `import { useMemo } from 'react'
 import { ${imports.join(', ')} } from 'react-ansiart'
 
 function MyComponent() {
   ${optionsBlock}const frameGenerator = useMemo(() => {
-    return (frame: number, cols: number, rows: number) =>
-      ${gen.fn}(frame, cols, rows${optionsArg})
+    return ${generatorExpr}
   }, [])
 
   return (
