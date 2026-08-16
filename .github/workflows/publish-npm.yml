@@ -55,8 +55,10 @@ jobs:
           node-version: '22'
 
       # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 22 bundles npm 10.
+      # Pinned exactly: this job holds OIDC publish rights, so the npm version
+      # it runs must be a deliberate choice, not whatever @latest resolves to.
       - name: Update npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.0.2
 
       - name: Install dependencies
         run: npm ci
