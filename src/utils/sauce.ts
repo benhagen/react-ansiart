@@ -19,8 +19,18 @@ export type SauceMetadata = {
 	group: string
 	/** Date in YYYYMMDD format */
 	date: string
-	/** Original file size */
+	/**
+	 * Size of the artwork data, computed from the input: total length minus the
+	 * SAUCE trailer, any comment block and the EOF marker.
+	 * See {@link SauceMetadata.declaredFileSize} for the value stored in the record.
+	 */
 	fileSize: number
+	/**
+	 * FileSize field as stored in the SAUCE record (offset 90, 4 bytes LE).
+	 * Normally equal to {@link SauceMetadata.fileSize}, but it is writer-supplied
+	 * and may be 0 or stale.
+	 */
+	declaredFileSize: number
 	/** Data type (0=text, 1=character art) */
 	dataType: number
 	/** File type (0=ASCII, 1=ANSI, 2=Ansimation, etc.) */
@@ -58,6 +68,37 @@ const COMMENT_ID_N = 0x4e // 'N'
 const COMMENT_ID_T = 0x54 // 'T'
 export const COMMENT_SIZE = 64
 export const COMMENT_ID_SIZE = 5 // "COMNT"
+
+// ----------------------------------------------------------------------------
+// SAUCE record field offsets, relative to the first byte of the 128-byte record.
+// Layout per the SAUCE 00 specification:
+//   ID(5) Version(2) Title(35) Author(20) Group(20) Date(8) FileSize(4, LE)
+//   DataType(1) FileType(1) TInfo1..TInfo4(2 each, LE) Comments(1) TFlags(1)
+//   TInfoS(22)  =  128 bytes
+// ----------------------------------------------------------------------------
+const OFFSET_ID = 0
+const SAUCE_ID_SIZE = 5
+const OFFSET_VERSION = 5
+const OFFSET_TITLE = 7
+const OFFSET_AUTHOR = 42
+const OFFSET_GROUP = 62
+const OFFSET_DATE = 82
+const OFFSET_FILE_SIZE = 90
+const OFFSET_DATA_TYPE = 94
+const OFFSET_FILE_TYPE = 95
+const OFFSET_TINFO1 = 96
+const OFFSET_TINFO2 = 98
+const OFFSET_TINFO3 = 100
+const OFFSET_TINFO4 = 102
+const OFFSET_COMMENTS = 104
+const OFFSET_TFLAGS = 105
+const OFFSET_TINFOS = 106
+const TINFOS_SIZE = 22
+const VERSION_SIZE = 2
+const TITLE_SIZE = 35
+const AUTHOR_SIZE = 20
+const GROUP_SIZE = 20
+const DATE_SIZE = 8
 
 /**
  * Check if bytes contain a SAUCE trailer
@@ -99,18 +140,8 @@ export function isSauceTrailer(bytes: Uint8Array): boolean {
 export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 	if (bytes.length < SAUCE_TRAILER_SIZE + 1) return undefined
 
-	// Find SAUCE position - check for EOF byte (0x1A) before SAUCE
-	let saucePos = bytes.length - SAUCE_TRAILER_SIZE
-	let hasEof = false
-
-	// Check if there's an EOF byte before SAUCE
-	if (bytes.length >= SAUCE_TRAILER_SIZE + 1) {
-		const eofPos = bytes.length - SAUCE_TRAILER_SIZE - 1
-		if (bytes[eofPos] === SAUCE_EOF) {
-			hasEof = true
-			saucePos = eofPos + 1
-		}
-	}
+	// The SAUCE record is always the final 128 bytes of the file
+	const saucePos = bytes.length - SAUCE_TRAILER_SIZE
 
 	// Verify SAUCE ID
 	if (
@@ -139,31 +170,39 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 			.trimEnd()
 	}
 
-	const id = readString(0, 5)
-	// Version is 2 bytes (e.g., "00" for version 0)
-	const version = bytes[saucePos + 5] // First byte is major version, second byte is minor (we'll just use first)
+	const id = readString(OFFSET_ID, SAUCE_ID_SIZE)
+	// Version is a 2-character ASCII field (e.g. "00" for version 0)
+	const versionText = readString(OFFSET_VERSION, VERSION_SIZE)
+	const parsedVersion = Number.parseInt(versionText, 10)
+	const version = Number.isNaN(parsedVersion) ? 0 : parsedVersion
 
-	const title = readString(7, 35) // Offset 7 (after 5-byte ID + 2-byte version)
-	const author = readString(42, 20) // Offset 42 (7 + 35)
-	const group = readString(62, 20) // Offset 62 (42 + 20)
-	const date = readString(82, 8) // Offset 82 (62 + 20)
+	const title = readString(OFFSET_TITLE, TITLE_SIZE)
+	const author = readString(OFFSET_AUTHOR, AUTHOR_SIZE)
+	const group = readString(OFFSET_GROUP, GROUP_SIZE)
+	const date = readString(OFFSET_DATE, DATE_SIZE)
 
+	// FileSize as recorded by the writer (4 bytes, little-endian)
+	const declaredFileSize = dataView.getUint32(OFFSET_FILE_SIZE, true)
 
-	const dataType = bytes[saucePos + 93]
-	const fileType = bytes[saucePos + 94]
+	const dataType = bytes[saucePos + OFFSET_DATA_TYPE]
+	const fileType = bytes[saucePos + OFFSET_FILE_TYPE]
 
-	const tInfo1 = dataView.getUint16(95, true) // Little-endian
-	const tInfo2 = dataView.getUint16(97, true) // Little-endian
-	const tInfo3 = dataView.getUint16(99, true) // UInt16, not byte!
-	const tInfo4 = dataView.getUint16(101, true) // UInt16, not byte!
+	const tInfo1 = dataView.getUint16(OFFSET_TINFO1, true) // Little-endian
+	const tInfo2 = dataView.getUint16(OFFSET_TINFO2, true) // Little-endian
+	const tInfo3 = dataView.getUint16(OFFSET_TINFO3, true) // UInt16, not byte!
+	const tInfo4 = dataView.getUint16(OFFSET_TINFO4, true) // UInt16, not byte!
 
-	const numComments = bytes[saucePos + 103] // Byte, not UInt16!
-	const tFlags = bytes[saucePos + 104]
+	const numComments = bytes[saucePos + OFFSET_COMMENTS] // Byte, not UInt16!
+	const tFlags = bytes[saucePos + OFFSET_TFLAGS]
 
-	// Read TInfoS (22 bytes, zero-terminated string) - offset 105 (103 + 1 + 1)
-	const tInfoSBytes = new Uint8Array(bytes.buffer, bytes.byteOffset + saucePos + 105, 22)
-	let tInfoSEnd = 22
-	for (let i = 0; i < 22; i++) {
+	// Read TInfoS (22 bytes, zero-terminated string)
+	const tInfoSBytes = new Uint8Array(
+		bytes.buffer,
+		bytes.byteOffset + saucePos + OFFSET_TINFOS,
+		TINFOS_SIZE
+	)
+	let tInfoSEnd = TINFOS_SIZE
+	for (let i = 0; i < TINFOS_SIZE; i++) {
 		if (tInfoSBytes[i] === 0) {
 			tInfoSEnd = i
 			break
@@ -171,10 +210,13 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 	}
 	const tInfoS = String.fromCharCode(...Array.from(tInfoSBytes.slice(0, tInfoSEnd)))
 
-	// Read comment lines - they come BEFORE the SAUCE header (with "COMNT" ID)
+	// Read comment lines - they come BEFORE the SAUCE record (with "COMNT" ID)
 	const commentLines: string[] = []
+	// Start of the artwork data's trailing metadata: the comment block when one is
+	// present and valid, otherwise the SAUCE record itself
+	let metadataStart = saucePos
 	if (numComments > 0) {
-		// Comments start before SAUCE header
+		// Comments start before the SAUCE record
 		// Position: saucePos - (numComments * COMMENT_SIZE) - COMMENT_ID_SIZE
 		const commentStart = saucePos - numComments * COMMENT_SIZE - COMMENT_ID_SIZE
 
@@ -187,6 +229,7 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 				bytes[commentStart + 3] === COMMENT_ID_N &&
 				bytes[commentStart + 4] === COMMENT_ID_T
 			) {
+				metadataStart = commentStart
 				// Read comments
 				for (let i = 0; i < numComments && i < 255; i++) {
 					const commentOffset = commentStart + COMMENT_ID_SIZE + i * COMMENT_SIZE
@@ -200,14 +243,11 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 		}
 	}
 
-	// Calculate actual file size (excluding SAUCE, comments, and EOF)
-	let actualFileSize = bytes.length - SAUCE_TRAILER_SIZE
-	if (numComments > 0) {
-		actualFileSize -= COMMENT_ID_SIZE + numComments * COMMENT_SIZE
-	}
-	if (hasEof) {
-		actualFileSize -= 1
-	}
+	// Calculate actual file size (excluding SAUCE, comments, and EOF).
+	// The EOF marker sits immediately before the comment block (when present),
+	// not immediately before the SAUCE record.
+	const hasEof = metadataStart > 0 && bytes[metadataStart - 1] === SAUCE_EOF
+	const actualFileSize = hasEof ? metadataStart - 1 : metadataStart
 
 	return {
 		id,
@@ -217,6 +257,7 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 		group,
 		date,
 		fileSize: actualFileSize,
+		declaredFileSize,
 		dataType,
 		fileType,
 		tInfo1,
@@ -228,6 +269,19 @@ export function parseSauce(bytes: Uint8Array): SauceMetadata | undefined {
 		tInfoS: tInfoS || undefined,
 		commentLines,
 	}
+}
+
+/**
+ * Number of trailing bytes that are SAUCE metadata rather than artwork data:
+ * the 128-byte record, any COMNT block and the EOF marker preceding them.
+ * Returns 0 when the input carries no SAUCE trailer.
+ * @param bytes - Full file bytes
+ * @returns Byte count to strip from the end before parsing
+ */
+export function getSauceStripSize(bytes: Uint8Array): number {
+	const sauce = parseSauce(bytes)
+	if (!sauce) return 0
+	return bytes.length - sauce.fileSize
 }
 
 function getFileTypeDescription(dataType: number, fileType: number): string {
