@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
-import { type BitmapFont, findFontDataOffset, renderGlyph } from './bitmapFont'
+import {
+	type BitmapFont,
+	findFontDataOffset,
+	normalizeGlyphColor,
+	normalizedColorCacheSize,
+	renderGlyph,
+} from './bitmapFont'
 
 // Minimal canvas stub. These tests cover allocation and cache bounds — the properties that
 // decide whether a truecolour generator churns canvas elements — not pixel output, which
@@ -15,12 +21,15 @@ type StubCanvas = {
 type StubContext = {
 	fillStyle: string
 	globalCompositeOperation: string
+	/** Every colour this context has painted with, in order. */
+	painted: string[]
 	fillRect: () => void
 	clearRect: () => void
 	drawImage: () => void
 }
 
 let canvasesCreated = 0
+let createdCanvases: StubCanvas[] = []
 let originalDocument: unknown
 
 function makeStubCanvas(): StubCanvas {
@@ -28,11 +37,16 @@ function makeStubCanvas(): StubCanvas {
 	const ctx: StubContext = {
 		fillStyle: '',
 		globalCompositeOperation: 'source-over',
-		fillRect: () => {},
+		painted: [],
+		fillRect: () => {
+			ctx.painted.push(ctx.fillStyle)
+		},
 		clearRect: () => {},
 		drawImage: () => {},
 	}
-	return { width: 0, height: 0, getContext: () => ctx }
+	const canvas: StubCanvas = { width: 0, height: 0, getContext: () => ctx }
+	createdCanvases.push(canvas)
+	return canvas
 }
 
 function makeFont(): BitmapFont {
@@ -51,6 +65,7 @@ function targetContext(): CanvasRenderingContext2D {
 
 beforeEach(() => {
 	canvasesCreated = 0
+	createdCanvases = []
 	originalDocument = (globalThis as { document?: unknown }).document
 	;(globalThis as { document?: unknown }).document = {
 		createElement: () => makeStubCanvas(),
@@ -105,8 +120,12 @@ describe('renderGlyph caching', () => {
 		// Far more distinct colours than the cache can hold. Each channel takes a different
 		// digit of `i` so every iteration is a genuinely new cache key — deriving all three
 		// from `i % 256` would silently repeat every 256 iterations and never fill the cache.
+		// Channels step by 8 so almost none of them collapse when truecolour normalisation
+		// snaps them to the 32-level ladder — 31 of the 32 values survive (144 and 152 both
+		// land on 148), which still leaves far more keys than the cap. Neighbouring values
+		// would collapse wholesale, which is the point of the ladder but wouldn't fill it.
 		const distinctColor = (i: number) =>
-			`rgb(${i % 256},${Math.floor(i / 256) % 256},${Math.floor(i / 65536) % 256})`
+			`rgb(${(i % 32) * 8},${(Math.floor(i / 32) % 32) * 8},${(Math.floor(i / 1024) % 32) * 8})`
 
 		for (let i = 0; i < 12000; i++) {
 			renderGlyph(ctx, font, i % 256, 0, 0, distinctColor(i), '#000000')
@@ -135,8 +154,10 @@ describe('renderGlyph caching', () => {
 		const ctx = targetContext()
 
 		// Push past the cap so the mask path is exercised, then hammer 256 char codes.
+		// Channels step by 8, which mostly survives the 32-level truecolour ladder (see above).
 		for (let i = 0; i < 5000; i++) {
-			renderGlyph(ctx, font, i % 256, 0, 0, `rgb(${i % 256},${i % 251},${i % 241})`, '#000000')
+			const color = `rgb(${(i % 32) * 8},${(Math.floor(i / 32) % 32) * 8},${(Math.floor(i / 1024) % 32) * 8})`
+			renderGlyph(ctx, font, i % 256, 0, 0, color, '#000000')
 		}
 		for (let pass = 0; pass < 3; pass++) {
 			for (let code = 0; code < 256; code++) {
@@ -145,6 +166,67 @@ describe('renderGlyph caching', () => {
 		}
 
 		assert.ok(font.glyphMaskCache!.size <= 256, 'mask cache must not exceed 256 entries')
+	})
+})
+
+// Truecolour callers key a new cache entry per cell per frame unless their colours are
+// snapped to a bounded ladder; once the cache is full every draw takes the slow mask-tint
+// path. The 32-level ladder moves any channel by at most 4/255.
+describe('truecolour normalisation', () => {
+	const LEVEL_STEP = 255 / 31
+	const onLadder = (v: number) => Math.round((Math.round((v * 31) / 255) * 255) / 31)
+
+	it('leaves non-rgb() colours untouched', () => {
+		for (const color of ['#ffffff', '#012345', 'white', 'transparent', 'rgba(1,2,3,0.5)', 'rgb(1, 2)']) {
+			assert.equal(normalizeGlyphColor(color), color)
+		}
+	})
+
+	it('snaps rgb() colours to the ladder, endpoints included', () => {
+		assert.equal(normalizeGlyphColor('rgb(0,0,0)'), 'rgb(0,0,0)')
+		assert.equal(normalizeGlyphColor('rgb(255,255,255)'), 'rgb(255,255,255)')
+		for (const v of [3, 17, 40, 99, 128, 200, 251]) {
+			const [r] = /rgb\((\d+),/.exec(normalizeGlyphColor(`rgb(${v},0,0)`))!.slice(1).map(Number)
+			assert.equal(r, onLadder(v))
+			assert.ok(Math.abs(r - v) <= LEVEL_STEP / 2 + 0.5, `${v} -> ${r} moved more than half a step`)
+		}
+	})
+
+	it('collapses colours in the same bucket to one cache entry and one painted colour', () => {
+		const font = makeFont()
+		const ctx = targetContext()
+
+		// 100 and 102 sit in the same 32-level bucket; 140 does not.
+		renderGlyph(ctx, font, 65, 0, 0, 'rgb(100,100,100)', '#000000')
+		const glyphCanvas = createdCanvases[createdCanvases.length - 1]
+		const firstPaint = glyphCanvas.getContext().painted
+		const allocationsAfterFirst = canvasesCreated
+
+		renderGlyph(ctx, font, 65, 0, 0, 'rgb(102,102,102)', '#000000')
+
+		assert.equal(font.glyphCache!.size, 1, 'same-bucket colours must share one cache entry')
+		assert.equal(canvasesCreated, allocationsAfterFirst, 'same-bucket colour must not allocate again')
+
+		// The painted colour must be the quantized one, otherwise a hit and a miss would
+		// render the same cell differently.
+		const expected = `rgb(${onLadder(100)},${onLadder(100)},${onLadder(100)})`
+		assert.equal(firstPaint[0], '#000000', 'background is painted first, unquantized')
+		assert.ok(firstPaint.slice(1).every((c) => c === expected), `glyph should be painted ${expected}`)
+		assert.equal(normalizeGlyphColor('rgb(102,102,102)'), expected)
+
+		renderGlyph(ctx, font, 65, 0, 0, 'rgb(140,140,140)', '#000000')
+		assert.equal(font.glyphCache!.size, 2, 'a different bucket must key its own entry')
+	})
+
+	it('bounds the raw -> quantized memo', () => {
+		for (let i = 0; i < 30000; i++) {
+			const color = `rgb(${i % 256},${Math.floor(i / 256) % 256},${Math.floor(i / 65536) % 256})`
+			assert.match(normalizeGlyphColor(color), /^rgb\(\d+,\d+,\d+\)$/)
+		}
+		assert.ok(normalizedColorCacheSize() <= 8192, `memo must stay bounded, got ${normalizedColorCacheSize()}`)
+
+		// Past the cap the memo stops growing but still returns correct results.
+		assert.equal(normalizeGlyphColor('rgb(100,100,100)'), `rgb(${onLadder(100)},${onLadder(100)},${onLadder(100)})`)
 	})
 })
 

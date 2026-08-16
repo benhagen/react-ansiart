@@ -87,6 +87,78 @@ export async function loadRawBitmapFont(url: string, width = 8, height = 16): Pr
  */
 const MAX_COLORED_GLYPHS = 4096
 
+/**
+ * Levels per channel that truecolour `rgb()` inputs are snapped to.
+ *
+ * The glyph cache keys on the exact colour string, so a caller emitting unquantized
+ * 24-bit colour mints a new key per cell per frame: the cache fills with keys that are
+ * never reused, and every later draw falls through to the (much slower) mask-tint path.
+ * Snapping to 32 levels per channel bounds the key space at 32^3 per character while
+ * moving any channel by at most 4/255, which is imperceptible.
+ *
+ * This is a safety net for arbitrary truecolour sources. Callers that emit colour on a
+ * coarser ladder of their own pass through unchanged only if their levels are drawn from
+ * *this* ladder — otherwise they are quantized a second time and drift by up to 3/255.
+ * The shape converter's `rgbLevels` picks its values from here for that reason.
+ */
+const TRUECOLOR_LEVELS = 32
+
+/** Nearest-level lookup for 0..255, endpoints included so 255 stays full-bright. */
+const TRUECOLOR_LUT = (() => {
+	const steps = TRUECOLOR_LEVELS - 1
+	const lut = new Uint8Array(256)
+	for (let v = 0; v < 256; v++) {
+		lut[v] = Math.round((Math.round((v * steps) / 255) * 255) / steps)
+	}
+	return lut
+})()
+
+/**
+ * Upper bound on remembered raw -> quantized colour strings.
+ *
+ * Normalising on every call (rather than only on a cache miss) is what makes the glyph
+ * cache effective: a miss-only normalisation would keep caching the raw key and re-parse
+ * it forever. The memo keeps the per-call cost at one Map lookup. Past the cap insertion
+ * stops and unseen colours are re-parsed each time — bounded memory, graceful slowdown.
+ */
+const MAX_NORMALIZED_COLORS = 8192
+
+const normalizedColors = new Map<string, string>()
+
+const RGB_PATTERN = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/
+
+/**
+ * Snap a CSS `rgb(r,g,b)` colour onto the {@link TRUECOLOR_LEVELS} ladder.
+ *
+ * Anything else — hex, named colours, `rgba()`, already-resolved DOS palette entries —
+ * is returned unchanged, so palette rendering is byte-identical to before.
+ *
+ * Exported for tests; callers should use {@link renderGlyph}.
+ */
+export function normalizeGlyphColor(color: string): string {
+	const memo = normalizedColors.get(color)
+	if (memo !== undefined) return memo
+	if (!color.startsWith('rgb(')) return color
+
+	const match = RGB_PATTERN.exec(color)
+	if (!match) return color
+
+	const r = TRUECOLOR_LUT[Math.min(255, +match[1])]
+	const g = TRUECOLOR_LUT[Math.min(255, +match[2])]
+	const b = TRUECOLOR_LUT[Math.min(255, +match[3])]
+	const quantized = `rgb(${r},${g},${b})`
+
+	if (normalizedColors.size < MAX_NORMALIZED_COLORS) {
+		normalizedColors.set(color, quantized)
+	}
+	return quantized
+}
+
+/** Current size of the raw -> quantized colour memo. Exported for tests. */
+export function normalizedColorCacheSize(): number {
+	return normalizedColors.size
+}
+
 /** Reusable scratch canvas for tinting glyph masks. One per document, not per cell. */
 let tintScratch: HTMLCanvasElement | null = null
 let tintScratchCtx: CanvasRenderingContext2D | null = null
@@ -141,12 +213,17 @@ export function renderGlyph(
 	charCode: number,
 	x: number,
 	y: number,
-	fgColor: string,
-	bgColor: string
+	rawFgColor: string,
+	rawBgColor: string
 ) {
 	if (!font.glyphCache) {
 		font.glyphCache = new Map()
 	}
+
+	// Truecolour inputs are snapped to a bounded ladder for both the key and the paint, so
+	// a cache hit and a cache miss render the same colour (see normalizeGlyphColor).
+	const fgColor = normalizeGlyphColor(rawFgColor)
+	const bgColor = normalizeGlyphColor(rawBgColor)
 
 	const cacheKey = `${charCode}:${fgColor}:${bgColor}`
 	const cached = font.glyphCache.get(cacheKey)

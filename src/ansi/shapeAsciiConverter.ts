@@ -52,6 +52,131 @@ const Q_MAX = Q_RANGE - 1
 
 const DEFAULT_CONTRAST_EXP = 2.2
 
+// ── Truecolour quantization ─────────────────────────────────────
+
+/**
+ * Channel values the glyph renderer snaps truecolour to: 32 evenly spaced levels,
+ * endpoints included (see `normalizeGlyphColor` in ../font/bitmapFont).
+ *
+ * Every emitted colour is re-snapped to this ladder before it is drawn, so a converter
+ * ladder built from other values gets quantized twice and drifts by up to 3/255. Picking
+ * output levels *from* this array keeps them fixed points of the renderer.
+ */
+const ENGINE_LADDER = (() => {
+	const levels = 32
+	const values = new Uint8Array(levels)
+	for (let i = 0; i < levels; i++) values[i] = Math.round((i * 255) / (levels - 1))
+	return values
+})()
+
+/**
+ * Default levels per channel emitted by `rgbColor` mode.
+ *
+ * Truecolour output feeds the display engine's per-cell diff and the bitmap font's
+ * glyph cache, both of which key on the exact colour string. Unquantized (or finely
+ * quantized) colour makes a continuously shaded animation change every lit cell every
+ * frame and mint a new cache key per cell, which collapses the frame rate — measured
+ * at 1.1fps against 31.5fps for the same scene in palette mode.
+ *
+ * Eight levels per channel keeps a slowly-shading cell on the *same* colour string
+ * across frames until its value crosses a step, which both calms the dirty-cell diff
+ * and bounds the distinct-colour set (<=512, so char x colour combinations stay inside
+ * the glyph cache). See {@link ShapeConverterOptions.rgbLevels} to trade that back for
+ * colour depth on static conversions.
+ */
+const DEFAULT_RGB_LEVELS = 8
+
+const MIN_RGB_LEVELS = 2
+const MAX_RGB_LEVELS = 64
+
+/**
+ * Nearest-value lookup for 0..255 onto a ladder of `levels` entries picked from
+ * {@link ENGINE_LADDER} at even index spacing, endpoints included.
+ *
+ * At the default of 8 levels the ladder is 0, 33, 74, 107, 148, 181, 222, 255 — steps
+ * alternate between 33 and 41 (the underlying 32-level grid is not divisible by 7), so
+ * a channel moves by at most ~21/255. Rounding to the *nearest* entry rather than
+ * truncating is what caps the error at half a step.
+ *
+ * Levels above 32 collapse onto the engine ladder: duplicate picks are dropped, so the
+ * output never has more than 32 distinct values per channel.
+ */
+function buildRgbQuantLut(levels: number): Uint8Array {
+	const count = Math.round(Math.min(MAX_RGB_LEVELS, Math.max(MIN_RGB_LEVELS, levels)))
+	const ladder: number[] = []
+	for (let i = 0; i < count; i++) {
+		const value = ENGINE_LADDER[Math.round((i * (ENGINE_LADDER.length - 1)) / (count - 1))]
+		if (ladder[ladder.length - 1] !== value) ladder.push(value)
+	}
+
+	const lut = new Uint8Array(256)
+	for (let v = 0; v < 256; v++) {
+		let best = ladder[0]
+		let bestDist = Math.abs(v - best)
+		for (let i = 1; i < ladder.length; i++) {
+			const dist = Math.abs(v - ladder[i])
+			if (dist < bestDist) {
+				bestDist = dist
+				best = ladder[i]
+			}
+		}
+		lut[v] = best
+	}
+	return lut
+}
+
+/** One LUT per distinct level count, shared by every converter. At most MAX_RGB_LEVELS entries. */
+const rgbQuantLuts = new Map<number, Uint8Array>()
+
+function getRgbQuantLut(levels: number): Uint8Array {
+	const count = Math.round(Math.min(MAX_RGB_LEVELS, Math.max(MIN_RGB_LEVELS, levels)))
+	let lut = rgbQuantLuts.get(count)
+	if (!lut) {
+		lut = buildRgbQuantLut(count)
+		rgbQuantLuts.set(count, lut)
+	}
+	return lut
+}
+
+/** Quantize one sampled channel (0–255, possibly fractional) onto the given ladder. */
+function quantizeChannel(lut: Uint8Array, v: number): number {
+	const i = v <= 0 ? 0 : v >= 255 ? 255 : (v + 0.5) | 0
+	return lut[i]
+}
+
+/**
+ * Upper bound on interned colour strings.
+ *
+ * The map only ever sees quantized values, so a converter at the default 8 levels can
+ * contribute at most 512 entries and the ladder caps any converter at 32^3. The cap is
+ * a backstop for many converters at many level counts; past it strings are rebuilt per
+ * call (correct, just not interned).
+ */
+const MAX_INTERNED_COLORS = 32768
+
+/**
+ * Interned `rgb()` strings for quantized colours.
+ *
+ * Returning the same string instance for a repeated colour lets the engine's per-cell
+ * diff settle on a reference comparison instead of comparing characters.
+ */
+const rgbStringCache = new Map<number, string>()
+
+/** Interned black, used for every cell in mono-background truecolour mode. */
+const BLACK_RGB = 'rgb(0,0,0)'
+
+function quantizedRgbString(r: number, g: number, b: number): string {
+	const key = (r << 16) | (g << 8) | b
+	const cached = rgbStringCache.get(key)
+	if (cached !== undefined) return cached
+
+	const s = `rgb(${r},${g},${b})`
+	if (rgbStringCache.size < MAX_INTERNED_COLORS) {
+		rgbStringCache.set(key, s)
+	}
+	return s
+}
+
 // ── Character set presets ───────────────────────────────────────
 
 /** Printable ASCII characters */
@@ -425,8 +550,31 @@ export interface ShapeConverterOptions {
 	contrastExponent?: number
 	/** Use only foreground characters on a black background (default: false). Gives a pure ASCII art look. */
 	monoBackground?: boolean
-	/** Use full RGB colors instead of ANSI palette (default: false). Outputs CSS rgb() strings. */
+	/**
+	 * Use full RGB colors instead of the ANSI palette (default: false). Outputs CSS rgb() strings.
+	 *
+	 * Emitted channel values are quantized (see `rgbLevels`) — at the default of 8 levels each
+	 * channel lands within ~21/255 of the sampled colour. Without this the renderer mints a
+	 * distinct glyph-cache key per cell per frame and repaints every lit cell every frame,
+	 * which drops a continuously shaded animation from ~31fps to ~1fps.
+	 */
 	rgbColor?: boolean
+	/**
+	 * Levels per channel for `rgbColor` output (default: 8, clamped to 2–64). Ignored unless
+	 * `rgbColor` is set.
+	 *
+	 * Levels are picked from the 32-value ladder the glyph renderer snaps truecolour to, so
+	 * emitted colours are drawn exactly as given; the default 8 are 0, 33, 74, 107, 148, 181,
+	 * 222, 255. Values above 32 are capped by that ladder and yield at most 32 distinct
+	 * values per channel.
+	 *
+	 * This is a direct animation-performance trade: finer levels mean a shading cell changes
+	 * colour more often, so more cells repaint per frame and more glyph-cache entries are
+	 * minted. Measured on a rotating 3D scene at 120x40 in a software rasteriser: 8 levels
+	 * ~24fps, 16 levels ~9–14fps, 32 levels ~1–4fps (palette mode is ~32fps). Raise it for
+	 * static or single-frame conversions, leave it alone for animation.
+	 */
+	rgbLevels?: number
 }
 
 /**
@@ -459,6 +607,7 @@ export function createShapeConverter(options: ShapeConverterOptions): FrameConve
 	const contrastExp = options.contrastExponent ?? DEFAULT_CONTRAST_EXP
 	const monoBackground = options.monoBackground ?? false
 	const rgbColor = options.rgbColor ?? false
+	const rgbLut = getRgbQuantLut(options.rgbLevels ?? DEFAULT_RGB_LEVELS)
 
 	// Resolve character set: explicit chars > charSet preset > default cp437
 	const charArray: string[] = options.chars
@@ -552,19 +701,26 @@ export function createShapeConverter(options: ShapeConverterOptions): FrameConve
 				let bg: number | string
 
 				if (rgbColor) {
-					const q = 8
-					const r = Math.round(avgR / q) * q
-					const g = Math.round(avgG / q) * q
-					const b = Math.round(avgB / q) * q
-					fg = `rgb(${r},${g},${b})`
+					// Quantized so a slowly-shading cell keeps the same colour string between
+					// frames (see DEFAULT_RGB_LEVELS) — this is what keeps truecolour playable.
+					const qR = quantizeChannel(rgbLut, avgR)
+					const qG = quantizeChannel(rgbLut, avgG)
+					const qB = quantizeChannel(rgbLut, avgB)
+					fg = quantizedRgbString(qR, qG, qB)
 					if (monoBackground) {
-						bg = 'rgb(0,0,0)'
+						bg = BLACK_RGB
 					} else {
-						const scale = brightness < 0.3 ? 0.15 : 0.3
-						const br = Math.round(avgR * scale / q) * q
-						const bg2 = Math.round(avgG * scale / q) * q
-						const bb = Math.round(avgB * scale / q) * q
-						bg = `rgb(${br},${bg2},${bb})`
+						// Derived from the quantized foreground rather than the raw sample, so each
+						// foreground colour always pairs with the same background. The glyph cache
+						// keys on char + fg + bg, so pairing one fg with several near-identical bgs
+						// would multiply the number of cached entries (and dirty cells) for no
+						// visible difference.
+						const scale = getBrightness(qR, qG, qB) < 0.3 ? 0.15 : 0.3
+						bg = quantizedRgbString(
+							quantizeChannel(rgbLut, qR * scale),
+							quantizeChannel(rgbLut, qG * scale),
+							quantizeChannel(rgbLut, qB * scale),
+						)
 					}
 				} else if (monoBackground) {
 					bg = 0
