@@ -1,4 +1,4 @@
-name: Build and publish to GitHub Packages
+name: CI and publish
 
 on:
   push:
@@ -6,14 +6,83 @@ on:
       - main
     tags:
       - 'v*'
+  pull_request:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC for npm provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "v$PKG_VERSION" != "$TAG_NAME" ]; then
+            echo "Tag $TAG_NAME does not match package version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      # prepublishOnly runs typecheck + tests + build before the tarball is created.
+      # Auth: configure a Trusted Publisher (OIDC) for this repo/workflow in the
+      # package's npmjs settings; NODE_AUTH_TOKEN is a fallback if NPM_TOKEN is set.
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-github-packages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,27 +97,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
-
       - name: Set scoped package name for GitHub Packages
         run: npm pkg set name="@${{ github.repository_owner }}/react-ansiart"
 
-      - name: Set version
-        env:
-          GIT_REF: ${{ github.ref }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          if [[ "$GIT_REF" == refs/tags/v* ]]; then
-            # Tagged release: use the tag as the version (strip leading 'v')
-            npm version --no-git-tag-version "${TAG_NAME#v}"
-          else
-            # Dev build: use base version + short SHA for a unique prerelease
-            BASE_VERSION=$(node -p "require('./package.json').version")
-            npm version --no-git-tag-version "${BASE_VERSION}-dev.$(git rev-parse --short HEAD)"
-          fi
-
-      - name: Publish to GitHub Packages
-        run: npm publish --access restricted --tag ${{ startsWith(github.ref, 'refs/tags/v') && 'latest' || 'dev' }}
+      - name: Publish mirror to GitHub Packages
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
