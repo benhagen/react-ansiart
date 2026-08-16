@@ -1,6 +1,6 @@
 {
 	"name": "react-ansiart",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "A React component for rendering ANSI art files (.ANS, .ASC) with support for CP437 character encoding, cursor control codes, and progressive animation playback",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -38,7 +38,9 @@
 	"sideEffects": false,
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"AGENTS.md",
+		"llms.txt"
 	],
 	"scripts": {
 		"build": "tsup",

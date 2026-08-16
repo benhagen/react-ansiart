@@ -1,0 +1,52 @@
+# react-ansiart
+
+> Zero-dependency React library that renders ANSI art (.ANS/.ASC) and 27 procedural
+> demoscene effects as CP437 character grids on canvas, using an embedded IBM VGA 8x16
+> bitmap font. The component layer is browser-only; the parser, generators, post effects,
+> and utilities are headless TypeScript that runs anywhere Node runs.
+
+## Start here
+
+- [AGENTS.md](https://github.com/benhagen/react-ansiart/blob/main/AGENTS.md): Commands, architecture map, the generator contract, the recipe for adding a generator, and the hard rules that keep output CP437-safe and deterministic.
+- [CLAUDE.md](https://github.com/benhagen/react-ansiart/blob/main/CLAUDE.md): Condensed project memory — same rules, shorter.
+- [README](https://github.com/benhagen/react-ansiart/blob/main/README.md): Full user-facing documentation (~1800 lines) with worked examples for every component, generator, and utility.
+
+## Getting started
+
+- [Installation](https://github.com/benhagen/react-ansiart/blob/main/README.md#installation): `npm install react-ansiart` — ESM only, React 18/19 peer dependency.
+- [Usage](https://github.com/benhagen/react-ansiart/blob/main/README.md#usage): Rendering .ANS files with `<AnsiArt>` in final, animated, and auto-detect modes.
+- [Virtual Display](https://github.com/benhagen/react-ansiart/blob/main/README.md#virtual-display): Driving `<AnsiVirtualDisplay>` with a frame generator.
+- [Props](https://github.com/benhagen/react-ansiart/blob/main/README.md#props): Complete prop tables for AnsiArt and AnsiVirtualDisplay.
+- [Additional Components](https://github.com/benhagen/react-ansiart/blob/main/README.md#additional-components): PlasmaBackgroundLayout, AnsiPlayerOverlay, FontCharacterChart.
+
+## Generators and effects
+
+- [Procedural Frame Generators](https://github.com/benhagen/react-ansiart/blob/main/README.md#procedural-frame-generators): The generator system overview.
+- [Built-in Generators](https://github.com/benhagen/react-ansiart/blob/main/README.md#built-in-generators): All 27 effects — plasma, fire, sonar, datamosh, metaballs, matrix rain, starfield, tunnel, game of life, water ripple, mandelbrot, copper bars, CRT static, aurora, reaction-diffusion, terrain flyover, rotozoomer, moire, kefrens bars, twister, sine scroller, boing ball, cyclic automaton, falling sand, bump mapping, julia, boids — with every option documented.
+- [Post Effects](https://github.com/benhagen/react-ansiart/blob/main/README.md#post-effects): `composeAnsiEffects` plus the lens, scanline, and VHS tracking effects.
+- [Custom Frame Generators](https://github.com/benhagen/react-ansiart/blob/main/README.md#custom-frame-generators): Writing your own `(frame, columns, rows) => AnsiScreen`.
+
+## Reference
+
+- [Utility Functions and Exports](https://github.com/benhagen/react-ansiart/blob/main/README.md#utility-functions-and-exports): Color conversion, font loading, parser, frame-generator, and performance utilities.
+- [Character Encoding](https://github.com/benhagen/react-ansiart/blob/main/README.md#character-encoding): CP437 handling and the byte/char bijection.
+- [Bitmap Font Format](https://github.com/benhagen/react-ansiart/blob/main/README.md#bitmap-font-format): .FON extraction and the raw 8x16 glyph layout.
+- [ANSI Code Support](https://github.com/benhagen/react-ansiart/blob/main/README.md#ansi-code-support): Which escape sequences the parser implements.
+- [Animation and Modem Speed Simulation](https://github.com/benhagen/react-ansiart/blob/main/README.md#animation-and-modem-speed-simulation): bytesPerSecond vs baud, and the overlay transport controls.
+
+## Source
+
+- [src/index.ts](https://github.com/benhagen/react-ansiart/blob/main/src/index.ts): The complete public API surface — nothing outside this file is exported.
+- [src/types/types.ts](https://github.com/benhagen/react-ansiart/blob/main/src/types/types.ts): `CharacterFrameGenerator`, `CharacterFrameGeneratorWithMetadata`, `GeneratorCapabilities`, `FrameData`, `ViewportConfig`.
+- [src/ansi/types.ts](https://github.com/benhagen/react-ansiart/blob/main/src/ansi/types.ts): `AnsiCell` and `AnsiScreen`, the value type every generator produces.
+- [src/ansi/parser.ts](https://github.com/benhagen/react-ansiart/blob/main/src/ansi/parser.ts): Resumable CP437/ANSI parse session that parses only newly revealed bytes.
+- [src/generators/ansiPostEffects.ts](https://github.com/benhagen/react-ansiart/blob/main/src/generators/ansiPostEffects.ts): Post-effect composition and the buffer-aliasing contract effects must honor.
+- [src/generators/asciiCopperBarsGenerator.ts](https://github.com/benhagen/react-ansiart/blob/main/src/generators/asciiCopperBarsGenerator.ts): Exemplar stateless generator — copy this shape for a new effect.
+- [src/generators/asciiCyclicAutomatonGenerator.ts](https://github.com/benhagen/react-ansiart/blob/main/src/generators/asciiCyclicAutomatonGenerator.ts): Exemplar stateful generator — per-instance state store plus capped simulation catch-up.
+- [src/utils/cp437.ts](https://github.com/benhagen/react-ansiart/blob/main/src/utils/cp437.ts): The CP437 table and `charToCp437Byte`, the check for whether a glyph is renderable.
+
+## Optional
+
+- [demo/](https://github.com/benhagen/react-ansiart/tree/main/demo): Next.js app router demo with a live control panel per generator; run it with `npm run demo:dev`.
+- [tsup.config.ts](https://github.com/benhagen/react-ansiart/blob/main/tsup.config.ts): Build entry points, which define every subpath export.
+- [.github/workflows/publish-npm.yml](https://github.com/benhagen/react-ansiart/blob/main/.github/workflows/publish-npm.yml): CI and tag-triggered npm publish via OIDC trusted publishing.
