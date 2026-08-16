@@ -1,0 +1,36 @@
+{
+	"$comment": [
+		"Gzipped budgets for representative consumer imports, in bytes.",
+		"These encode the library's tree-shaking guarantees: a consumer that uses one",
+		"generator must not pay for 27, and a background layout must not pay for the",
+		"playback overlay or the .FON parser.",
+		"'import' is bundled from dist/ with esbuild (minified, ESM, react external,",
+		"code splitting on) and only the ENTRY chunk is measured — lazily loaded chunks",
+		"are excluded on purpose, since that is what a first paint actually downloads.",
+		"Run `npm run size` locally, or `npm run size -- --update` to re-baseline after",
+		"an intentional change. Budgets carry ~4% headroom over the measured value so",
+		"minor zlib/toolchain drift does not fail CI."
+	],
+	"scenarios": [
+		{
+			"name": "PlasmaBackgroundLayout (root barrel)",
+			"import": "import { PlasmaBackgroundLayout } from 'react-ansiart'",
+			"maxGzip": 10800
+		},
+		{
+			"name": "AnsiArt (root barrel)",
+			"import": "import { AnsiArt } from 'react-ansiart'",
+			"maxGzip": 15830
+		},
+		{
+			"name": "single generator (root barrel)",
+			"import": "import { generateAsciiPerlinPlasmaFrame } from 'react-ansiart'",
+			"maxGzip": 1190
+		},
+		{
+			"name": "single util (root barrel)",
+			"import": "import { charToCp437Byte } from 'react-ansiart'",
+			"maxGzip": 790
+		}
+	]
+}

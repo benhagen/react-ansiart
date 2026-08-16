@@ -38,6 +38,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Guards the tree-shaking guarantees in bundle-budgets.json. A static import
+      # added for a conditionally-rendered feature is invisible to tsc, eslint and
+      # the tests, and only shows up as bytes in a consumer's bundle.
+      - name: Bundle size
+        run: npm run size
+
   publish-npm:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
