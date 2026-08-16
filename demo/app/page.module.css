@@ -1,0 +1,61 @@
+/* Page-scoped styles for the home page's live micro-generator card previews.
+   CSS Modules note: bare class selectors in this file are scoped/hashed by default — even
+   ones spelled like a global class (e.g. writing ".hero-link.foo" here does NOT match the
+   real ".hero-link" from globals.css, since ".hero-link" gets hashed too). Any rule that
+   needs to combine with a real global class MUST wrap that part in :global(...). Rules below
+   that only need to match elements carrying one of *our own* classes are written as plain
+   local selectors instead — no compounding needed, multiple classes on one element each
+   apply independently regardless of module scoping. */
+
+:global(.hero-grid).responsiveGrid {
+	/* anchor for the mobile override below; no desktop change */
+}
+
+@media (max-width: 480px) {
+	:global(.hero-grid).responsiveGrid {
+		grid-template-columns: 1fr !important;
+	}
+}
+
+.previewCard {
+	/* Defensive only — nothing is absolutely positioned against the card itself anymore
+	   (the preview strip below is self-contained), but this keeps any future addition from
+	   visually bleeding past the card's rounded corners. */
+	overflow: hidden;
+}
+
+/* Small live preview strip pinned to the top of the card, above the title/desc — it does
+   NOT sit behind the text, so there is no legibility fight and no scrim is needed.
+   Fixed pixel dimensions throughout (no percentages) so containment never depends on the
+   library's internal DOM/width:fit-content chain: the scaler is laid out at the display's
+   exact natural size (PREVIEW_COLUMNS*8 x PREVIEW_ROWS*16 = 288x128), centered in the strip
+   with the classic negative-margin technique, then shrunk with a plain transform: scale()
+   around its own center. overflow: hidden on the strip clips it as a hard backstop even if
+   any of that math is ever slightly off. */
+.previewStrip {
+	display: block; /* it's a <span> in the markup; force block flow + 100% width */
+	position: relative;
+	width: 100%;
+	height: 48px;
+	overflow: hidden;
+	border-radius: 6px;
+	background: #000;
+	margin-bottom: 10px;
+	border: 1px solid var(--border-subtle);
+}
+
+.previewScaler {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 288px;
+	height: 128px;
+	margin-top: -64px;
+	margin-left: -144px;
+	transform: scale(0.375); /* -> 108x48, matches strip height exactly */
+	opacity: 0.85;
+}
+
+.previewScaler :global(canvas) {
+	image-rendering: pixelated;
+}

@@ -5,7 +5,5 @@ yarn-debug.log*
 yarn-error.log*
 .env*
 
-
-
-
-
+# bun.lock is not the committed lockfile for this project — package-lock.json is.
+bun.lock
