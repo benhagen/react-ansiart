@@ -53,7 +53,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 22 bundles npm 10.
+      - name: Update npm for OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -69,12 +72,11 @@ jobs:
           fi
 
       # prepublishOnly runs typecheck + tests + build before the tarball is created.
-      # Auth: configure a Trusted Publisher (OIDC) for this repo/workflow in the
-      # package's npmjs settings; NODE_AUTH_TOKEN is a fallback if NPM_TOKEN is set.
+      # Auth: OIDC via the Trusted Publisher configured in the package's npmjs
+      # settings (repo benhagen/react-ansiart, workflow publish-npm.yml) — no
+      # token or secret involved; provenance is generated automatically.
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-github-packages:
     if: startsWith(github.ref, 'refs/tags/v')
