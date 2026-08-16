@@ -1,28 +1,16 @@
 import type { AnsiScreen } from '../ansi/types'
-import { buildCharLookup } from './charLookup'
 
-const DEFAULT_CHARS = [
-	'Q',
-	'B',
-	'$',
-	'8',
-	'@',
-	'0',
-	'#',
-	'2',
-	'*',
-	'+',
-	':',
-	',',
-	'ù',
-	'ú',
-	' ',
-	' ',
-	' ',
-	' ',
-	' ',
-	' ',
-]
+// Density ramp, ordered strictly densest-to-lightest by measured ink coverage in the
+// VGA 8x16 font: Q=50 lit pixels of 128, down through '.'=4, to space=0.
+//
+// The previous ramp placed 'ù'/'ú' (35 lit pixels) *after* ':'/',' (8), so perceived
+// brightness rose again just before the blank end of the ramp. On screen that drew a
+// bright band along the edge of every dark region and then cut to nothing, which is
+// the opposite of a fade. It also spent 6 of its 20 entries on space and another 6 on
+// glyphs the value distribution never reaches (see NOISE_CONTRAST).
+// Exported for the colocated test to assert ramp ordering; not re-exported from index.ts,
+// so it stays out of the public API.
+export const DEFAULT_CHARS = ['Q', '@', '0', 'A', '2', 'C', '*', '(', '+', ';', ':', '.', ' ']
 
 // Default octave configuration
 const DEFAULT_OCTAVES = [
@@ -139,14 +127,51 @@ function generatePermutation(seed: number): Uint8Array {
 	return perm
 }
 
-// Memoized char lookup table (like asciiFireGenerator's getFireCharLookup) — buildCharLookup
-// was being re-run every frame even though chars is constant per generator instance.
+/**
+ * Contrast applied when spreading the octave sum across the character ramp.
+ *
+ * The sum of Perlin octaves is bell-distributed about zero, not uniform over [-1,1]:
+ * for the default octaves it measures mean 0.04, sd 0.20, with p1..p99 covering only
+ * ~46% of [-1,1] and nothing ever reaching the clamp. Indexing the ramp linearly off
+ * that value therefore left more than half of *any* supplied ramp unreachable and
+ * piled ~44% of cells onto two adjacent entries — the real reason transitions looked
+ * chunky and dark areas read as flat.
+ *
+ * tanh widens the used range while staying monotonic and never hard-clamping, so the
+ * tails compress smoothly instead of terminating at a cliff. 3 spreads the default
+ * octaves across the full ramp; raise it for more contrast, lower it for a flatter,
+ * dimmer field.
+ */
+const NOISE_CONTRAST = 3
+
+/**
+ * Plasma's own 256-entry lookup: identical in shape to the shared buildCharLookup,
+ * but with the contrast curve baked into the table rather than applied per cell, so
+ * the spread costs nothing at render time (one array index, exactly as before).
+ *
+ * Deliberately not folded into the shared helper — the curve corrects for *this*
+ * generator's value distribution, and the other 13 callers have their own.
+ */
+function buildPlasmaCharLookup(chars: string[]): string[] {
+	const charCount = chars.length
+	const lookup = new Array<string>(256)
+	for (let i = 0; i < 256; i++) {
+		// Invert the value quantisation in the render loop: value = i / 127.5 - 1.
+		const spread = Math.tanh((i / 127.5 - 1) * NOISE_CONTRAST)
+		const t = (spread + 1) / 2
+		lookup[i] = chars[Math.floor(t * (charCount - 0.001))]
+	}
+	return lookup
+}
+
+// Memoized char lookup table (like asciiFireGenerator's getFireCharLookup) — the table
+// was being rebuilt every frame even though chars is constant per generator instance.
 let lastPlasmaChars: string[] | null = null
 let lastPlasmaCharLookup: string[] | null = null
 
 function getPlasmaCharLookup(chars: string[]): string[] {
 	if (lastPlasmaChars === chars && lastPlasmaCharLookup) return lastPlasmaCharLookup
-	lastPlasmaCharLookup = buildCharLookup(chars)
+	lastPlasmaCharLookup = buildPlasmaCharLookup(chars)
 	lastPlasmaChars = chars
 	return lastPlasmaCharLookup
 }
