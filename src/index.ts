@@ -170,6 +170,85 @@ export {
 } from './generators/asciiTerrainFlyoverGenerator'
 export type { AsciiTerrainFlyoverOptions } from './generators/asciiTerrainFlyoverGenerator'
 
+export {
+	createAsciiRotozoomerSampler,
+	generateAsciiRotozoomerFrame,
+} from './generators/asciiRotozoomerGenerator'
+export type { AsciiRotozoomerOptions } from './generators/asciiRotozoomerGenerator'
+
+export {
+	createAsciiMoireSampler,
+	generateAsciiMoireFrame,
+} from './generators/asciiMoireGenerator'
+export type { AsciiMoireOptions } from './generators/asciiMoireGenerator'
+
+export {
+	generateAsciiKefrensBarsFrame,
+} from './generators/asciiKefrensBarsGenerator'
+export type { AsciiKefrensBarsOptions } from './generators/asciiKefrensBarsGenerator'
+
+export {
+	generateAsciiTwisterFrame,
+} from './generators/asciiTwisterGenerator'
+export type { AsciiTwisterOptions } from './generators/asciiTwisterGenerator'
+
+export {
+	generateAsciiSineScrollerFrame,
+} from './generators/asciiSineScrollerGenerator'
+export type { AsciiSineScrollerOptions } from './generators/asciiSineScrollerGenerator'
+
+export {
+	createAsciiBoingBallSampler,
+	generateAsciiBoingBallFrame,
+} from './generators/asciiBoingBallGenerator'
+export type { AsciiBoingBallOptions } from './generators/asciiBoingBallGenerator'
+
+export {
+	clearCyclicAutomatonState,
+	createAsciiCyclicAutomatonGenerator,
+	createAsciiCyclicAutomatonSampler,
+	generateAsciiCyclicAutomatonFrame,
+} from './generators/asciiCyclicAutomatonGenerator'
+export type { AsciiCyclicAutomatonOptions } from './generators/asciiCyclicAutomatonGenerator'
+
+export {
+	clearFallingSandState,
+	createAsciiFallingSandGenerator,
+	createAsciiFallingSandSampler,
+	generateAsciiFallingSandFrame,
+} from './generators/asciiFallingSandGenerator'
+export type { AsciiFallingSandOptions } from './generators/asciiFallingSandGenerator'
+
+export {
+	generateAsciiBumpMappingFrame,
+} from './generators/asciiBumpMappingGenerator'
+export type { AsciiBumpMappingOptions } from './generators/asciiBumpMappingGenerator'
+
+export {
+	generateAsciiJuliaFrame,
+} from './generators/asciiJuliaGenerator'
+export type { AsciiJuliaOptions } from './generators/asciiJuliaGenerator'
+
+export {
+	clearBoidsState,
+	createAsciiBoidsGenerator,
+	generateAsciiBoidsFrame,
+} from './generators/asciiBoidsGenerator'
+export type { AsciiBoidsOptions } from './generators/asciiBoidsGenerator'
+
+export {
+	composeAnsiEffects,
+	createLensEffect,
+	createScanlineEffect,
+	createVhsTrackingEffect,
+} from './generators/ansiPostEffects'
+export type {
+	AnsiPostEffect,
+	LensEffectOptions,
+	ScanlineEffectOptions,
+	VhsTrackingEffectOptions,
+} from './generators/ansiPostEffects'
+
 export { createGeneratorStateStore } from './generators/generatorState'
 export type { GeneratorStateStore } from './generators/generatorState'
 export { MAX_SIMULATION_CATCHUP, catchupSteps } from './generators/simulationCatchup'

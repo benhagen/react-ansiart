@@ -686,6 +686,808 @@ function App() {
 | `intensity` | `number`   | `0.55`        | Normalization k value         |
 | `aspectY`   | `number`   | `2`           | Vertical aspect scale         |
 
+#### Matrix Rain
+
+Falling half-width-katakana character rain, classic "digital rain" effect:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiMatrixRainFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiMatrixRainFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiMatrixRainOptions`):
+
+| Option        | Type     | Default                 | Description                            |
+| ------------- | -------- | ------------------------ | ----------------------------------------|
+| `speed`       | `number` | `0.5`                    | Base fall speed, rows per frame         |
+| `density`     | `number` | `0.7`                    | Fraction of columns with active streams |
+| `trailLength` | `number` | `15`                     | Average trail length in rows            |
+| `headColor`   | `string` | `'#ffffff'`               | Head character color                    |
+| `trailColor`  | `string` | `'#00ff44'`               | Trail body color                        |
+| `bgColor`     | `string` | `'#000000'`               | Background color                        |
+| `chars`       | `string` | katakana + digits + symbols | Character pool to draw from          |
+| `seed`        | `number` | `7331`                    | RNG seed                                |
+
+Use `clearMatrixRainState()` to reset the shared simulation state, or `createAsciiMatrixRainGenerator()` for an isolated instance.
+
+#### Starfield
+
+A forward-flying 3D starfield with depth-based brightness and optional streak trails:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiStarfieldFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiStarfieldFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiStarfieldOptions`):
+
+| Option    | Type      | Default       | Description                                  |
+| --------- | --------- | ------------- | ---------------------------------------------- |
+| `stars`   | `number`  | `200`         | Number of stars in the field                   |
+| `speed`   | `number`  | `0.02`        | Speed at which stars approach the viewer        |
+| `fgColor` | `string`  | `'#ffffff'`   | Foreground color for stars                     |
+| `bgColor` | `string`  | `'#000000'`   | Background color                               |
+| `chars`   | `string`  | `'·.+*#@'`    | Characters by depth, farthest to nearest        |
+| `seed`    | `number`  | `4242`        | Seed for deterministic random generation        |
+| `streaks` | `boolean` | `true`        | Whether near stars draw streak trails           |
+
+Use `clearStarfieldState()` to reset the shared simulation state, or `createAsciiStarfieldGenerator()` for an isolated instance.
+
+#### Tunnel
+
+An infinite checkerboard tunnel flying toward the viewer, with rotation:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiTunnelFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiTunnelFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiTunnelOptions`):
+
+| Option          | Type     | Default        | Description                          |
+| --------------- | -------- | -------------- | --------------------------------------|
+| `speed`         | `number` | `0.08`         | Forward movement speed through the tunnel |
+| `rotationSpeed` | `number` | `0.01`         | Rotation speed of the tunnel          |
+| `tiles`         | `number` | `8`            | Number of checkerboard tiles per direction |
+| `fgColor`       | `string` | `'#00ffaa'`    | Foreground color                      |
+| `bgColor`       | `string` | `'#000000'`    | Background color                      |
+| `chars`         | `string` | `' .:-=+*#%@'` | Characters for brightness mapping, dark to bright |
+| `aspectY`       | `number` | `2`            | Vertical aspect ratio correction      |
+
+#### Game of Life
+
+Conway's Game of Life, with auto-reseeding when the population drops too low:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiGameOfLifeFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiGameOfLifeFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiGameOfLifeOptions`):
+
+| Option              | Type      | Default       | Description                                       |
+| ------------------- | --------- | ------------- | ---------------------------------------------------|
+| `density`           | `number`  | `0.3`         | Initial density of live cells (0-1)                |
+| `fgColor`           | `string`  | `'#55ff55'`   | Foreground color for live cells                    |
+| `bgColor`           | `string`  | `'#000000'`   | Background color                                   |
+| `seed`              | `number`  | `9999`        | Seed for random number generation                  |
+| `autoSeed`          | `boolean` | `true`        | Whether to auto-seed when population drops too low  |
+| `autoSeedThreshold` | `number`  | `0.05`        | Population threshold that triggers auto-seeding     |
+
+Use `clearGameOfLifeState()` to reset the shared simulation state, or `createAsciiGameOfLifeGenerator()` for an isolated instance.
+
+#### Water Ripple
+
+Ripples spreading and interfering across a still water surface, with periodic dropped stones:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiWaterRippleFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiWaterRippleFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiWaterRippleOptions`):
+
+| Option          | Type     | Default            | Description                                |
+| --------------- | -------- | -------------------- | --------------------------------------------|
+| `damping`       | `number` | `0.97`               | Wave decay factor (0-1); lower = faster decay |
+| `dropFrequency` | `number` | `15`                 | Drop a stone every N frames                |
+| `dropStrength`  | `number` | `255`                | Amplitude of dropped stones                |
+| `fgColor`       | `string` | `'#4488ff'`          | Foreground color for disturbed water       |
+| `bgColor`       | `string` | `'#000011'`          | Background color for calm water            |
+| `chars`         | `string` | `' ·:~=@'`           | Characters for brightness ramp             |
+| `seed`          | `number` | `5555`               | Seed for random number generation          |
+
+Use `clearWaterRippleState()` to reset the shared simulation state, or `createAsciiWaterRippleGenerator()` for an isolated instance.
+
+#### Mandelbrot
+
+A continuously zooming Mandelbrot set fractal:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiMandelbrotFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiMandelbrotFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiMandelbrotOptions`):
+
+| Option        | Type                    | Default        | Description                              |
+| ------------- | ------------------------ | -------------- | -------------------------------------------|
+| `maxIter`     | `number`                 | `64`           | Maximum iteration count                    |
+| `zoomSpeed`   | `number`                 | `0.02`         | Zoom rate per frame                        |
+| `zoomX`       | `number`                 | `-0.7435`      | Zoom target real component (Seahorse Valley) |
+| `zoomY`       | `number`                 | `0.1314`       | Zoom target imaginary component            |
+| `initialZoom` | `number`                 | `0.5`          | Starting zoom level                        |
+| `fgColor`     | `string`                 | `'#ff8800'`    | Base foreground color (mono mode)          |
+| `bgColor`     | `string`                 | `'#000000'`    | Background / set interior color            |
+| `chars`       | `string`                 | `' .:-=+*#%@'` | Character ramp, low to high iteration count |
+| `aspectY`     | `number`                 | `2`            | Y aspect correction for non-square cells   |
+| `colorMode`   | `'spectrum' \| 'mono'`   | `'spectrum'`   | Rainbow hues vs. `fgColor` brightness      |
+
+Also exports `generateMandelbrotPixels` for pixel-level access to the underlying fractal data.
+
+#### Copper Bars
+
+Classic Amiga "copper bars" — horizontal gradient bars drifting and cycling through a vivid palette:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiCopperBarsFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiCopperBarsFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiCopperBarsOptions`):
+
+| Option           | Type       | Default        | Description                          |
+| ---------------- | ---------- | -------------- | --------------------------------------|
+| `barCount`       | `number`   | `5`            | Number of bars (3-8)                  |
+| `barHeight`      | `number`   | `6`            | Height of each bar in rows (gaussian sigma) |
+| `speed`          | `number`   | `0.04`         | Animation speed multiplier            |
+| `colorPalette`   | `string[]` | Amiga palette  | Color palette for bars                |
+| `bgColor`        | `string`   | `'#000000'`    | Background color                      |
+| `backgroundChar` | `string`   | `' '`          | Background character                  |
+| `chars`          | `string[]` | `' .·:+=# @'`  | Characters for brightness ramp        |
+| `seed`           | `number`   | `7777`         | Seed for deterministic bar phases     |
+
+#### CRT Static
+
+Simulated dead-channel CRT static/noise, with optional VHS tracking artifacts:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiCrtStaticFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiCrtStaticFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiCrtStaticOptions`):
+
+| Option              | Type       | Default          | Description                              |
+| ------------------- | ---------- | ------------------ | -------------------------------------------|
+| `signalStrength`    | `number`   | `0.3`              | Signal strength, `0` (lost) to `1` (clean) |
+| `scanlineIntensity` | `number`   | `0.3`              | Scanline banding intensity (0-1)           |
+| `tearFrequency`     | `number`   | `0.08`             | Probability of a horizontal tear per frame |
+| `rollingBarSpeed`   | `number`   | `0.02`             | Rolling bar speed                          |
+| `vhsMode`           | `boolean`  | `false`            | Enable VHS mode (tracking lines + chroma aberration) |
+| `seed`              | `number`   | `4242`             | Seed for deterministic noise               |
+| `bgColor`           | `string`   | `'#000000'`        | Background color                           |
+| `chars`             | `string[]` | `' .·-:+=%#@'`     | Characters for brightness ramp             |
+
+#### Aurora Borealis
+
+Drifting, layered aurora curtains in greens, teals, and purples:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiAuroraBorealisFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiAuroraBorealisFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiAuroraBorealisOptions`):
+
+| Option         | Type       | Default        | Description                            |
+| -------------- | ---------- | -------------- | ----------------------------------------|
+| `curtainCount` | `number`   | `4`            | Number of curtain layers (2-6)          |
+| `speed`        | `number`   | `0.015`        | Animation speed                         |
+| `intensity`    | `number`   | `1.0`          | Overall intensity multiplier            |
+| `colorPalette` | `string[]` | aurora greens/purples | Color palette for curtains       |
+| `bgColor`      | `string`   | `'#000008'`    | Background color                        |
+| `chars`        | `string[]` | `'  .·:~=+*#@'`| Characters for brightness ramp          |
+| `seed`         | `number`   | `3333`         | Seed for deterministic curtain configuration |
+
+#### Reaction Diffusion
+
+A Gray-Scott reaction-diffusion simulation producing organic coral-growth patterns:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiReactionDiffusionFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiReactionDiffusionFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiReactionDiffusionOptions`):
+
+| Option          | Type                    | Default        | Description                              |
+| --------------- | ------------------------ | -------------- | -------------------------------------------|
+| `feedRate`      | `number`                 | `0.055`        | Feed rate; controls pattern type (0.01-0.08) |
+| `killRate`      | `number`                 | `0.062`        | Kill rate; controls pattern type (0.045-0.07) |
+| `diffusionU`    | `number`                 | `1.0`          | Diffusion rate of chemical U               |
+| `diffusionV`    | `number`                 | `0.5`          | Diffusion rate of chemical V               |
+| `stepsPerFrame` | `number`                 | `8`            | Simulation substeps per frame              |
+| `dt`            | `number`                 | `1.0`          | Simulation time step                       |
+| `colorMode`     | `'spectrum' \| 'mono'`   | `'spectrum'`   | HSL rainbow vs. mono color                 |
+| `fgColor`       | `string`                 | `'#55ffaa'`    | Foreground color for mono mode             |
+| `bgColor`       | `string`                 | `'#000000'`    | Background color                           |
+| `chars`         | `string[]`               | dim-to-bright set | Characters for brightness ramp          |
+| `seed`          | `number`                 | `9876`         | Seed for initial perturbation              |
+
+Use `clearReactionDiffusionState()` to reset the shared simulation state, or `createAsciiReactionDiffusionGenerator()` for an isolated instance.
+
+#### Terrain Flyover
+
+A scrolling procedural landscape flyover with biome-based coloring and distance fog:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiTerrainFlyoverFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiTerrainFlyoverFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiTerrainFlyoverOptions`):
+
+| Option        | Type                  | Default        | Description                              |
+| ------------- | ---------------------- | -------------- | -------------------------------------------|
+| `scrollSpeed` | `number`               | `0.3`          | How fast terrain moves toward the camera   |
+| `heightScale` | `number`               | `0.4`          | Terrain amplitude (0-1)                    |
+| `fogDistance` | `number`               | `0.7`          | Fog distance factor (0-1); lower = more fog |
+| `colorMode`   | `'biome' \| 'mono'`    | `'biome'`      | Height-based terrain colors vs. mono       |
+| `fgColor`     | `string`               | `'#88cc88'`    | Foreground color for mono mode             |
+| `bgColor`     | `string`               | `'#000011'`    | Background / sky color                     |
+| `skyColor`    | `string`               | `'#000022'`    | Sky color for above-horizon rows           |
+| `chars`       | `string[]`              | height ramp set| Characters for height ramp                 |
+| `seed`        | `number`               | `54321`        | Seed for terrain generation                |
+
+Use `createAsciiTerrainFlyoverSampler()` for viewport-based rendering.
+
+#### Rotozoomer
+
+Classic rotating, zooming procedural texture (checker or xor pattern):
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiRotozoomerFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiRotozoomerFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiRotozoomerOptions`):
+
+| Option          | Type                  | Default                  | Description                          |
+| --------------- | --------------------- | ------------------------- | ------------------------------------- |
+| `rotationSpeed` | `number`               | `0.02`                    | Radians of rotation added per frame   |
+| `zoomSpeed`     | `number`               | `0.03`                    | Angular speed of the zoom oscillation |
+| `baseZoom`      | `number`               | `1.0`                     | Baseline zoom level                   |
+| `zoomAmplitude` | `number`               | `0.4`                     | How far the zoom oscillates           |
+| `textureSize`   | `number`               | `4`                       | Size of one texture tile              |
+| `pattern`       | `'checker' \| 'xor'`   | `'checker'`               | Procedural texture pattern            |
+| `chars`         | `string[]`             | `' .:-=+*#%@'`            | Texture ramp characters               |
+| `fgColors`      | `string[]`             | cyan/magenta pair         | Foreground colors cycled by texture   |
+| `bgColor`       | `string`               | `'#000000'`               | Background color                      |
+| `aspectY`       | `number`               | `2`                       | Vertical aspect correction            |
+
+#### Moiré
+
+Two orbiting ring fields whose interference produces a drifting moiré pattern:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiMoireFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiMoireFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiMoireOptions`):
+
+| Option         | Type       | Default       | Description                              |
+| -------------- | ---------- | ------------- | ----------------------------------------- |
+| `ringWidth`    | `number`   | `1.5`         | Width of one ring, in cells               |
+| `speed1`       | `number`   | `0.015`       | Orbit speed of ring-field 1               |
+| `speed2`       | `number`   | `0.023`       | Orbit speed of ring-field 2               |
+| `orbitRadius1` | `number`   | `0.35`        | Orbit radius of center 1                  |
+| `orbitRadius2` | `number`   | `0.35`        | Orbit radius of center 2                  |
+| `phaseOffset`  | `number`   | `Math.PI`     | Phase offset between the two centers      |
+| `paletteSpeed` | `number`   | `0.01`        | Palette cycling speed                     |
+| `palette`      | `string[]` | rainbow set   | Colors cycled by interference sum         |
+| `chars`        | `string[]` | `' .:+*#@'`   | Characters for "on" cells                 |
+| `bgColor`      | `string`   | `'#000000'`   | Background color for "off" cells          |
+| `aspectY`      | `number`   | `2`           | Vertical aspect correction                |
+
+#### Kefrens Bars
+
+Cascading "impossible bars" curtain effect, a classic Amiga copper-bar trick:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiKefrensBarsFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiKefrensBarsFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiKefrensBarsOptions`):
+
+| Option           | Type       | Default        | Description                          |
+| ---------------- | ---------- | -------------- | -------------------------------------- |
+| `barWidth`       | `number`   | `7`            | Width of each bar in cells             |
+| `amplitude1`     | `number`   | ~28% of columns | Amplitude of the primary wobble       |
+| `frequency1`     | `number`   | `0.15`         | Row-frequency of the primary wobble    |
+| `speed1`         | `number`   | `0.05`         | Frame-speed of the primary wobble      |
+| `amplitude2`     | `number`   | ~12% of columns | Amplitude of the secondary wobble     |
+| `frequency2`     | `number`   | `0.37`         | Row-frequency of the secondary wobble  |
+| `speed2`         | `number`   | `-0.08`        | Frame-speed of the secondary wobble    |
+| `palette`        | `string[]` | rainbow set    | Colors bars cycle through              |
+| `hueSpeed`       | `number`   | `0.15`         | Color cycle speed over time            |
+| `hueRowStep`     | `number`   | `0.4`          | Color cycle speed per row              |
+| `chars`          | `string[]` | `'█▓▒░'`       | Shading ramp, bright center to dark edge |
+| `bgColor`        | `string`   | `'#000000'`    | Background color                       |
+| `backgroundChar` | `string`   | `' '`          | Background character                   |
+
+#### Twister
+
+A vertically twisted ribbon rendered as a rotating square column seen edge-on (classic C64/Amiga twister):
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiTwisterFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiTwisterFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiTwisterOptions`):
+
+| Option           | Type       | Default          | Description                        |
+| ---------------- | ---------- | ---------------- | ------------------------------------ |
+| `width`          | `number`   | ~30% of columns  | Half-width of the ribbon in cells   |
+| `rotationSpeed`  | `number`   | `0.05`           | Rotation speed of the ribbon        |
+| `waveFreq`       | `number`   | `0.25`           | Row-frequency of the twist wave     |
+| `waveSpeed`      | `number`   | `0.04`           | Frame-speed of the twist wave       |
+| `waveDepth`      | `number`   | `0.6`            | Amplitude of the twist wave         |
+| `palette`        | `string[]` | metallic-blue set | Color per ribbon face               |
+| `chars`          | `string[]` | `'░▒▓█'`         | Shading ramp, dim edge to bright center |
+| `bgColor`        | `string`   | `'#000000'`      | Background color                    |
+| `backgroundChar` | `string`   | `' '`            | Background character                |
+| `centerX`        | `number`   | `(columns-1)/2`  | Horizontal center of the ribbon     |
+
+#### Sine Scroller
+
+A scrolling greeting message rendered with the library's embedded VGA bitmap font, riding a vertical sine wave and cycling through a rainbow:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiSineScrollerFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiSineScrollerFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiSineScrollerOptions`):
+
+| Option           | Type       | Default                                         | Description                          |
+| ---------------- | ---------- | ------------------------------------------------ | ------------------------------------- |
+| `text`           | `string`   | `'REACT-ANSIART ♦ GREETINGS TO THE SCENE ♦ '`     | Message to scroll (CP437 chars only)  |
+| `speed`          | `number`   | `1.5`                                            | Scroll speed, font pixels per frame   |
+| `amplitude`      | `number`   | `3`                                              | Vertical sine amplitude in rows       |
+| `waveFreq`       | `number`   | `0.08`                                           | Sine frequency, radians per pixel     |
+| `waveSpeed`      | `number`   | `0.06`                                           | Sine speed, radians per frame         |
+| `hueStep`        | `number`   | `1.5`                                            | Rainbow steps per strip pixel         |
+| `hueSpeed`       | `number`   | `1.2`                                            | Rainbow steps per frame               |
+| `saturation`     | `number`   | `1`                                              | Rainbow saturation (0-1)              |
+| `lightness`      | `number`   | `0.55`                                           | Rainbow lightness (0-1)               |
+| `fgColor`        | `string`   | —                                                 | Fixed color, bypasses the rainbow     |
+| `bgColor`        | `string`   | `'#000000'`                                      | Background color                      |
+| `backgroundChar` | `string`   | `' '`                                            | Background character                  |
+| `char`           | `string`   | `'█'`                                            | Lit-pixel character                   |
+| `scale`          | `1 \| 2`   | `1`                                              | `2` doubles each font pixel's width   |
+| `shadow`         | `boolean`  | `true`                                           | Drop shadow one cell down-right       |
+| `shadowColor`    | `string`   | `'#1b1b28'`                                      | Drop shadow color                     |
+
+#### Boing Ball
+
+The Amiga "Boing Ball" demo (1984): a checkered sphere bouncing in a perspective room with a grid wall/floor and a cast shadow:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiBoingBallFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiBoingBallFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiBoingBallOptions`):
+
+| Option            | Type     | Default       | Description                              |
+| ----------------- | -------- | ------------- | ------------------------------------------ |
+| `scale`           | `number` | `1`           | Ball size multiplier                       |
+| `bounceSpeed`     | `number` | `0.15`        | Vertical bounce angular speed              |
+| `driftSpeed`      | `number` | `0.045`       | Horizontal drift speed                     |
+| `spinSpeed`       | `number` | `0.22`        | Checker roll rate around the vertical axis |
+| `checkerDensity`  | `number` | `8`           | Latitude checker bands on the sphere       |
+| `ballRedColor`    | `string` | `'#cc2222'`   | Red checker squares                        |
+| `ballWhiteColor`  | `string` | `'#f2f2f2'`   | White checker squares                      |
+| `gridColor`       | `string` | `'#a239d6'`   | Back wall / floor grid line color          |
+| `bgColor`         | `string` | `'#c9c9cf'`   | Back wall / floor background color         |
+| `shadowColor`     | `string` | `'#4a4a52'`   | Shadow cast by the ball                    |
+| `lightDirX`       | `number` | `-0.5`        | Light direction X component                |
+| `lightDirY`       | `number` | `-0.65`       | Light direction Y component                |
+| `lightDirZ`       | `number` | `0.58`        | Light direction Z component                |
+
+#### Cyclic Automaton
+
+A cyclic cellular automaton ("rock-paper-scissors" states arranged in a ring) that self-organizes from noise into rotating spiral waves:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiCyclicAutomatonFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiCyclicAutomatonFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiCyclicAutomatonOptions`):
+
+| Option         | Type                       | Default    | Description                                    |
+| -------------- | -------------------------- | ---------- | ------------------------------------------------ |
+| `states`       | `number`                   | `14`       | Number of states in the cyclic ring (3-24)       |
+| `threshold`    | `number`                   | `1`        | "Successor state" neighbors needed to advance    |
+| `neighborhood` | `'moore' \| 'vonNeumann'`  | `'moore'`  | Neighborhood used when counting neighbors        |
+| `stepsPerFrame`| `number`                   | `1`        | Simulation substeps per frame                    |
+| `seed`         | `number`                   | `1337`     | Seed for the initial random state assignment     |
+| `chars`        | `string[]`                 | solid block | Character ramp indexed by state                |
+| `saturation`   | `number`                   | `0.75`     | Saturation of the generated hue-wheel palette    |
+| `lightness`    | `number`                   | `0.5`      | Lightness of the generated hue-wheel palette     |
+| `bgColor`      | `string`                   | `'#000000'` | Background color behind sparse char ramps      |
+
+Use `clearCyclicAutomatonState()` to reset the shared simulation state, or `createAsciiCyclicAutomatonGenerator()` for an isolated instance.
+
+#### Falling Sand
+
+An autonomous falling-sand toy: spouts drip sand that piles against wall ledges, draining once the screen gets too full so the scene breathes forever:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiFallingSandFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiFallingSandFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiFallingSandOptions`):
+
+| Option                 | Type                       | Default                              | Description                             |
+| ---------------------- | --------------------------- | ------------------------------------- | ----------------------------------------- |
+| `seed`                 | `number`                    | `424242`                             | Seed for ledges, jitter, and grain choices |
+| `stepsPerFrame`        | `number`                    | `1`                                   | Simulation steps per frame                |
+| `spoutCount`           | `number`                    | `3`                                   | Number of sand-emitting spouts            |
+| `spoutRate`            | `number`                    | `0.55`                                | Probability each spout emits per step     |
+| `drainOpenThreshold`   | `number`                    | `0.55`                                | Fill fraction at which the drain opens    |
+| `drainCloseThreshold`  | `number`                    | `0.35`                                | Fill fraction at which the drain closes   |
+| `sandColors`           | `[string, string, string]`  | `['#e8d18a', '#d1a94e', '#a97733']`  | Colors for the 3 sand variants            |
+| `wallColor`            | `string`                    | `'#5c5c6b'`                          | Color for wall ledges                     |
+| `bgColor`              | `string`                    | `'#0a0a12'`                          | Background color for empty cells          |
+
+Use `clearFallingSandState()` to reset the shared simulation state, or `createAsciiFallingSandGenerator()` for an isolated instance.
+
+#### Bump Mapping
+
+A static heightfield lit by an orbiting point light with specular highlights, real-time bump mapping over a fixed procedural surface:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiBumpMappingFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiBumpMappingFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiBumpMappingOptions`):
+
+| Option          | Type       | Default                                | Description                              |
+| --------------- | ---------- | ---------------------------------------- | ------------------------------------------ |
+| `seed`          | `number`   | `9001`                                  | Seed for the static heightfield            |
+| `noiseScale`    | `number`   | `0.15`                                  | Noise frequency for the heightfield        |
+| `octaves`       | `number`   | `4`                                     | Octaves of fbm noise                       |
+| `lightRadius`   | `number`   | `0.6`                                   | Orbit radius of the light                  |
+| `orbitSpeed`    | `number`   | `0.05`                                  | Angular speed of the orbiting light        |
+| `lightHeight`   | `number`   | `6`                                     | Height (z) of the light above the surface  |
+| `bumpStrength`  | `number`   | `6`                                     | Steepness multiplier for the surface normal|
+| `specularPower` | `number`   | `12`                                    | Specular exponent                          |
+| `chars`         | `string`   | `' ·░▒▓█'`                              | Character ramp, dark to bright             |
+| `palette`       | `string[]` | warm bronze / steel gradient            | Color stops, low to high intensity         |
+| `bgColor`       | `string`   | `'#050302'`                             | Background color                           |
+| `aspectY`       | `number`   | `2`                                     | Y aspect correction for non-square cells   |
+
+#### Julia
+
+An animated Julia set fractal, morphing continuously as its c-parameter orbits just outside the Mandelbrot cardioid:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiJuliaFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiJuliaFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiJuliaOptions`):
+
+| Option       | Type                     | Default        | Description                             |
+| ------------ | ------------------------ | -------------- | ------------------------------------------ |
+| `maxIter`    | `number`                 | `64`           | Maximum iteration count                    |
+| `morphSpeed` | `number`                 | `0.015`        | Angular speed of the c-parameter orbit     |
+| `radius`     | `number`                 | `0.7885`       | Orbit radius of the c-parameter            |
+| `zoom`       | `number`                 | `1.0`          | Zoom level of the viewing plane            |
+| `centerX`    | `number`                 | `0`            | Plane center real component                |
+| `centerY`    | `number`                 | `0`            | Plane center imaginary component           |
+| `hueSpeed`   | `number`                 | `0.005`        | Hue drift speed per frame (spectrum mode)  |
+| `fgColor`    | `string`                 | `'#00ccff'`    | Base foreground color (mono mode)          |
+| `bgColor`    | `string`                 | `'#000000'`    | Background / interior color                |
+| `chars`      | `string`                 | `' .:-=+*#%@'` | Character ramp, low to high iteration count|
+| `aspectY`    | `number`                 | `2`            | Y aspect correction for non-square cells   |
+| `colorMode`  | `'spectrum' \| 'mono'`   | `'spectrum'`   | Rainbow hues vs. `fgColor` brightness      |
+
+#### Boids
+
+A flocking simulation (separation, alignment, cohesion) with a glowing head and fading trail per boid:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiBoidsFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiBoidsFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiBoidsOptions`):
+
+| Option            | Type                   | Default                     | Description                          |
+| ----------------- | ----------------------- | ---------------------------- | --------------------------------------|
+| `count`           | `number`                | `60`                         | Number of boids (clamped to 40-120)  |
+| `maxSpeed`        | `number`                | `1.2`                        | Maximum boid speed                    |
+| `minSpeed`        | `number`                | `0.4`                        | Minimum boid speed                    |
+| `sepRadius`       | `number`                | `2.5`                        | Separation radius                     |
+| `alignRadius`     | `number`                | `5`                          | Alignment radius                      |
+| `cohRadius`       | `number`                | `6`                          | Cohesion radius                       |
+| `sepWeight`       | `number`                | `1.4`                        | Separation steering weight            |
+| `alignWeight`     | `number`                | `1.0`                        | Alignment steering weight             |
+| `cohWeight`       | `number`                | `0.8`                        | Cohesion steering weight              |
+| `wander`          | `number`                | `0.3`                        | Strength of the per-boid wander term  |
+| `scatterInterval` | `number`                | `240`                        | Frames between "predator" scatter impulses |
+| `trailDecay`      | `number`                | `0.88`                       | Per-frame decay of the trail buffer   |
+| `headColor`       | `string`                | `'#eafcff'`                  | Boid head color                       |
+| `trailPalette`    | `[string, string]`      | `['#00e5ff', '#02040f']`     | Trail color pair [near, far]          |
+| `chars`           | `string`                | `' .:■'`                     | Trail intensity to character ramp     |
+| `seed`            | `number`                | `9001`                       | RNG seed                              |
+| `bgColor`         | `string`                | `'#000006'`                  | Background color                      |
+
+Use `clearBoidsState()` to reset the shared flock state, or `createAsciiBoidsGenerator()` for an isolated instance.
+
+### Post Effects
+
+`composeAnsiEffects` wraps any `CharacterFrameGenerator` with one or more post-processing passes (CRT lens distortion, scanlines, VHS tracking glitches) that run over the generated `AnsiScreen` each frame:
+
+```tsx
+import { AnsiVirtualDisplay, composeAnsiEffects, createLensEffect, generateAsciiPerlinPlasmaFrame } from 'react-ansiart'
+
+const frameGenerator = composeAnsiEffects(
+	generateAsciiPerlinPlasmaFrame,
+	createLensEffect({ radius: 10, magnification: 2.5 }),
+)
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={frameGenerator}
+			fps={30}
+		/>
+	)
+}
+```
+
+`composeAnsiEffects` accepts effects as varargs, as arrays, or a mix, and the result drops straight into `AnsiVirtualDisplay` / `AnsiArt` as `frameGenerator` since it has the same `(frame, columns, rows) => AnsiScreen` signature. Metadata (`capabilities`, `setSpeed`, `seekToFrame`, etc.) is forwarded from the source generator when present.
+
+**Effects**:
+
+| Factory                    | Options type              | Description                                    |
+| --------------------------- | -------------------------- | ------------------------------------------------ |
+| `createLensEffect`          | `LensEffectOptions`         | Drifting magnifying-lens / CRT bulge distortion  |
+| `createScanlineEffect`      | `ScanlineEffectOptions`      | Sweeping CRT scanline beam                       |
+| `createVhsTrackingEffect`   | `VhsTrackingEffectOptions`   | Periodic VHS tracking glitch bands and noise     |
+
 ### Custom Frame Generators
 
 #### Character-Based Generators
