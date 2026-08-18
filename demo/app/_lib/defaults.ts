@@ -29,7 +29,11 @@ export const PLASMA_BG_DEFAULTS = {
 }
 
 export const PLASMA_DEFAULTS = {
-	chars: 'QB$8@0#2*+:,\u00f9\u00fa      ',
+	// Mirrors the library's DEFAULT_CHARS ramp (asciiPerlinPlasmaGenerator.ts): ordered
+	// strictly densest-to-lightest by measured ink coverage. The previous copy here kept the
+	// pre-fix ramp alive in the demo, overriding the library default and reintroducing the
+	// bright-banded "dark blob" artifact the library had already fixed.
+	chars: 'Q@0A2C*(+;:. ',
 	timeScale: 0.9,
 	fgColor: '#55FFFF',
 	bgColor: '#000000',

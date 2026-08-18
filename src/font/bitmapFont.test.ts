@@ -23,6 +23,8 @@ type StubContext = {
 	globalCompositeOperation: string
 	/** Every colour this context has painted with, in order. */
 	painted: string[]
+	/** Number of clearRect calls, to observe recycled-canvas repaints. */
+	cleared: number
 	fillRect: () => void
 	clearRect: () => void
 	drawImage: () => void
@@ -38,10 +40,13 @@ function makeStubCanvas(): StubCanvas {
 		fillStyle: '',
 		globalCompositeOperation: 'source-over',
 		painted: [],
+		cleared: 0,
 		fillRect: () => {
 			ctx.painted.push(ctx.fillStyle)
 		},
-		clearRect: () => {},
+		clearRect: () => {
+			ctx.cleared++
+		},
 		drawImage: () => {},
 	}
 	const canvas: StubCanvas = { width: 0, height: 0, getContext: () => ctx }
@@ -110,68 +115,91 @@ describe('renderGlyph caching', () => {
 		assert.ok(allocations <= 256, `expected <=256 allocations, got ${allocations}`)
 	})
 
-	// The regression: the cache was keyed on char+fg+bg with no allocation ceiling, so a
-	// generator emitting 24-bit colour created a canvas element per cell per frame.
-	it('stops allocating once the colour cache is full', () => {
+	// Far more distinct colours than the cache can hold. Each channel takes a different
+	// digit of `i` so every iteration is a genuinely new cache key — deriving all three
+	// from `i % 256` would silently repeat every 256 iterations and never fill the cache.
+	// Channels step by 8 so almost none of them collapse when truecolour normalisation
+	// snaps them to the 32-level ladder — 31 of the 32 values survive (144 and 152 both
+	// land on 148), which still leaves far more keys than the cap. Neighbouring values
+	// would collapse wholesale, which is the point of the ladder but wouldn't fill it.
+	const distinctColor = (i: number) =>
+		`rgb(${(i % 32) * 8},${(Math.floor(i / 32) % 32) * 8},${(Math.floor(i / 1024) % 32) * 8})`
+
+	// The original regression: the cache was keyed on char+fg+bg with no allocation ceiling,
+	// so a generator emitting 24-bit colour created a canvas element per cell per frame.
+	it('stays bounded and allocation-free past the cap by recycling evicted canvases', () => {
 		const font = makeFont()
 		const ctx = targetContext()
 		const baseline = canvasesCreated
 
-		// Far more distinct colours than the cache can hold. Each channel takes a different
-		// digit of `i` so every iteration is a genuinely new cache key — deriving all three
-		// from `i % 256` would silently repeat every 256 iterations and never fill the cache.
-		// Channels step by 8 so almost none of them collapse when truecolour normalisation
-		// snaps them to the 32-level ladder — 31 of the 32 values survive (144 and 152 both
-		// land on 148), which still leaves far more keys than the cap. Neighbouring values
-		// would collapse wholesale, which is the point of the ladder but wouldn't fill it.
-		const distinctColor = (i: number) =>
-			`rgb(${(i % 32) * 8},${(Math.floor(i / 32) % 32) * 8},${(Math.floor(i / 1024) % 32) * 8})`
-
 		for (let i = 0; i < 12000; i++) {
 			renderGlyph(ctx, font, i % 256, 0, 0, distinctColor(i), '#000000')
 		}
-		assert.equal(font.glyphCache!.size, 4096, 'cache should have filled to the cap')
+		assert.equal(font.glyphCache!.size, 4096, 'cache should sit exactly at the cap')
 
 		const allocations = canvasesCreated - baseline
-		const cacheSize = font.glyphCache!.size
-		assert.ok(cacheSize <= 4096, `coloured cache should stay bounded, got ${cacheSize}`)
-		// Bounded by the cache cap, plus <=256 glyph masks, plus one scratch canvas.
-		assert.ok(
-			allocations <= 4096 + 256 + 1,
-			`allocations should be bounded, got ${allocations}`
-		)
+		assert.ok(allocations <= 4096, `allocations should be bounded by the cap, got ${allocations}`)
 
-		// Past the cap, further distinct colours must allocate nothing at all.
+		// Past the cap, further distinct colours must allocate nothing at all — misses
+		// repaint into the least-recently-used entry's canvas instead.
 		const steady = canvasesCreated
 		for (let i = 20000; i < 22000; i++) {
 			renderGlyph(ctx, font, i % 256, 0, 0, distinctColor(i), '#010203')
 		}
 		assert.equal(canvasesCreated, steady, 'overflow path must be allocation-free')
+		assert.equal(font.glyphCache!.size, 4096, 'recycling must not grow the cache')
 	})
 
-	it('caches at most one mask per char code', () => {
+	// The second regression: with no eviction, whichever keys arrived first squatted in the
+	// cache forever. Fonts are shared (the embedded font is a singleton), so on a page of many
+	// displays the cumulative key stream overflows the cap in seconds and every LATER key —
+	// including ones redrawn every frame — was demoted to the slow path permanently.
+	it('keeps a recurring key cached through unbounded churn (LRU, not first-come-forever)', () => {
 		const font = makeFont()
 		const ctx = targetContext()
 
-		// Push past the cap so the mask path is exercised, then hammer 256 char codes.
-		// Channels step by 8, which mostly survives the 32-level truecolour ladder (see above).
-		for (let i = 0; i < 5000; i++) {
-			const color = `rgb(${(i % 32) * 8},${(Math.floor(i / 32) % 32) * 8},${(Math.floor(i / 1024) % 32) * 8})`
-			renderGlyph(ctx, font, i % 256, 0, 0, color, '#000000')
+		// Fill to the cap, then establish a hot key that arrives AFTER the cache is full.
+		for (let i = 0; i < 12000; i++) {
+			renderGlyph(ctx, font, i % 256, 0, 0, distinctColor(i), '#000000')
 		}
-		for (let pass = 0; pass < 3; pass++) {
-			for (let code = 0; code < 256; code++) {
-				renderGlyph(ctx, font, code, 0, 0, `rgb(${pass},${code},99)`, '#000000')
-			}
+		const hotFg = '#123456'
+		const hotKey = () => renderGlyph(ctx, font, 65, 0, 0, hotFg, '#000000')
+		hotKey()
+
+		// Churn thousands of one-shot keys, touching the hot key the way a live frame does
+		// (every cell redraw): it must survive, an untouched one-shot key must not.
+		for (let i = 30000; i < 34000; i++) {
+			renderGlyph(ctx, font, i % 256, 0, 0, distinctColor(i), '#040404')
+			if (i % 100 === 0) hotKey()
 		}
 
-		assert.ok(font.glyphMaskCache!.size <= 256, 'mask cache must not exceed 256 entries')
+		assert.ok(font.glyphCache!.has(`65:${hotFg}:#000000`), 'recurring key must stay cached')
+
+		const steady = canvasesCreated
+		hotKey()
+		assert.equal(canvasesCreated, steady, 'recurring key must render from cache')
+	})
+
+	it('clears a recycled canvas before repainting', () => {
+		const font = makeFont()
+		const ctx = targetContext()
+
+		for (let i = 0; i < 5000; i++) {
+			renderGlyph(ctx, font, i % 256, 0, 0, distinctColor(i), '#000000')
+		}
+		// Every canvas is now in the cache; the next miss recycles one. The stub records
+		// clears, so verify the repaint starts from a blank surface (a translucent background
+		// would otherwise blend with the evicted glyph's pixels).
+		const before = createdCanvases.map((c) => c.getContext().cleared)
+		renderGlyph(ctx, font, 65, 0, 0, '#fedcba', 'rgba(0,0,0,0.5)')
+		const clearedNow = createdCanvases.filter((c, i) => c.getContext().cleared > before[i])
+		assert.equal(clearedNow.length, 1, 'exactly one recycled canvas should be cleared')
 	})
 })
 
 // Truecolour callers key a new cache entry per cell per frame unless their colours are
-// snapped to a bounded ladder; once the cache is full every draw takes the slow mask-tint
-// path. The 32-level ladder moves any channel by at most 4/255.
+// snapped to a bounded ladder; unquantized colour would churn the LRU cache with keys that
+// never repeat. The 32-level ladder moves any channel by at most 4/255.
 describe('truecolour normalisation', () => {
 	const LEVEL_STEP = 255 / 31
 	const onLadder = (v: number) => Math.round((Math.round((v * 31) / 255) * 255) / 31)
@@ -225,7 +253,7 @@ describe('truecolour normalisation', () => {
 		}
 		assert.ok(normalizedColorCacheSize() <= 8192, `memo must stay bounded, got ${normalizedColorCacheSize()}`)
 
-		// Past the cap the memo stops growing but still returns correct results.
+		// Past the cap the memo evicts rather than grows, and still returns correct results.
 		assert.equal(normalizeGlyphColor('rgb(100,100,100)'), `rgb(${onLadder(100)},${onLadder(100)},${onLadder(100)})`)
 	})
 })
