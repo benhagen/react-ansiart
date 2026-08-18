@@ -6,8 +6,7 @@ export type BitmapFont = {
 	height: number
 	glyphs: Uint8Array[] // Array of 256 glyphs, each is height bytes (1 byte per row)
 	rawBitmapData?: Uint8Array // Optional raw bitmap data for debugging
-	glyphCache?: Map<string, HTMLCanvasElement> // Cache of pre-rendered glyphs as canvases
-	glyphMaskCache?: Map<number, HTMLCanvasElement> // Cache of glyph shapes, at most one per char code
+	glyphCache?: Map<string, HTMLCanvasElement> // LRU cache of pre-rendered glyphs as canvases
 }
 
 /** How many leading bytes of a candidate region the offset heuristic inspects. */
@@ -79,11 +78,16 @@ export async function loadRawBitmapFont(url: string, width = 8, height = 16): Pr
 /**
  * Upper bound on fully-coloured glyph canvases kept per font.
  *
- * DOS-palette art only ever needs a few hundred (char x 16 fg x 16 bg in the worst case,
- * far fewer in practice), so it stays entirely on the cached fast path. Generators emitting
- * 24-bit colour produce a near-unique key per cell, which would otherwise allocate a canvas
- * element per cell per frame; past this cap those fall back to tinting a shared mask, which
- * allocates nothing.
+ * The cache is LRU: a hit refreshes the entry's recency, and a miss at the cap evicts the
+ * least-recently-used entry and repaints into its canvas rather than allocating a new one.
+ * Eviction matters because fonts are shared — the embedded VGA font is a process-wide
+ * singleton, so every display on a page draws through ONE cache. A page of concurrent
+ * truecolour generators (the demo's generator picker runs ~28 displays) mints more distinct
+ * (char, fg, bg) keys than any fixed cap within seconds; an insert-until-full cache then
+ * degrades every uncached draw to a slow path *permanently*, even though the set of keys
+ * live at any moment is far smaller than the cap. LRU keeps the recurring working set on
+ * the fast path and recycles canvases for the rest, so memory and allocations stay bounded
+ * without the one-way ratchet.
  */
 const MAX_COLORED_GLYPHS = 4096
 
@@ -118,8 +122,10 @@ const TRUECOLOR_LUT = (() => {
  *
  * Normalising on every call (rather than only on a cache miss) is what makes the glyph
  * cache effective: a miss-only normalisation would keep caching the raw key and re-parse
- * it forever. The memo keeps the per-call cost at one Map lookup. Past the cap insertion
- * stops and unseen colours are re-parsed each time — bounded memory, graceful slowdown.
+ * it forever. The memo keeps the per-call cost at one Map lookup. The memo is LRU for the
+ * same reason as the glyph cache: it is process-wide, so stop-inserting-at-cap would let
+ * whichever colours arrived first squat in it forever while the currently-live palette
+ * re-parses on every draw.
  */
 const MAX_NORMALIZED_COLORS = 8192
 
@@ -137,7 +143,15 @@ const RGB_PATTERN = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/
  */
 export function normalizeGlyphColor(color: string): string {
 	const memo = normalizedColors.get(color)
-	if (memo !== undefined) return memo
+	if (memo !== undefined) {
+		// Refresh recency only once the memo is contended; below the cap insertion order
+		// doesn't matter and the common path stays a single Map lookup.
+		if (normalizedColors.size >= MAX_NORMALIZED_COLORS) {
+			normalizedColors.delete(color)
+			normalizedColors.set(color, memo)
+		}
+		return memo
+	}
 	if (!color.startsWith('rgb(')) return color
 
 	const match = RGB_PATTERN.exec(color)
@@ -148,60 +162,17 @@ export function normalizeGlyphColor(color: string): string {
 	const b = TRUECOLOR_LUT[Math.min(255, +match[3])]
 	const quantized = `rgb(${r},${g},${b})`
 
-	if (normalizedColors.size < MAX_NORMALIZED_COLORS) {
-		normalizedColors.set(color, quantized)
+	if (normalizedColors.size >= MAX_NORMALIZED_COLORS) {
+		const oldest = normalizedColors.keys().next().value
+		if (oldest !== undefined) normalizedColors.delete(oldest)
 	}
+	normalizedColors.set(color, quantized)
 	return quantized
 }
 
 /** Current size of the raw -> quantized colour memo. Exported for tests. */
 export function normalizedColorCacheSize(): number {
 	return normalizedColors.size
-}
-
-/** Reusable scratch canvas for tinting glyph masks. One per document, not per cell. */
-let tintScratch: HTMLCanvasElement | null = null
-let tintScratchCtx: CanvasRenderingContext2D | null = null
-
-function getTintScratch(width: number, height: number): CanvasRenderingContext2D {
-	if (!tintScratch || tintScratch.width !== width || tintScratch.height !== height) {
-		tintScratch = document.createElement('canvas')
-		tintScratch.width = width
-		tintScratch.height = height
-		tintScratchCtx = tintScratch.getContext('2d', { willReadFrequently: false })!
-	}
-	return tintScratchCtx!
-}
-
-/**
- * Get the glyph's shape as an opaque-white-on-transparent mask, rendered once per char code.
- * Walking the bitmap is the expensive part; tinting the result is cheap.
- */
-function getGlyphMask(font: BitmapFont, charCode: number): HTMLCanvasElement {
-	if (!font.glyphMaskCache) {
-		font.glyphMaskCache = new Map()
-	}
-	const cached = font.glyphMaskCache.get(charCode)
-	if (cached) return cached
-
-	const glyph = font.glyphs[charCode] || font.glyphs[0]
-	const mask = document.createElement('canvas')
-	mask.width = font.width
-	mask.height = font.height
-	const maskCtx = mask.getContext('2d', { willReadFrequently: false })!
-	maskCtx.fillStyle = '#ffffff'
-	for (let row = 0; row < font.height; row++) {
-		const byte = glyph[row]
-		for (let col = 0; col < font.width; col++) {
-			const bit = 7 - col
-			if (byte & (1 << bit)) {
-				maskCtx.fillRect(col, row, 1, 1)
-			}
-		}
-	}
-
-	font.glyphMaskCache.set(charCode, mask)
-	return mask
 }
 
 /**
@@ -229,54 +200,52 @@ export function renderGlyph(
 	const cached = font.glyphCache.get(cacheKey)
 
 	if (cached) {
+		// Refresh recency: Map preserves insertion order, so delete+set keeps the entry out
+		// of eviction's way. Only needed once the cache is contended; below the cap a hit is
+		// just the lookup above.
+		if (font.glyphCache.size >= MAX_COLORED_GLYPHS) {
+			font.glyphCache.delete(cacheKey)
+			font.glyphCache.set(cacheKey, cached)
+		}
 		ctx.drawImage(cached, x, y)
 		return
 	}
 
-	if (font.glyphCache.size < MAX_COLORED_GLYPHS) {
-		// Room to cache this colour combination: compose it once into its own canvas by
-		// painting the bitmap directly. Total allocations are bounded by the cap.
-		const glyph = font.glyphs[charCode] || font.glyphs[0]
-		const canvas = document.createElement('canvas')
+	// Miss: paint this colour combination into its own canvas. At the cap, evict the
+	// least-recently-used entry and repaint into its canvas — steady state allocates
+	// nothing, no matter how many distinct colours a generator streams through.
+	let canvas: HTMLCanvasElement
+	if (font.glyphCache.size >= MAX_COLORED_GLYPHS) {
+		const oldestKey = font.glyphCache.keys().next().value as string
+		canvas = font.glyphCache.get(oldestKey)!
+		font.glyphCache.delete(oldestKey)
+	} else {
+		canvas = document.createElement('canvas')
 		canvas.width = font.width
 		canvas.height = font.height
-		const glyphCtx = canvas.getContext('2d', { willReadFrequently: false })!
+	}
+	const glyphCtx = canvas.getContext('2d', { willReadFrequently: false })!
 
-		glyphCtx.fillStyle = bgColor
-		glyphCtx.fillRect(0, 0, font.width, font.height)
+	// A recycled canvas still holds the evicted glyph; a translucent background (rgba,
+	// 'transparent') would blend with it instead of replacing it, so clear first.
+	glyphCtx.clearRect(0, 0, font.width, font.height)
+	glyphCtx.fillStyle = bgColor
+	glyphCtx.fillRect(0, 0, font.width, font.height)
 
-		glyphCtx.fillStyle = fgColor
-		for (let row = 0; row < font.height; row++) {
-			const byte = glyph[row]
-			for (let col = 0; col < font.width; col++) {
-				const bit = 7 - col
-				if (byte & (1 << bit)) {
-					glyphCtx.fillRect(col, row, 1, 1)
-				}
+	const glyph = font.glyphs[charCode] || font.glyphs[0]
+	glyphCtx.fillStyle = fgColor
+	for (let row = 0; row < font.height; row++) {
+		const byte = glyph[row]
+		for (let col = 0; col < font.width; col++) {
+			const bit = 7 - col
+			if (byte & (1 << bit)) {
+				glyphCtx.fillRect(col, row, 1, 1)
 			}
 		}
-
-		font.glyphCache.set(cacheKey, canvas)
-		ctx.drawImage(canvas, x, y)
-		return
 	}
 
-	// Cache is full — tint the shared per-char-code mask through the scratch canvas instead.
-	// Slower per cell than a cache hit, but allocation-free, so a truecolour generator
-	// degrades smoothly rather than churning one canvas element per cell per frame.
-	const mask = getGlyphMask(font, charCode)
-	const scratchCtx = getTintScratch(font.width, font.height)
-	scratchCtx.globalCompositeOperation = 'source-over'
-	scratchCtx.clearRect(0, 0, font.width, font.height)
-	scratchCtx.drawImage(mask, 0, 0)
-	scratchCtx.globalCompositeOperation = 'source-in'
-	scratchCtx.fillStyle = fgColor
-	scratchCtx.fillRect(0, 0, font.width, font.height)
-	scratchCtx.globalCompositeOperation = 'source-over'
-
-	ctx.fillStyle = bgColor
-	ctx.fillRect(x, y, font.width, font.height)
-	ctx.drawImage(tintScratch!, x, y)
+	font.glyphCache.set(cacheKey, canvas)
+	ctx.drawImage(canvas, x, y)
 }
 
 /**

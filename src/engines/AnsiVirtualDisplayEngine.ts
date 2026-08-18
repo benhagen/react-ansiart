@@ -136,7 +136,6 @@ export class AnsiVirtualDisplayEngine {
 	setBitmapFont(font: BitmapFont | null): void {
 		// Release the outgoing font's rendered glyphs; they are keyed to its bitmaps.
 		this.bitmapFont?.glyphCache?.clear()
-		this.bitmapFont?.glyphMaskCache?.clear()
 		this.previousCells = null
 		this.bitmapFont = font
 		this.forceNextBlit = true
