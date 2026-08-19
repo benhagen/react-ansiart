@@ -1653,6 +1653,78 @@ function App() {
 | `swaySpeed`      | `number`   | `0.07`                       | Seaweed sway rate (radians/frame)                            |
 | `speed`          | `number`   | `1`                          | Global animation speed multiplier                            |
 
+#### Physarum
+
+A Physarum polycephalum (slime mold) agent simulation — agents sense, steer toward, and deposit trail in a shared field, self-organizing into a branching, constantly rewiring transport network of filaments:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiPhysarumFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiPhysarumFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiPhysarumOptions`):
+
+| Option           | Type       | Default                     | Description                                                          |
+| ---------------- | ---------- | ---------------------------- | ---------------------------------------------------------------------- |
+| `seed`           | `number`   | `1337`                      | Seed for initial agent positions/headings and the random-turn tiebreaker |
+| `agentDensity`   | `number`   | `0.6`                       | Agents per grid cell; count is round(columns × rows × agentDensity), clamped to [64, 6000] |
+| `sensorAngle`    | `number`   | `0.45`                      | Angle (radians) between the forward sensor and each side sensor        |
+| `sensorDistance` | `number`   | `4`                         | Sensor distance ahead of the agent, in column-width world units        |
+| `turnSpeed`      | `number`   | `0.75`                      | Heading change (radians) applied when steering toward a side sensor    |
+| `moveSpeed`      | `number`   | `1`                         | Distance moved per step, in column-width world units                   |
+| `depositAmount`  | `number`   | `1`                         | Trail deposited into the agent's cell after each move                  |
+| `evaporation`    | `number`   | `0.85`                      | Per-step multiplicative trail retention after diffusion (0-0.99)       |
+| `stepsPerFrame`  | `number`   | `1`                         | Simulation substeps per frame                                          |
+| `chars`          | `string`   | `' ·:░▒▓█'`                 | Character ramp from empty to densest trail, dimmest first              |
+| `palette`        | `string[]` | black→deep teal→cyan→white  | Trail color gradient stops (CSS hex), low to high                      |
+| `bgColor`        | `string`   | `'#000000'`                 | Background color                                                       |
+
+Use `clearPhysarumState()` to reset the shared simulation state, or `createAsciiPhysarumGenerator()` for an isolated instance.
+
+#### Sandpile
+
+The Abelian sandpile (Bak–Tang–Wiesenfeld) — grains drop onto one cell and topple outward, growing a symmetric fractal mandala rippled by avalanches:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiSandpileFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiSandpileFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiSandpileOptions`):
+
+| Option            | Type       | Default                              | Description                                                        |
+| ----------------- | ---------- | ------------------------------------ | -------------------------------------------------------------------- |
+| `grainsPerStep`   | `number`   | `8`                                  | Grains added at the drop point per simulation substep                |
+| `stepsPerFrame`   | `number`   | `1`                                  | Simulation substeps per frame                                        |
+| `maxToppleSweeps` | `number`   | `24`                                 | Maximum full-grid topple sweeps per substep; unstable cells carry into the next frame so big avalanches ripple over several frames |
+| `palette`         | `string[]` | near-black, blue, purple, gold, white | Five colors for grain counts [0, 1, 2, 3, ≥4-mid-avalanche] (CSS color strings) |
+| `chars`           | `string[]` | `[' ', '█', '█', '█', '█']`          | Characters indexed by min(grain count, 4)                            |
+| `bgColor`         | `string`   | `'#000000'`                          | Background color                                                     |
+| `dropX`           | `number`   | `0.5`                                | Drop point x as a fraction of the grid width (0-1)                   |
+| `dropY`           | `number`   | `0.5`                                | Drop point y as a fraction of the grid height (0-1)                  |
+
+Use `clearSandpileState()` to reset the shared simulation state, or `createAsciiSandpileGenerator()` for an isolated instance.
+
 ### Post Effects
 
 `composeAnsiEffects` wraps any `CharacterFrameGenerator` with one or more post-processing passes (CRT lens distortion, scanlines, VHS tracking glitches) that run over the generated `AnsiScreen` each frame:
