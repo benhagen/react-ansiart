@@ -2,7 +2,7 @@ export { AnsiArt } from './components/AnsiArt'
 export type { AnsiArtProps } from './components/AnsiArt'
 
 export { AnsiVirtualDisplay } from './components/AnsiVirtualDisplay'
-export type { AnsiVirtualDisplayProps } from './components/AnsiVirtualDisplay'
+export type { AnsiCellPointerEvent, AnsiVirtualDisplayProps } from './components/AnsiVirtualDisplay'
 
 export { AnsiPlayerOverlay } from './components/AnsiPlayerOverlay'
 export type { AnsiPlayerOverlayProps } from './components/AnsiPlayerOverlay'
@@ -318,6 +318,13 @@ export type {
 	AnsiTransitionOptions,
 	TransitionKind,
 } from './generators/ansiTransitions'
+
+export { createAnsiPointerInput, mapClientToCell } from './generators/pointerInput'
+export type {
+	AnsiPointerInput,
+	AnsiPointerState,
+	CellMappingRect,
+} from './generators/pointerInput'
 
 export { createGeneratorStateStore } from './generators/generatorState'
 export type { GeneratorStateStore } from './generators/generatorState'
