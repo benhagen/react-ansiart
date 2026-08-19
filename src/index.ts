@@ -237,17 +237,71 @@ export {
 export type { AsciiBoidsOptions } from './generators/asciiBoidsGenerator'
 
 export {
+	createAsciiFireworksSampler,
+	generateAsciiFireworksFrame,
+} from './generators/asciiFireworksGenerator'
+export type { AsciiFireworksOptions } from './generators/asciiFireworksGenerator'
+
+export {
+	createAsciiAquariumSampler,
+	generateAsciiAquariumFrame,
+} from './generators/asciiAquariumGenerator'
+export type { AsciiAquariumOptions } from './generators/asciiAquariumGenerator'
+
+export {
+	createAsciiDonutSampler,
+	generateAsciiDonutFrame,
+} from './generators/asciiDonutGenerator'
+export type { AsciiDonutOptions } from './generators/asciiDonutGenerator'
+
+export {
+	createAsciiWireframeSampler,
+	generateAsciiWireframeFrame,
+} from './generators/asciiWireframeGenerator'
+export type { AsciiWireframeOptions, AsciiWireframeShape } from './generators/asciiWireframeGenerator'
+
+export {
+	clearShadebobsState,
+	createAsciiShadebobsGenerator,
+	createAsciiShadebobsSampler,
+	generateAsciiShadebobsFrame,
+} from './generators/asciiShadebobsGenerator'
+export type { AsciiShadebobsOptions } from './generators/asciiShadebobsGenerator'
+
+export {
+	createAsciiMunchingSquaresSampler,
+	generateAsciiMunchingSquaresFrame,
+} from './generators/asciiMunchingSquaresGenerator'
+export type { AsciiMunchingSquaresOptions } from './generators/asciiMunchingSquaresGenerator'
+
+export {
 	composeAnsiEffects,
+	createChromaticAberrationEffect,
+	createKaleidoscopeEffect,
 	createLensEffect,
+	createPhosphorPersistenceEffect,
 	createScanlineEffect,
 	createVhsTrackingEffect,
 } from './generators/ansiPostEffects'
 export type {
 	AnsiPostEffect,
+	ChromaticAberrationEffectOptions,
+	KaleidoscopeEffectOptions,
 	LensEffectOptions,
+	PhosphorPersistenceEffectOptions,
 	ScanlineEffectOptions,
 	VhsTrackingEffectOptions,
 } from './generators/ansiPostEffects'
+
+export {
+	createAnsiGeneratorCycle,
+	createAnsiTransition,
+} from './generators/ansiTransitions'
+export type {
+	AnsiGeneratorCycleOptions,
+	AnsiTransitionOptions,
+	TransitionKind,
+} from './generators/ansiTransitions'
 
 export { createGeneratorStateStore } from './generators/generatorState'
 export type { GeneratorStateStore } from './generators/generatorState'

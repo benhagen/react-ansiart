@@ -6,7 +6,10 @@ import type { CharacterFrameGeneratorWithMetadata } from '../types/types'
 import { CP437_TO_UNICODE } from '../utils/cp437'
 import {
 	composeAnsiEffects,
+	createChromaticAberrationEffect,
+	createKaleidoscopeEffect,
 	createLensEffect,
+	createPhosphorPersistenceEffect,
 	createScanlineEffect,
 	createVhsTrackingEffect,
 	type AnsiPostEffect,
@@ -76,6 +79,9 @@ function allEffects(): Array<{ name: string; effect: AnsiPostEffect }> {
 		{ name: 'lens', effect: createLensEffect() },
 		{ name: 'scanline', effect: createScanlineEffect({ dimOthers: true }) },
 		{ name: 'vhs', effect: createVhsTrackingEffect({ glitchInterval: 4, glitchDuration: 2 }) },
+		{ name: 'phosphor', effect: createPhosphorPersistenceEffect() },
+		{ name: 'chromatic', effect: createChromaticAberrationEffect() },
+		{ name: 'kaleidoscope', effect: createKaleidoscopeEffect() },
 	]
 }
 
@@ -391,6 +397,228 @@ describe('createVhsTrackingEffect', () => {
 				}
 			}
 		}
+	})
+})
+
+describe('createPhosphorPersistenceEffect', () => {
+	/** One lit cell at (x, y) on an otherwise dark screen. */
+	function dotScreen(columns: number, rows: number, x: number, y: number): AnsiScreen {
+		const lines: AnsiCell[][] = []
+		for (let yy = 0; yy < rows; yy++) {
+			const line: AnsiCell[] = []
+			for (let xx = 0; xx < columns; xx++) {
+				line.push({
+					ch: xx === x && yy === y ? '@' : ' ',
+					fg: xx === x && yy === y ? 'rgb(200,100,40)' : '#000000',
+					bg: '#000000',
+					bold: false,
+				})
+			}
+			lines.push(line)
+		}
+		return { lines, columns }
+	}
+
+	it('leaves a fading trail behind a moving cell', () => {
+		const effect = createPhosphorPersistenceEffect({ decayFrames: 6, strength: 1 })
+		effect(dotScreen(10, 3, 2, 1), 0, 10, 3)
+		// The dot moves; its old position goes dark and must keep glowing.
+		const out = effect(dotScreen(10, 3, 5, 1), 1, 10, 3)
+		const trail = out.lines[1][2]
+		assert.equal(trail.ch, '@', 'trail keeps the departed glyph')
+		assert.notEqual(trail.fg, '#000000')
+		const first = /^rgb\((\d+),/.exec(String(trail.fg))
+		assert.ok(first && Number(first[1]) > 100, `trail should start bright, got ${trail.fg}`)
+
+		// And it decays over subsequent frames until gone.
+		let previous = Number(first![1])
+		let faded = false
+		for (let frame = 2; frame < 12; frame++) {
+			const next = effect(dotScreen(10, 3, 5, 1), frame, 10, 3)
+			const cell = next.lines[1][2]
+			if (cell.ch === ' ') {
+				faded = true
+				break
+			}
+			const match = /^rgb\((\d+),/.exec(String(cell.fg))
+			assert.ok(match)
+			const value = Number(match![1])
+			assert.ok(value <= previous, `trail brightened from ${previous} to ${value}`)
+			previous = value
+		}
+		assert.ok(faded, 'trail never fully faded')
+	})
+
+	it('re-lighting a cell replaces its trail with the live cell by reference', () => {
+		const effect = createPhosphorPersistenceEffect({ decayFrames: 8 })
+		effect(dotScreen(10, 3, 2, 1), 0, 10, 3)
+		effect(dotScreen(10, 3, 5, 1), 1, 10, 3)
+		const relit = dotScreen(10, 3, 2, 1)
+		const out = effect(relit, 2, 10, 3)
+		assert.equal(out.lines[1][2], relit.lines[1][2])
+	})
+
+	it('resets its memory when the frame number rewinds', () => {
+		const effect = createPhosphorPersistenceEffect({ decayFrames: 8, strength: 1 })
+		effect(dotScreen(10, 3, 2, 1), 0, 10, 3)
+		effect(dotScreen(10, 3, 5, 1), 1, 10, 3)
+		// Rewind to frame 0: memory clears, so the old position shows the raw dark cell.
+		const rewound = dotScreen(10, 3, 5, 1)
+		const out = effect(rewound, 0, 10, 3)
+		assert.equal(out.lines[1][2], rewound.lines[1][2], 'expected no trail after a rewind')
+	})
+
+	it('dims numeric ANSI palette colors through the EGA table', () => {
+		const effect = createPhosphorPersistenceEffect({ decayFrames: 6, strength: 1 })
+		const lit: AnsiScreen = {
+			columns: 3,
+			lines: [[
+				{ ch: '#', fg: 14, bg: 0, bold: false },
+				{ ch: ' ', fg: 7, bg: 0, bold: false },
+				{ ch: ' ', fg: 7, bg: 0, bold: false },
+			]],
+		}
+		const dark: AnsiScreen = {
+			columns: 3,
+			lines: [[
+				{ ch: ' ', fg: 7, bg: 0, bold: false },
+				{ ch: ' ', fg: 7, bg: 0, bold: false },
+				{ ch: ' ', fg: 7, bg: 0, bold: false },
+			]],
+		}
+		effect(lit, 0, 3, 1)
+		const out = effect(dark, 1, 3, 1)
+		const trail = out.lines[0][0]
+		assert.equal(trail.ch, '#')
+		// ANSI 14 is yellow (255,255,85); the trail must be an rgb() dim of it.
+		const match = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(String(trail.fg))
+		assert.ok(match, `expected an rgb() trail color, got ${trail.fg}`)
+		assert.ok(Number(match![1]) > 0 && Number(match![1]) <= 255)
+		assert.equal(match![1], match![2], 'yellow keeps r == g when dimmed')
+	})
+})
+
+describe('createChromaticAberrationEffect', () => {
+	/** A screen with a hard vertical color edge at column `edge`. */
+	function edgeScreen(columns: number, rows: number, edge: number): AnsiScreen {
+		const lines: AnsiCell[][] = []
+		for (let y = 0; y < rows; y++) {
+			const line: AnsiCell[] = []
+			for (let x = 0; x < columns; x++) {
+				line.push({
+					ch: '█',
+					fg: x < edge ? 'rgb(255,255,255)' : 'rgb(0,0,0)',
+					bg: '#000000',
+					bold: false,
+				})
+			}
+			lines.push(line)
+		}
+		return { lines, columns }
+	}
+
+	it('fringes colors at a hard edge but leaves flat areas untouched by reference', () => {
+		const input = edgeScreen(40, 5, 30)
+		const effect = createChromaticAberrationEffect({ maxShift: 2, falloff: 'uniform' })
+		const out = effect(input, 0, 40, 5)
+
+		// Deep inside the flat white region: reference pass-through.
+		assert.equal(out.lines[2][10], input.lines[2][10])
+		// Just right of the edge: red channel sampled from the white side -> red fringe.
+		const fringed = out.lines[2][30]
+		const match = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(String(fringed.fg))
+		assert.ok(match, `expected an rgb() fringe, got ${String(fringed.fg)}`)
+		assert.ok(Number(match![1]) > Number(match![3]), 'expected red > blue right of a white edge')
+		// Just left of the edge: blue channel sampled from the black side -> blue drops out first,
+		// i.e. blue < red is false there; instead blue is pulled DOWN: r stays 255.
+		const leftOfEdge = out.lines[2][29]
+		const lm = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(String(leftOfEdge.fg))
+		assert.ok(lm)
+		assert.ok(Number(lm![3]) < Number(lm![1]), 'expected blue < red left of a white edge')
+	})
+
+	it("edge falloff keeps the screen center clean", () => {
+		const input = makeScreen(41, 5)
+		const effect = createChromaticAberrationEffect({ maxShift: 2, falloff: 'edge' })
+		const out = effect(input, 0, 41, 5)
+		// shift table is 0 near the center column regardless of content.
+		assert.equal(out.lines[2][20], input.lines[2][20])
+		assert.equal(out.lines[2][21], input.lines[2][21])
+	})
+
+	it('maxShift 0 is a total pass-through of the input screen object', () => {
+		const input = makeScreen(20, 5)
+		const effect = createChromaticAberrationEffect({ maxShift: 0 })
+		assert.equal(effect(input, 0, 20, 5), input)
+	})
+
+	it('never changes glyphs, only colors', () => {
+		const input = makeScreen(32, 8)
+		const effect = createChromaticAberrationEffect({ maxShift: 3, falloff: 'uniform' })
+		const out = effect(input, 0, 32, 8)
+		for (let y = 0; y < 8; y++) {
+			for (let x = 0; x < 32; x++) {
+				assert.equal(out.lines[y][x].ch, input.lines[y][x].ch)
+			}
+		}
+	})
+})
+
+describe('createKaleidoscopeEffect', () => {
+	it('produces mirror symmetry from an asymmetric source', () => {
+		// Source: left half 'L', right half 'R'. A 2-segment kaleidoscope with no rotation
+		// must produce a screen symmetric under vertical mirroring about the center row axis.
+		const columns = 21
+		const rows = 11
+		const lines: AnsiCell[][] = []
+		for (let y = 0; y < rows; y++) {
+			const line: AnsiCell[] = []
+			for (let x = 0; x < columns; x++) {
+				line.push({ ch: y < 5 ? 'T' : y > 5 ? 'B' : 'M', fg: 'rgb(9,9,9)', bg: '#000', bold: false })
+			}
+			lines.push(line)
+		}
+		const input: AnsiScreen = { lines, columns }
+		const effect = createKaleidoscopeEffect({
+			segments: 2,
+			rotateSpeed: 0,
+			sourceRotateSpeed: 0,
+		})
+		const out = effect(input, 0, columns, rows)
+		for (let y = 0; y < rows; y++) {
+			for (let x = 0; x < columns; x++) {
+				assert.equal(
+					out.lines[y][x].ch,
+					out.lines[rows - 1 - y][x].ch,
+					`asymmetric at ${x},${y}`
+				)
+			}
+		}
+	})
+
+	it('emits only cells that exist in the source (pure remapping)', () => {
+		const input = makeScreen(30, 15)
+		const sourceCells = new Set<AnsiCell>()
+		for (const line of input.lines) for (const cell of line) sourceCells.add(cell)
+
+		const effect = createKaleidoscopeEffect({ segments: 6 })
+		for (const frame of [0, 10, 100]) {
+			const out = effect(input, frame, 30, 15)
+			for (const line of out.lines) {
+				for (const cell of line) {
+					assert.ok(sourceCells.has(cell), 'kaleidoscope invented a cell')
+				}
+			}
+		}
+	})
+
+	it('rotation animates the output over time', () => {
+		const input = makeScreen(30, 15)
+		const effect = createKaleidoscopeEffect({ segments: 6, rotateSpeed: 0.05 })
+		const asText = (s: AnsiScreen) => s.lines.map((l) => l.map((c) => c.ch).join('')).join('\n')
+		const a = asText(effect(input, 0, 30, 15))
+		const b = asText(effect(input, 40, 30, 15))
+		assert.notEqual(a, b)
 	})
 })
 

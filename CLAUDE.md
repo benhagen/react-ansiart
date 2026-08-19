@@ -5,7 +5,7 @@ add-a-generator recipe, and the complete hard-rules list. This file is the short
 
 ## Project Overview
 Zero-dependency React library for rendering and animating ANSI art files (.ANS, .ASC) with
-authentic VGA-style bitmap font rendering, plus 27 procedural demoscene frame generators and
+authentic VGA-style bitmap font rendering, plus 35 procedural demoscene frame generators and
 a composable post-effect layer. CP437 encoding, cursor control codes, progressive
 byte-rate animation, SAUCE metadata.
 
@@ -34,7 +34,7 @@ Run typecheck + test + lint before every commit.
 src/
 ├── components/        # AnsiArt, AnsiVirtualDisplay, AnsiPlayerOverlay, PlasmaBackgroundLayout, FontCharacterChart
 ├── engines/           # AnsiVirtualDisplayEngine (canvas rendering)
-├── generators/        # 27 frame generators + ansiPostEffects + generatorState + simulationCatchup
+├── generators/        # 35 frame generators + ansiTransitions + ansiPostEffects + generatorState + simulationCatchup
 ├── ansi/              # Resumable ANSI parser, frameToAnsi, shapeAsciiConverter
 ├── font/              # Bitmap font loading, rendering, .FON extraction, caching, embedded VGA font
 ├── utils/             # CP437 encoding, EGA palette, RGB→ANSI, SAUCE parsing, perf overlay
