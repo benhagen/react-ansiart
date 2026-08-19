@@ -66,6 +66,7 @@ import {
 	createAsciiShadebobsGenerator,
 	createAsciiPhysarumGenerator,
 	createAsciiSandpileGenerator,
+	createAnsiPointerInput,
 	createAnsiGeneratorCycle,
 	createShapeConverter,
 	getEmbeddedVgaFont,
@@ -599,6 +600,7 @@ function GeneratorsPlayground() {
 	const [boidsCohWeight, setBoidsCohWeight] = useState(BOIDS_DEFAULTS.cohWeight)
 	const [boidsHeadColor, setBoidsHeadColor] = useState(BOIDS_DEFAULTS.headColor)
 	const [boidsBgColor, setBoidsBgColor] = useState(BOIDS_DEFAULTS.bgColor)
+	const [boidsPointerMode, setBoidsPointerMode] = useState<string>(BOIDS_DEFAULTS.pointerMode)
 
 	// Donut state
 	const [donutSpeedA, setDonutSpeedA] = useState(DONUT_DEFAULTS.speedA)
@@ -675,6 +677,16 @@ function GeneratorsPlayground() {
 	const [saverTransitionFrames, setSaverTransitionFrames] = useState(SCREENSAVER_DEFAULTS.transitionFrames)
 	const [saverKind, setSaverKind] = useState<string>(SCREENSAVER_DEFAULTS.kind)
 
+	// Pointer interactivity: one channel for the playground, fed by the display and read
+	// by whichever interactive generator is active. Stable identity for the memo deps.
+	const pointerInput = useMemo(() => createAnsiPointerInput(), [])
+	const isPointerInteractive =
+		generatorType === 'waterRipple' ||
+		generatorType === 'fallingSand' ||
+		generatorType === 'metaballs' ||
+		generatorType === 'boids' ||
+		generatorType === 'physarum'
+
 	// Post FX state
 	const [fxLens, setFxLens] = useState(false)
 	const [fxScanline, setFxScanline] = useState(false)
@@ -694,10 +706,11 @@ function GeneratorsPlayground() {
 		clearCyclicAutomatonState()
 		clearFallingSandState()
 		clearBoidsState()
+		pointerInput.reset()
 		clearShadebobsState()
 		clearPhysarumState()
 		clearSandpileState()
-	}, [generatorType])
+	}, [generatorType, pointerInput])
 
 	const parseOptionalNumber = (value: string): number | undefined => {
 		const v = value.trim()
@@ -762,6 +775,7 @@ function GeneratorsPlayground() {
 					fgColor: metaballsFgColor,
 					bgColor: metaballsBgColor,
 					chars: metaballsChars.trim() ? Array.from(metaballsChars) : undefined,
+					pointer: pointerInput,
 				})
 		}
 		if (generatorType === 'matrix') {
@@ -822,6 +836,7 @@ function GeneratorsPlayground() {
 					bgColor: rippleBgColor,
 					chars: rippleChars.trim() || undefined,
 					seed: rippleSeed,
+					pointer: pointerInput,
 				})
 		}
 		if (generatorType === 'mandelbrot') {
@@ -993,6 +1008,7 @@ function GeneratorsPlayground() {
 					wallColor: sandWallColor,
 					bgColor: sandBgColor,
 					seed: sandSeed,
+					pointer: pointerInput,
 				})
 		}
 		if (generatorType === 'bumpMapping') {
@@ -1026,6 +1042,8 @@ function GeneratorsPlayground() {
 					cohWeight: boidsCohWeight,
 					headColor: boidsHeadColor,
 					bgColor: boidsBgColor,
+					pointer: pointerInput,
+					pointerMode: boidsPointerMode as 'flee' | 'attract' | 'none',
 				})
 		}
 		if (generatorType === 'donut') {
@@ -1109,6 +1127,7 @@ function GeneratorsPlayground() {
 					stepsPerFrame: physarumStepsPerFrame,
 					seed: physarumSeed,
 					bgColor: physarumBgColor,
+					pointer: pointerInput,
 				})
 		}
 		if (generatorType === 'sandpile') {
@@ -1185,6 +1204,7 @@ function GeneratorsPlayground() {
 		bumpNoiseScale, bumpOrbitSpeed, bumpLightHeight, bumpBumpStrength, bumpSpecularPower, bumpBgColor,
 		juliaMaxIter, juliaMorphSpeed, juliaRadius, juliaColorMode, juliaFgColor, juliaBgColor,
 		boidsCount, boidsSepWeight, boidsAlignWeight, boidsCohWeight, boidsHeadColor, boidsBgColor,
+		boidsPointerMode, pointerInput,
 		donutSpeedA, donutSpeedB, donutSize, donutTubeRatio, donutBaseColor, donutBgColor,
 		wireframeShape, wireframeSize, wireframeSpeedX, wireframeSpeedY, wireframeSpeedZ,
 		wireframeEdgeColor, wireframeVertexColor, wireframeDepthShading, wireframeBgColor,
@@ -1305,7 +1325,7 @@ function GeneratorsPlayground() {
 			defaults: JULIA_DEFAULTS,
 		},
 		boids: {
-			options: { count: boidsCount, sepWeight: boidsSepWeight, alignWeight: boidsAlignWeight, cohWeight: boidsCohWeight, headColor: boidsHeadColor, bgColor: boidsBgColor },
+			options: { count: boidsCount, sepWeight: boidsSepWeight, alignWeight: boidsAlignWeight, cohWeight: boidsCohWeight, headColor: boidsHeadColor, bgColor: boidsBgColor, pointerMode: boidsPointerMode },
 			defaults: BOIDS_DEFAULTS,
 		},
 		donut: {
@@ -1595,6 +1615,7 @@ function GeneratorsPlayground() {
 			numParam('cohWeight', boidsCohWeight, BOIDS_DEFAULTS.cohWeight, setBoidsCohWeight),
 			strParam('headColor', boidsHeadColor, BOIDS_DEFAULTS.headColor, setBoidsHeadColor),
 			strParam('bgColor', boidsBgColor, BOIDS_DEFAULTS.bgColor, setBoidsBgColor),
+			strParam('pointerMode', boidsPointerMode, BOIDS_DEFAULTS.pointerMode, setBoidsPointerMode),
 		],
 		donut: [
 			numParam('speedA', donutSpeedA, DONUT_DEFAULTS.speedA, setDonutSpeedA),
@@ -1851,8 +1872,14 @@ function GeneratorsPlayground() {
 							fps={fps}
 							frameGenerator={composedGenerator}
 							showPerformanceOverlay={showPerformanceOverlay}
+							pointerInput={isPointerInteractive ? pointerInput : undefined}
 						/>
 					</Stage>
+					{isPointerInteractive && (
+						<div style={{ fontSize: 12, color: 'var(--text-dim, #888)' }}>
+							🖱 This generator is interactive — move, press, and drag on the canvas.
+						</div>
+					)}
 				</div>
 				<div className="controls-panel">
 					<ControlGroup label="Generator">
@@ -2202,6 +2229,7 @@ function GeneratorsPlayground() {
 							cohWeight={boidsCohWeight} setCohWeight={setBoidsCohWeight}
 							headColor={boidsHeadColor} setHeadColor={setBoidsHeadColor}
 							bgColor={boidsBgColor} setBgColor={setBoidsBgColor}
+							pointerMode={boidsPointerMode} setPointerMode={setBoidsPointerMode}
 						/>
 					)}
 

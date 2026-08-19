@@ -303,6 +303,7 @@ export const BOIDS_DEFAULTS = {
 	cohWeight: 0.8,
 	headColor: '#eafcff',
 	bgColor: '#000006',
+	pointerMode: 'flee' as const,
 }
 
 export const DONUT_DEFAULTS = {
