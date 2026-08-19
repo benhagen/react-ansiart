@@ -10,6 +10,18 @@ import type {
 	DisplayFrameGenerator,
 	GeneratorCapabilities,
 } from '../types/types'
+import { mapClientToCell, type AnsiPointerInput } from '../generators/pointerInput'
+
+/** A pointer event translated into character-cell coordinates. */
+export type AnsiCellPointerEvent = {
+	type: 'move' | 'down' | 'up' | 'leave'
+	/** Horizontal position in fractional cell coordinates (virtual-world space). */
+	x: number
+	/** Vertical position in fractional cell coordinates (virtual-world space). */
+	y: number
+	/** `PointerEvent.buttons` bitmask at the time of the event. */
+	buttons: number
+}
 
 // Playback transport UI. Gated behind `showOverlayControls` (default false) *and* a generator
 // that reports seek/speed capabilities, so the common cases — static art, procedural background
@@ -47,6 +59,14 @@ export type AnsiVirtualDisplayProps = {
 	onSauceClick?: () => void
 	// Animation control
 	autoStart?: boolean // Start animation automatically (default: true, only applies to animated mode)
+	/**
+	 * Pointer input channel for interactive generators. When set, the display feeds pointer
+	 * moves/presses/leaves into it in cell coordinates (offset by viewX/viewY for windowed
+	 * virtual worlds); pass the same object to a generator's `pointer` option to react to it.
+	 */
+	pointerInput?: AnsiPointerInput
+	/** Raw cell-space pointer events, for app-level interactivity beyond `pointerInput`. */
+	onCellPointer?: (event: AnsiCellPointerEvent) => void
 }
 
 export function AnsiVirtualDisplay({
@@ -70,6 +90,8 @@ export function AnsiVirtualDisplay({
 	sauce,
 	onSauceClick,
 	autoStart,
+	pointerInput,
+	onCellPointer,
 }: AnsiVirtualDisplayProps) {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const engineRef = useRef<AnsiVirtualDisplayEngine | null>(null)
@@ -468,13 +490,70 @@ export function AnsiVirtualDisplay({
 		}
 	}, [])
 
+	// ─── Cell-space pointer interactivity ─────────────────────────────────────
+	// Translates canvas pointer events into fractional cell coordinates (virtual-world
+	// space) and forwards them to the injectable pointerInput channel and/or the raw
+	// onCellPointer callback. Handlers are only attached when either consumer exists.
+	const isPointerInteractive = pointerInput !== undefined || onCellPointer !== undefined
+
+	const dispatchCellPointer = useCallback(
+		(type: AnsiCellPointerEvent['type'], e: React.PointerEvent<HTMLCanvasElement>) => {
+			const canvas = canvasRef.current
+			if (!canvas) return
+			const rect = canvas.getBoundingClientRect()
+			const cell = mapClientToCell(rect, e.clientX, e.clientY, columns, rows, viewX, viewY)
+
+			if (pointerInput) {
+				if (type === 'move') pointerInput.move(cell.x, cell.y)
+				else if (type === 'down') pointerInput.down(cell.x, cell.y)
+				else if (type === 'up') pointerInput.up(cell.x, cell.y)
+				else pointerInput.leave()
+			}
+			if (onCellPointer) onCellPointer({ type, x: cell.x, y: cell.y, buttons: e.buttons })
+		},
+		[columns, rows, viewX, viewY, pointerInput, onCellPointer]
+	)
+
+	const handleCellPointerMove = useCallback(
+		(e: React.PointerEvent<HTMLCanvasElement>) => dispatchCellPointer('move', e),
+		[dispatchCellPointer]
+	)
+	const handleCellPointerDown = useCallback(
+		(e: React.PointerEvent<HTMLCanvasElement>) => {
+			// Capture so drags keep reporting cell positions until release, even when the
+			// pointer leaves the canvas mid-drag.
+			e.currentTarget.setPointerCapture?.(e.pointerId)
+			dispatchCellPointer('down', e)
+		},
+		[dispatchCellPointer]
+	)
+	const handleCellPointerUp = useCallback(
+		(e: React.PointerEvent<HTMLCanvasElement>) => dispatchCellPointer('up', e),
+		[dispatchCellPointer]
+	)
+	const handleCellPointerLeave = useCallback(
+		(e: React.PointerEvent<HTMLCanvasElement>) => dispatchCellPointer('leave', e),
+		[dispatchCellPointer]
+	)
+
+	// When the component unmounts (or interactivity is switched off), leave the channel in
+	// a clean inactive state instead of a stale "active" one.
+	useEffect(() => {
+		if (!pointerInput) return
+		return () => {
+			pointerInput.leave()
+		}
+	}, [pointerInput])
+
 	const rootStyle: React.CSSProperties = useMemo(() => {
 		return {
 			display: 'block',
 			width: fillContainer ? '100%' : 'fit-content',
 			background,
+			// Without this, touch drags scroll the page instead of driving the generator.
+			...(isPointerInteractive ? { touchAction: 'none' as const } : null),
 		}
-	}, [fillContainer, background])
+	}, [fillContainer, background, isPointerInteractive])
 
 	const canvasContainerStyle: React.CSSProperties = useMemo(() => ({
 		position: 'relative',
@@ -546,7 +625,20 @@ export function AnsiVirtualDisplay({
 				onMouseMove={handleMouseMove}
 				onMouseLeave={handleMouseLeave}
 			>
-				<canvas ref={canvasRef} style={rootStyle} aria-label='ANSI Virtual Display' />
+				<canvas
+					ref={canvasRef}
+					style={rootStyle}
+					aria-label='ANSI Virtual Display'
+					{...(isPointerInteractive
+						? {
+							onPointerMove: handleCellPointerMove,
+							onPointerDown: handleCellPointerDown,
+							onPointerUp: handleCellPointerUp,
+							onPointerLeave: handleCellPointerLeave,
+							onPointerCancel: handleCellPointerLeave,
+						}
+						: null)}
+				/>
 
 				{/* YouTube-style overlay controls */}
 				{supportsOverlayControls && (

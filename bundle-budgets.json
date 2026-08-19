@@ -15,17 +15,17 @@
 		{
 			"name": "PlasmaBackgroundLayout (root barrel)",
 			"import": "import { PlasmaBackgroundLayout } from 'react-ansiart'",
-			"maxGzip": 10800
+			"maxGzip": 11270
 		},
 		{
 			"name": "AnsiArt (root barrel)",
 			"import": "import { AnsiArt } from 'react-ansiart'",
-			"maxGzip": 15830
+			"maxGzip": 16280
 		},
 		{
 			"name": "single generator (root barrel)",
 			"import": "import { generateAsciiPerlinPlasmaFrame } from 'react-ansiart'",
-			"maxGzip": 1190
+			"maxGzip": 1200
 		},
 		{
 			"name": "single util (root barrel)",

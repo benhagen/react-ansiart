@@ -151,6 +151,15 @@ Optional metadata on `CharacterFrameGeneratorWithMetadata`:
 `(frame, columns, rows, options)` plus explicitly seeded state. Same inputs, same screen,
 every time and in every process. Tests rely on this; so does seeking.
 
+**Pointer interactivity** goes through the injectable channel in
+`src/generators/pointerInput.ts`, never through DOM access or a widened signature: an
+interactive generator takes `pointer?: AnsiPointerInput` in its options, samples
+`pointer.state` once per generate call, and must be byte-identical to its non-interactive
+self while the pointer is absent or inactive (tests assert this). Determinism then means:
+same frame sequence + same pointer-state sequence, same output — tests drive the channel
+programmatically. `AnsiVirtualDisplay` feeds the channel via its `pointerInput` prop
+(cell coordinates, viewport-offset); `onCellPointer` exposes raw cell-space events.
+
 ## How to add a generator
 
 1. **File**: `src/generators/asciiYourEffectGenerator.ts`. Tabs, strict TS.

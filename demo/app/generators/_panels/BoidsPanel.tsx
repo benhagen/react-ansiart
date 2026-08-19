@@ -1,4 +1,4 @@
-import { ColorInput, NumberInput } from '../../_components/ControlRow'
+import { ColorInput, NumberInput, SelectInput } from '../../_components/ControlRow'
 import { ControlGroup } from '../../_components/ControlGroup'
 
 export function BoidsPanel({
@@ -8,6 +8,7 @@ export function BoidsPanel({
 	cohWeight, setCohWeight,
 	headColor, setHeadColor,
 	bgColor, setBgColor,
+	pointerMode, setPointerMode,
 }: {
 	count: number; setCount: (v: number) => void
 	sepWeight: number; setSepWeight: (v: number) => void
@@ -15,6 +16,7 @@ export function BoidsPanel({
 	cohWeight: number; setCohWeight: (v: number) => void
 	headColor: string; setHeadColor: (v: string) => void
 	bgColor: string; setBgColor: (v: string) => void
+	pointerMode: string; setPointerMode: (v: string) => void
 }) {
 	return (
 		<ControlGroup label="Boids">
@@ -22,6 +24,16 @@ export function BoidsPanel({
 			<NumberInput label="Separation" value={sepWeight} onChange={setSepWeight} min={0} max={3} step={0.1} />
 			<NumberInput label="Alignment" value={alignWeight} onChange={setAlignWeight} min={0} max={3} step={0.1} />
 			<NumberInput label="Cohesion" value={cohWeight} onChange={setCohWeight} min={0} max={3} step={0.1} />
+			<SelectInput
+				label="Pointer"
+				value={pointerMode}
+				onChange={setPointerMode}
+				options={[
+					{ value: 'flee', label: 'Flee' },
+					{ value: 'attract', label: 'Attract' },
+					{ value: 'none', label: 'Off' },
+				]}
+			/>
 			<ColorInput label="Head Color" value={headColor} onChange={setHeadColor} />
 			<ColorInput label="Background" value={bgColor} onChange={setBgColor} />
 		</ControlGroup>

@@ -49,6 +49,7 @@ export default defineConfig({
 		'generators/postEffects': 'src/generators/ansiPostEffects.ts',
 		'generators/transitions': 'src/generators/ansiTransitions.ts',
 		'generators/generatorState': 'src/generators/generatorState.ts',
+		'generators/pointerInput': 'src/generators/pointerInput.ts',
 		'generators/simulationCatchup': 'src/generators/simulationCatchup.ts',
 		// Core
 		'ansi/parser': 'src/ansi/parser.ts',

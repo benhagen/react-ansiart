@@ -5,6 +5,7 @@ import {
 	createAsciiPhysarumGenerator,
 	generateAsciiPhysarumFrame,
 } from './asciiPhysarumGenerator'
+import { createAnsiPointerInput, type AnsiPointerInput } from './pointerInput'
 import { charToCp437Byte, CP437_TO_UNICODE } from '../utils/cp437'
 
 const COLUMNS = 40
@@ -166,6 +167,117 @@ describe('generateAsciiPhysarumFrame', () => {
 			changed / total > 0.01,
 			`only ${((changed / total) * 100).toFixed(2)}% of cells changed between consecutive frames`,
 		)
+	})
+
+	describe('pointer interactivity', () => {
+		it('inactive invariance: no pointer, a never-activated pointer, and a left pointer all render identically', () => {
+			const noPointer = createAsciiPhysarumGenerator({ seed: 31 })
+			const neverActive = createAsciiPhysarumGenerator({ seed: 31, pointer: createAnsiPointerInput() })
+			const leftPointer = createAnsiPointerInput()
+			leftPointer.move(20, 8)
+			leftPointer.leave() // position retained, active: false
+			const left = createAsciiPhysarumGenerator({ seed: 31, pointer: leftPointer })
+
+			for (let frame = 0; frame < 12; frame++) {
+				const base = noPointer(frame, COLUMNS, ROWS) as Screen
+				assert.deepEqual(neverActive(frame, COLUMNS, ROWS), base, `never-activated pointer diverged at frame ${frame}`)
+				assert.deepEqual(left(frame, COLUMNS, ROWS), base, `inactive (left) pointer diverged at frame ${frame}`)
+			}
+		})
+
+		it('replaying the same scripted pointer sequence on two fresh instances agrees exactly', () => {
+			function scriptedRun(): Screen[] {
+				const pointer = createAnsiPointerInput()
+				const gen = createAsciiPhysarumGenerator({ seed: 41, pointer })
+				const screens: Screen[] = []
+				for (let frame = 0; frame < 40; frame++) {
+					// Deterministic script: enter, drag, press (doubles the deposit), drag
+					// off-grid mid-press, release, leave.
+					if (frame === 4) pointer.move(8.3, 4.6)
+					if (frame === 11) pointer.move(31, 12)
+					if (frame === 17) pointer.down()
+					if (frame === 23) pointer.move(-15, 60)
+					if (frame === 29) pointer.up(25, 3)
+					if (frame === 34) pointer.leave()
+					screens.push(gen(frame, COLUMNS, ROWS) as Screen)
+				}
+				return screens
+			}
+			assert.deepEqual(scriptedRun(), scriptedRun())
+		})
+
+		it('far-out-of-grid and non-finite pointer positions never throw', () => {
+			const farPointer = createAnsiPointerInput()
+			farPointer.down(1e9, -1e9)
+			const far = createAsciiPhysarumGenerator({ seed: 51, pointer: farPointer })
+			for (let frame = 0; frame < 5; frame++) {
+				const screen = far(frame, COLUMNS, ROWS) as Screen
+				assert.equal(screen.lines.length, ROWS)
+				for (const line of screen.lines) assert.equal(line.length, COLUMNS)
+			}
+
+			// A hand-rolled channel can hold non-finite coordinates (createAnsiPointerInput
+			// filters them, but the option accepts any AnsiPointerInput implementation).
+			const hostile: AnsiPointerInput = {
+				state: { x: Number.NaN, y: Number.NEGATIVE_INFINITY, active: true, pressed: true },
+				move() {},
+				down() {},
+				up() {},
+				leave() {},
+				reset() {},
+			}
+			const gen = createAsciiPhysarumGenerator({ seed: 51, pointer: hostile })
+			for (let frame = 0; frame < 5; frame++) {
+				const screen = gen(frame, COLUMNS, ROWS) as Screen
+				assert.equal(screen.lines.length, ROWS)
+			}
+		})
+
+		it('the swarm converges on an active pointer: the trail window around it outshines the inactive run', () => {
+			// 7x5 cell window centered on the pointer cell (60, 6) at 80x25. Brightness is
+			// the mean char-ramp index (0 = ' ' ... 6 = '█' in the default ramp), averaged
+			// over frames 80-99 to smooth out the network's normal rewiring flicker.
+			// Measured with this exact deterministic setup (default options, seed 1337):
+			//   inactive mean = 1.75, active mean = 2.96.
+			// The 0.7 margin below is comfortably inside that gap but still fails if the
+			// pointer deposit is disconnected or stops feeding the evaporation/diffusion loop.
+			const columns = 80
+			const rows = 25
+			const px = 60
+			const py = 6
+			const ramp = ' ·:░▒▓█'
+
+			function windowBrightness(screen: Screen): number {
+				let sum = 0
+				let n = 0
+				for (let r = py - 2; r <= py + 2; r++) {
+					for (let c = px - 3; c <= px + 3; c++) {
+						sum += Math.max(0, ramp.indexOf(screen.lines[r][c].ch))
+						n++
+					}
+				}
+				return sum / n
+			}
+
+			function run(active: boolean): number {
+				const pointer = createAnsiPointerInput()
+				const gen = createAsciiPhysarumGenerator({ seed: 1337, pointer })
+				if (active) pointer.move(px + 0.5, py + 0.5)
+				let sum = 0
+				for (let frame = 0; frame < 100; frame++) {
+					const screen = gen(frame, columns, rows) as Screen
+					if (frame >= 80) sum += windowBrightness(screen)
+				}
+				return sum / 20
+			}
+
+			const inactiveMean = run(false)
+			const activeMean = run(true)
+			assert.ok(
+				activeMean > inactiveMean + 0.7,
+				`expected the pointer window to be clearly brighter: active=${activeMean.toFixed(2)} inactive=${inactiveMean.toFixed(2)}`,
+			)
+		})
 	})
 
 	it('a large frame jump stays cheap (catch-up is capped)', () => {

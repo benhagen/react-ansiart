@@ -1831,6 +1831,60 @@ During a hold only the visible generator runs; the incoming one is first invoked
 handoff starts, seeing a normal frame jump that stateful simulations already absorb via
 their capped catch-up.
 
+### Pointer Interactivity
+
+Interactive generators react to the mouse or touch through an injectable pointer channel.
+Create one with `createAnsiPointerInput()`, hand it to both the display (which feeds it
+pointer events translated into cell coordinates) and the generator's `pointer` option:
+
+```tsx
+'use client'
+import { useMemo } from 'react'
+import {
+	AnsiVirtualDisplay,
+	createAnsiPointerInput,
+	generateAsciiWaterRippleFrame,
+} from 'react-ansiart'
+
+function InteractiveRipples() {
+	const pointer = useMemo(() => createAnsiPointerInput(), [])
+	const frameGenerator = useMemo(
+		() => (frame: number, cols: number, rows: number) =>
+			generateAsciiWaterRippleFrame(frame, cols, rows, { pointer }),
+		[pointer],
+	)
+
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			fps={30}
+			frameGenerator={frameGenerator}
+			pointerInput={pointer}
+		/>
+	)
+}
+```
+
+Pointer-aware generators (each ignores the pointer entirely — byte-identical output —
+until it becomes active over the display):
+
+| Generator        | Hover                              | Press / drag                          |
+| ---------------- | ----------------------------------- | -------------------------------------- |
+| Water Ripple     | Gentle wake follows the pointer     | Strong continuous drops                |
+| Falling Sand     | —                                   | Pours sand at the cursor               |
+| Boids            | Flock flees (or follows) the cursor via `pointerMode: 'flee' \| 'attract' \| 'none'` | same |
+| Physarum         | Deposits attractant the mold swarms toward | Double-strength attractant       |
+| Metaballs        | An extra ball rides the cursor      | same                                   |
+
+The channel is plain data, so interactions are fully scriptable and replayable in tests:
+call `pointer.move(x, y)` / `pointer.down()` / `pointer.up()` / `pointer.leave()` yourself
+and the generator responds identically with no DOM involved. For app-level interactivity
+beyond the built-ins, `AnsiVirtualDisplay` also accepts `onCellPointer`, which reports raw
+`{ type, x, y, buttons }` events in fractional cell coordinates (already offset by
+`viewX`/`viewY` for windowed virtual worlds); `mapClientToCell()` is exported for hosts
+that drive their own canvas.
+
 ### Custom Frame Generators
 
 #### Character-Based Generators
