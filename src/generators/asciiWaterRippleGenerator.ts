@@ -2,6 +2,7 @@ import type { AnsiScreen } from '../ansi/types'
 import type { CharacterFrameGenerator } from '../types/types'
 import { buildCharLookup } from './charLookup'
 import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
+import type { AnsiPointerInput } from './pointerInput'
 import { catchupSteps } from './simulationCatchup'
 
 const DEFAULT_DAMPING = 0.97
@@ -27,6 +28,17 @@ export interface AsciiWaterRippleOptions {
 	chars?: string
 	/** Seed for random number generation. Default: 5555 */
 	seed?: number
+	/**
+	 * Pointer input channel from the host display; sampled via `pointer.state`.
+	 * While pressed, a strong drop lands at the pointer cell every rendered frame; while
+	 * merely hovering, gentle wake drops trail the pointer as it moves. Absent or inactive,
+	 * behavior is identical to having no pointer at all.
+	 */
+	pointer?: AnsiPointerInput
+	/** Amplitude of drops injected while the pointer is pressed. Default: dropStrength */
+	pointerDropStrength?: number
+	/** Amplitude of wake drops left by a moving, unpressed pointer. Default: dropStrength / 3 */
+	pointerWakeStrength?: number
 }
 
 // Deterministic RNG
@@ -110,6 +122,10 @@ interface WaterRippleState {
 	current: Float32Array
 	previous: Float32Array
 	lastFrame: number
+	// Position of the last pointer-injected drop (fractional cells), NaN before the first
+	// injection. Used to gate wake drops on the pointer having moved >= ~1 cell.
+	pointerLastX: number
+	pointerLastY: number
 }
 
 // State shared by all callers of generateAsciiWaterRippleFrame. Prefer
@@ -188,7 +204,15 @@ function renderWaterRippleFrame(
 		bgColor = DEFAULT_BG_COLOR,
 		chars = DEFAULT_CHARS.join(''),
 		seed = DEFAULT_SEED,
+		pointer,
+		pointerDropStrength = dropStrength,
+		pointerWakeStrength = dropStrength / 3,
 	} = options
+
+	// Sample the pointer channel once per generate call so a mid-render host update
+	// cannot tear a frame. Costs one property read when a pointer is attached, nothing
+	// otherwise.
+	const pointerState = pointer ? pointer.state : undefined
 
 	const totalCells = columns * rows
 	const stateKey = getStateKey(columns, rows, seed, damping, dropFrequency, dropStrength)
@@ -197,7 +221,7 @@ function renderWaterRippleFrame(
 	if (!state || frame < state.lastFrame) {
 		const current = new Float32Array(totalCells)
 		const previous = new Float32Array(totalCells)
-		state = { current, previous, lastFrame: -1 }
+		state = { current, previous, lastFrame: -1, pointerLastX: NaN, pointerLastY: NaN }
 		store.set(stateKey, state)
 	}
 
@@ -249,6 +273,38 @@ function renderWaterRippleFrame(
 		// reference swap is equivalent to the old element-wise copy and avoids
 		// an O(totalCells) pass per substep.
 		;[current, previous] = [previous, current]
+	}
+
+	// --- Pointer interaction ---
+	// Injected once per generate call, AFTER catch-up simulation, rather than once per
+	// catch-up substep: catchupSteps() may replay up to MAX_SIMULATION_CATCHUP ticks for a
+	// single call, and injecting per substep would multiply the pointer's energy by a
+	// calling-pattern-dependent tick count. One drop per rendered frame keeps interaction
+	// strength independent of frame gaps. Gated on framesToSimulate > 0 so re-rendering
+	// the same frame (a pure re-read) injects nothing and stays idempotent.
+	if (pointerState && pointerState.active && framesToSimulate > 0) {
+		const cx = Math.round(pointerState.x)
+		const cy = Math.round(pointerState.y)
+		// A pointer dragged past the display edge reports out-of-grid coordinates; drops
+		// there have no cell to land in, so they are ignored rather than clamped to the rim.
+		if (cx >= 0 && cx < columns && cy >= 0 && cy < rows) {
+			if (pointerState.pressed) {
+				current[cy * columns + cx] = pointerDropStrength
+				state.pointerLastX = pointerState.x
+				state.pointerLastY = pointerState.y
+			} else {
+				const dx = pointerState.x - state.pointerLastX
+				const dy = pointerState.y - state.pointerLastY
+				// NaN (no prior injection) compares false, so test for it explicitly: the
+				// first hover injection always lands.
+				const moved = !(dx * dx + dy * dy < 1)
+				if (moved) {
+					current[cy * columns + cx] = pointerWakeStrength
+					state.pointerLastX = pointerState.x
+					state.pointerLastY = pointerState.y
+				}
+			}
+		}
 	}
 
 	state.current = current

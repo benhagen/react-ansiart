@@ -5,6 +5,7 @@ import {
 	createAsciiFallingSandGenerator,
 	generateAsciiFallingSandFrame,
 } from './asciiFallingSandGenerator'
+import { createAnsiPointerInput } from './pointerInput'
 
 const COLUMNS = 24
 const ROWS = 12
@@ -166,5 +167,136 @@ describe('generateAsciiFallingSandFrame', () => {
 		gen(100_000, COLUMNS, ROWS)
 		const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6
 		assert.ok(elapsedMs < 250, `took ${elapsedMs.toFixed(0)}ms for a 100k-frame jump`)
+	})
+
+	describe('pointer pouring', () => {
+		const WIDE = 80
+		const TALL = 25
+
+		it('inactive invariance: no pointer, a never-activated pointer, and a hovering pointer all agree', () => {
+			const baseline = createAsciiFallingSandGenerator({ seed: 7 })
+			const withInactive = createAsciiFallingSandGenerator({ seed: 7, pointer: createAnsiPointerInput() })
+
+			// Hovering unpressed must also do nothing — pouring requires a press.
+			const hoverPointer = createAnsiPointerInput()
+			const withHover = createAsciiFallingSandGenerator({ seed: 7, pointer: hoverPointer })
+
+			for (let frame = 0; frame <= 10; frame++) {
+				hoverPointer.move(10 + frame * 3, 8)
+				const expected = baseline(frame, COLUMNS, ROWS)
+				assert.deepEqual(withInactive(frame, COLUMNS, ROWS), expected, `frame ${frame}: inactive pointer diverged`)
+				assert.deepEqual(withHover(frame, COLUMNS, ROWS), expected, `frame ${frame}: unpressed hover diverged`)
+			}
+		})
+
+		it('deterministic replay: two fresh setups driven by the same pointer script agree', () => {
+			const pointerA = createAnsiPointerInput()
+			const pointerB = createAnsiPointerInput()
+			const genA = createAsciiFallingSandGenerator({ seed: 3, pointer: pointerA })
+			const genB = createAsciiFallingSandGenerator({ seed: 3, pointer: pointerB })
+
+			const script = (pointer: ReturnType<typeof createAnsiPointerInput>, frame: number): void => {
+				if (frame === 2) pointer.down(30, 5)
+				if (frame >= 3 && frame <= 12) pointer.move(30 + frame, 5)
+				if (frame === 13) pointer.up()
+			}
+
+			for (let frame = 0; frame <= 15; frame++) {
+				script(pointerA, frame)
+				script(pointerB, frame)
+				assert.deepEqual(genA(frame, WIDE, TALL), genB(frame, WIDE, TALL), `frame ${frame}: replay diverged`)
+			}
+		})
+
+		it('localized response: pressing at (40, 8) pours a pile the inactive run lacks', () => {
+			// spoutRate 0 silences the ambient spouts entirely, so every grain in the
+			// interactive run is pointer-poured and the baseline run stays empty of sand.
+			const options = { seed: 5, spoutRate: 0 }
+			const baseline = createAsciiFallingSandGenerator(options)
+			const pointer = createAnsiPointerInput()
+			const interactive = createAsciiFallingSandGenerator({ ...options, pointer })
+			pointer.down(40, 8)
+
+			let lastBaseline: Screen | null = null
+			let lastInteractive: Screen | null = null
+			for (let frame = 0; frame <= 20; frame++) {
+				lastBaseline = baseline(frame, WIDE, TALL)
+				lastInteractive = interactive(frame, WIDE, TALL)
+			}
+
+			assert.equal(sandCellCount(lastBaseline!), 0, 'baseline should have no ambient sand at spoutRate 0')
+			const poured = sandCellCount(lastInteractive!)
+			assert.ok(poured >= 30, `expected at least 30 poured grains, saw ${poured}`)
+
+			// Every grain stays in the pour column region: spawn jitter is +-2 cells around
+			// x=40 and toppling only moves grains diagonally as they pile.
+			for (const [y, line] of lastInteractive!.lines.entries()) {
+				for (const [x, cell] of line.entries()) {
+					if (SAND_CHARS.has(cell.ch)) {
+						assert.ok(x >= 33 && x <= 47, `grain at (${x}, ${y}) escaped the pour region`)
+						assert.ok(y >= 8, `grain at (${x}, ${y}) is above the pour row`)
+					}
+				}
+			}
+		})
+
+		it('poured grains behave like ordinary sand: they fall from the pour row', () => {
+			const options = { seed: 5, spoutRate: 0 }
+			const pointer = createAnsiPointerInput()
+			const gen = createAsciiFallingSandGenerator({ ...options, pointer })
+
+			pointer.down(40, 3)
+			gen(0, WIDE, TALL)
+			pointer.up()
+
+			// After the press ends, the already-poured grains keep falling on their own.
+			const later = gen(6, WIDE, TALL)
+			let lowestSandRow = -1
+			for (const [y, line] of later.lines.entries()) {
+				if (line.some((cell) => SAND_CHARS.has(cell.ch))) lowestSandRow = y
+			}
+			assert.ok(lowestSandRow > 3, `grains never fell below the pour row (lowest at ${lowestSandRow})`)
+		})
+
+		it('pointerPourRate is clamped and rate 0 pours nothing', () => {
+			const options = { seed: 5, spoutRate: 0 }
+			const pointerOff = createAnsiPointerInput()
+			const genOff = createAsciiFallingSandGenerator({ ...options, pointerPourRate: 0, pointer: pointerOff })
+			pointerOff.down(40, 8)
+			let screen: Screen | null = null
+			for (let frame = 0; frame <= 10; frame++) screen = genOff(frame, WIDE, TALL)
+			assert.equal(sandCellCount(screen!), 0, 'pourRate 0 still poured grains')
+
+			// An absurd rate is clamped to 32 grains per frame, not taken literally.
+			const pointerHot = createAnsiPointerInput()
+			const genHot = createAsciiFallingSandGenerator({ ...options, pointerPourRate: 1e9, pointer: pointerHot })
+			pointerHot.down(40, 8)
+			const first = genHot(0, WIDE, TALL)
+			assert.ok(sandCellCount(first) <= 32, 'a single pour exceeded the 32-grain cap')
+		})
+
+		it('out-of-grid pointer positions do not throw, corrupt the screen, or pour sand', () => {
+			const options = { seed: 9, spoutRate: 0 }
+			const pointer = createAnsiPointerInput()
+			const gen = createAsciiFallingSandGenerator({ ...options, pointer })
+
+			const positions: Array<[number, number]> = [
+				[-5, 8],
+				[40, 1e9],
+				[1e9, -1e9],
+				[Number.NaN, Number.NaN], // the input itself keeps the previous coordinate
+				[-1000, 12],
+			]
+
+			let screen: Screen | null = null
+			for (let frame = 0; frame <= 9; frame++) {
+				const [x, y] = positions[frame % positions.length]
+				pointer.down(x, y)
+				screen = gen(frame, WIDE, TALL)
+				assert.equal(screen.lines.length, TALL)
+				for (const line of screen.lines) assert.equal(line.length, WIDE)
+			}
+			assert.equal(sandCellCount(screen!), 0, 'an out-of-grid press poured sand')
+		})
 	})
 })

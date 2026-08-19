@@ -1,5 +1,6 @@
 import type { AnsiScreen } from '../ansi/types'
 import { buildCharLookup } from './charLookup'
+import type { AnsiPointerInput } from './pointerInput'
 
 export interface AsciiMetaballsOptions {
 	/** Random seed. Default: 1337 */
@@ -22,7 +23,19 @@ export interface AsciiMetaballsOptions {
 	intensity?: number
 	/** Vertical aspect scale (text cells are taller than wide). Default: 2 */
 	aspectY?: number
+	/**
+	 * Pointer input channel from the host display; sampled via `pointer.state`.
+	 * While the pointer is active, one extra metaball rides the cursor. Absent or
+	 * inactive, the field is exactly the original ball set.
+	 */
+	pointer?: AnsiPointerInput
+	/** Radius (cells) of the pointer-riding metaball. Default: 6 (midpoint of radiusMin/radiusMax defaults) */
+	pointerRadius?: number
 }
+
+// Everything except the pointer channel resolves to a concrete value; the pointer stays
+// optional and is read separately, keeping the generator itself stateless.
+type ResolvedMetaballsOptions = Required<Omit<AsciiMetaballsOptions, 'pointer'>>
 
 const DEFAULTS: Required<
 	Pick<
@@ -36,6 +49,7 @@ const DEFAULTS: Required<
 		| 'radiusMax'
 		| 'intensity'
 		| 'aspectY'
+		| 'pointerRadius'
 	>
 > & { chars: string[] } = {
 	seed: 1337,
@@ -48,6 +62,7 @@ const DEFAULTS: Required<
 	radiusMax: 9.5,
 	intensity: 0.55,
 	aspectY: 2,
+	pointerRadius: 6,
 }
 
 
@@ -89,7 +104,7 @@ type BallParams = {
 function buildBalls(
 	columns: number,
 	rows: number,
-	options: Required<AsciiMetaballsOptions>
+	options: ResolvedMetaballsOptions
 ): BallParams[] {
 	const n = clampInt(options.balls, 1, 48)
 	const balls: BallParams[] = new Array(n)
@@ -115,7 +130,7 @@ function buildBalls(
 let lastBallsCacheKey = ''
 let lastBallsResult: BallParams[] | null = null
 
-function getCachedBalls(columns: number, rows: number, opts: Required<AsciiMetaballsOptions>): BallParams[] {
+function getCachedBalls(columns: number, rows: number, opts: ResolvedMetaballsOptions): BallParams[] {
 	const key = `${columns}:${rows}:${opts.seed}:${opts.balls}:${opts.radiusMin}:${opts.radiusMax}`
 	if (key === lastBallsCacheKey && lastBallsResult) return lastBallsResult
 	lastBallsResult = buildBalls(columns, rows, opts)
@@ -123,7 +138,7 @@ function getCachedBalls(columns: number, rows: number, opts: Required<AsciiMetab
 	return lastBallsResult
 }
 
-function resolveOptions(options: AsciiMetaballsOptions): Required<AsciiMetaballsOptions> {
+function resolveOptions(options: AsciiMetaballsOptions): ResolvedMetaballsOptions {
 	return {
 		seed: Number.isFinite(options.seed as number) ? (options.seed as number) : DEFAULTS.seed,
 		fgColor: (options.fgColor ?? DEFAULTS.fgColor).toString(),
@@ -143,6 +158,9 @@ function resolveOptions(options: AsciiMetaballsOptions): Required<AsciiMetaballs
 		aspectY: Number.isFinite(options.aspectY as number)
 			? (options.aspectY as number)
 			: DEFAULTS.aspectY,
+		pointerRadius: Number.isFinite(options.pointerRadius as number)
+			? (options.pointerRadius as number)
+			: DEFAULTS.pointerRadius,
 	}
 }
 
@@ -175,6 +193,35 @@ function computeBallFrame(balls: BallParams[], time: number): BallFrameState[] {
 	return ballFrameBuf
 }
 
+// Preallocated scratch for the pointer-riding extra ball. The slot object and the
+// extended array are module-level and reused every frame (rebuilt only when the ball
+// count changes), so an active pointer adds zero per-frame allocation — mirroring how
+// ballFrameBuf is reused. Like ballFrameBuf, the extended array is only valid until the
+// next generate call, which is fine: it is consumed within the same call.
+const pointerBallSlot: BallFrameState = { bx: 0, by: 0, radius2: 0 }
+let pointerFrameBuf: BallFrameState[] = []
+
+function withPointerBall(
+	ballFrame: BallFrameState[],
+	px: number,
+	py: number,
+	radius: number
+): BallFrameState[] {
+	if (pointerFrameBuf.length !== ballFrame.length + 1) {
+		pointerFrameBuf = new Array<BallFrameState>(ballFrame.length + 1)
+	}
+	for (let i = 0; i < ballFrame.length; i++) pointerFrameBuf[i] = ballFrame[i]
+	// Pointer coords are fractional cells, the same space ball centers live in; computeCell
+	// applies the aspectY vertical correction to dy uniformly for every ball, pointer ball
+	// included. No clamping: an off-grid pointer just puts the ball off-screen, where the
+	// 1/d^2 field falls off naturally (a drag past the edge fades out instead of pinning).
+	pointerBallSlot.bx = px
+	pointerBallSlot.by = py
+	pointerBallSlot.radius2 = radius * radius
+	pointerFrameBuf[ballFrame.length] = pointerBallSlot
+	return pointerFrameBuf
+}
+
 // Memoized char lookup — rebuilt only when the chars array reference changes.
 let lastChars: string[] | null = null
 let lastCharLookup: string[] | null = null
@@ -189,7 +236,7 @@ function getCharLookup(chars: string[]): string[] {
 function computeCell(
 	x: number,
 	y: number,
-	options: Required<AsciiMetaballsOptions>,
+	options: ResolvedMetaballsOptions,
 	ballFrame: BallFrameState[],
 	charLookup: string[]
 ) {
@@ -233,7 +280,21 @@ export function generateAsciiMetaballsFrame(
 	const time = frame * opts.speed
 
 	const balls = getCachedBalls(columns, rows, opts)
-	const ballFrame = computeBallFrame(balls, time)
+	let ballFrame = computeBallFrame(balls, time)
+
+	// Sample the pointer channel once per generate call. The generator stays stateless:
+	// the pointer ball is a pure function of the sampled state, evaluated alongside the
+	// seeded balls for this frame only. Inactive or absent, the field is exactly the
+	// original ball set (this branch is the whole cost).
+	const pointerState = options.pointer ? options.pointer.state : undefined
+	if (
+		pointerState &&
+		pointerState.active &&
+		Number.isFinite(pointerState.x) &&
+		Number.isFinite(pointerState.y)
+	) {
+		ballFrame = withPointerBall(ballFrame, pointerState.x, pointerState.y, opts.pointerRadius)
+	}
 
 	// Character lookup table (0..255), memoized across frames
 	const chars = opts.chars.length ? opts.chars : DEFAULTS.chars

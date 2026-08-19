@@ -1,6 +1,7 @@
 import type { AnsiScreen } from '../ansi/types'
 import type { CharacterFrameGenerator } from '../types/types'
 import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
+import type { AnsiPointerInput } from './pointerInput'
 import { catchupSteps } from './simulationCatchup'
 
 // Autonomous falling-sand toy. A handful of spouts near the top drift back and forth and
@@ -30,6 +31,8 @@ const DEFAULT_SPOUT_COUNT = 3
 const DEFAULT_SPOUT_RATE = 0.55
 const DEFAULT_DRAIN_OPEN_THRESHOLD = 0.55
 const DEFAULT_DRAIN_CLOSE_THRESHOLD = 0.35
+const DEFAULT_POINTER_POUR_RATE = 4
+const MAX_POINTER_POUR_RATE = 32
 const DEFAULT_SAND_COLORS: [string, string, string] = ['#e8d18a', '#d1a94e', '#a97733']
 const DEFAULT_WALL_COLOR = '#5c5c6b'
 const DEFAULT_BG_COLOR = '#0a0a12'
@@ -53,6 +56,14 @@ export interface AsciiFallingSandOptions {
 	wallColor?: string
 	/** Background color for empty cells. Default: '#0a0a12' */
 	bgColor?: string
+	/**
+	 * Pointer input channel from the host display; sampled via `pointer.state`.
+	 * While pressed, sand pours in at the pointer cell; hovering unpressed does nothing.
+	 * Absent or inactive, behavior is identical to having no pointer at all.
+	 */
+	pointer?: AnsiPointerInput
+	/** Grains poured per rendered frame while the pointer is pressed (0-32). Default: 4 */
+	pointerPourRate?: number
 }
 
 // Deterministic RNG — same small LCG used across the other stateful generators in this
@@ -305,7 +316,14 @@ function renderFallingSandFrame(
 		sandColors = DEFAULT_SAND_COLORS,
 		wallColor = DEFAULT_WALL_COLOR,
 		bgColor = DEFAULT_BG_COLOR,
+		pointer,
+		pointerPourRate = DEFAULT_POINTER_POUR_RATE,
 	} = options
+
+	// Sample the pointer channel once per generate call so a mid-render host update
+	// cannot tear a frame. Costs one property read when a pointer is attached, nothing
+	// otherwise.
+	const pointerState = pointer ? pointer.state : undefined
 
 	// Clamp close <= open: a misconfigured close > open threshold would otherwise make the
 	// drain flip open/closed every step once the fill fraction sits between them.
@@ -343,6 +361,44 @@ function renderFallingSandFrame(
 				drainOpenThreshold,
 				drainCloseThreshold,
 			)
+		}
+	}
+
+	// --- Pointer pour ---
+	// Injected once per generate call, AFTER catch-up simulation, rather than once per
+	// catch-up tick: catchupSteps() may replay up to MAX_SIMULATION_CATCHUP ticks for a
+	// single call, and pouring per tick would multiply the pour rate by a
+	// calling-pattern-dependent tick count. One pour per rendered frame keeps the stream
+	// density independent of frame gaps; the fresh grains sit at the pointer cell for this
+	// render and fall as ordinary sand from the next step on. Gated on frameTicks > 0 so
+	// re-rendering the same frame (a pure re-read) pours nothing and stays idempotent.
+	// Jitter and variant choices come from the sim's persistent seeded RNG, so the whole
+	// run stays a pure function of the frame + pointer-state sequences.
+	if (pointerState && pointerState.pressed && frameTicks > 0) {
+		const pourRate = Number.isFinite(pointerPourRate)
+			? Math.max(0, Math.min(MAX_POINTER_POUR_RATE, Math.floor(pointerPourRate)))
+			: DEFAULT_POINTER_POUR_RATE
+		const px = Math.round(pointerState.x)
+		const py = Math.round(pointerState.y)
+		// Rows outside the grid have nowhere to pour; columns are checked per grain since
+		// horizontal jitter can carry an edge-adjacent pour back into bounds.
+		if (py >= 0 && py < rows && pourRate > 0) {
+			const grid = state.grid
+			let rngState = state.rngState
+			const rowStart = py * columns
+			for (let g = 0; g < pourRate; g++) {
+				rngState = advanceRngState(rngState)
+				const jitter = Math.round((rngFloat(rngState) - 0.5) * 4) // -2..2 cells
+				rngState = advanceRngState(rngState)
+				const variant = Math.min(SAND_VARIANT_COUNT - 1, Math.floor(rngFloat(rngState) * SAND_VARIANT_COUNT))
+				const gx = px + jitter
+				if (gx < 0 || gx >= columns) continue
+				const idx = rowStart + gx
+				if (grid[idx] === MATERIAL_EMPTY) {
+					grid[idx] = MATERIAL_SAND_BASE + variant
+				}
+			}
+			state.rngState = rngState
 		}
 	}
 
