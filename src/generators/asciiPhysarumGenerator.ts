@@ -1,5 +1,6 @@
 import type { AnsiScreen } from '../ansi/types'
 import type { CharacterFrameGenerator } from '../types/types'
+import type { AnsiPointerInput } from './pointerInput'
 import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
 import { catchupSteps } from './simulationCatchup'
 import { buildCharLookup } from './charLookup'
@@ -78,6 +79,13 @@ const FOOD_COUNT = 6
 const FOOD_DEPOSIT_SCALE = 30 // multiple of depositAmount laid down per source per step
 const FOOD_BASE_SPEED = 0.008 // radians of orbit phase per simulation step
 
+// Pointer attractant defaults: peak trail deposited per substep at the pointer cell
+// (~3x the depositAmount default, so a hovering pointer competes with a filament but a
+// press — which doubles it — competes with a food source), and the gaussian blob radius
+// in column-width cells.
+const DEFAULT_POINTER_ATTRACT_STRENGTH = 3
+const DEFAULT_POINTER_ATTRACT_RADIUS = 3
+
 export interface AsciiPhysarumOptions {
 	/** Seed for initial agent positions/headings and the random-turn tiebreaker. Default: 1337 */
 	seed?: number
@@ -106,6 +114,16 @@ export interface AsciiPhysarumOptions {
 	palette?: string[]
 	/** Background color (CSS color string). Default: '#000000' */
 	bgColor?: string
+	/** Pointer input channel from the host display; sampled via `pointer.state`. Default: none */
+	pointer?: AnsiPointerInput
+	/**
+	 * Peak trail deposited per substep at an active pointer's cell (doubled while
+	 * pressed), clamped to [0, 100]. Agents converge through the ordinary sense/steer
+	 * rules — the pointer never moves an agent directly. Default: 3
+	 */
+	pointerAttractStrength?: number
+	/** Radius of the pointer's gaussian attractant blob, in cells, clamped to [1, 20]. Default: 3 */
+	pointerAttractRadius?: number
 }
 
 function clampNum(v: number | undefined, min: number, max: number, fallback: number): number {
@@ -126,6 +144,8 @@ interface ResolvedPhysarumOptions {
 	chars: string
 	palette: string[]
 	bgColor: string
+	pointerAttractStrength: number
+	pointerAttractRadius: number
 }
 
 // Resolve and clamp every option in one place — non-finite or out-of-range input falls
@@ -144,6 +164,8 @@ function resolveOptions(options: AsciiPhysarumOptions): ResolvedPhysarumOptions 
 		chars: options.chars !== undefined && options.chars.length > 0 ? options.chars : DEFAULT_CHARS,
 		palette: options.palette !== undefined && options.palette.length > 0 ? options.palette : DEFAULT_PALETTE,
 		bgColor: options.bgColor ?? DEFAULT_BG_COLOR,
+		pointerAttractStrength: clampNum(options.pointerAttractStrength, 0, 100, DEFAULT_POINTER_ATTRACT_STRENGTH),
+		pointerAttractRadius: clampNum(options.pointerAttractRadius, 1, 20, DEFAULT_POINTER_ATTRACT_RADIUS),
 	}
 }
 
@@ -339,6 +361,15 @@ function stepPhysarum(
 	columns: number,
 	rows: number,
 	opts: ResolvedPhysarumOptions,
+	// Pointer attractant for this substep, resolved by the caller from the ONE pointer-state
+	// sample taken per generate call: pointerCol/pointerRow are the clamped integer cell of
+	// the pointer, pointerDeposit is the peak trail laid down (0 = pointer absent/inactive —
+	// the deposit block below is then skipped entirely and the step is byte-identical to the
+	// pointer-less path). When catch-up runs several substeps for one call, each substep
+	// deposits from that same sample; the host only updates the channel between frames.
+	pointerCol: number,
+	pointerRow: number,
+	pointerDeposit: number,
 ): void {
 	const { agents, occupancy } = state
 	const trail = state.trail
@@ -453,6 +484,35 @@ function stepPhysarum(
 	}
 	state.steps = t + 1
 
+	// Pointer attractant: a small gaussian blob of trail centered on the pointer cell,
+	// peak pointerDeposit, falling to ~0 at pointerAttractRadius. It is deposited into the
+	// same trail field as agent/food trail *before* the diffusion+evaporation pass below,
+	// so it spreads and decays exactly like any other trail, and agents converge on it via
+	// their ordinary sense/steer rules — no agent is steered directly. The blob's vertical
+	// extent is divided by CELL_ASPECT (rows are twice as tall as columns) so it is round
+	// on screen, mirroring how sensing and movement handle aspect.
+	if (pointerDeposit > 0) {
+		const radius = opts.pointerAttractRadius
+		const radiusSq = radius * radius
+		const sigma = radius * 0.5
+		const inv2Sigma2 = 1 / (2 * sigma * sigma)
+		const colSpan = Math.ceil(radius)
+		const rowSpan = Math.max(1, Math.ceil(radius / CELL_ASPECT))
+		for (let dy = -rowSpan; dy <= rowSpan; dy++) {
+			const ry = pointerRow + dy
+			if (ry < 0 || ry >= rows) continue
+			const wy = dy * CELL_ASPECT
+			const rowBase = ry * columns
+			for (let dx = -colSpan; dx <= colSpan; dx++) {
+				const rx = pointerCol + dx
+				if (rx < 0 || rx >= columns) continue
+				const d2 = dx * dx + wy * wy
+				if (d2 > radiusSq) continue
+				trail[rowBase + rx] += pointerDeposit * Math.exp(-d2 * inv2Sigma2)
+			}
+		}
+	}
+
 	// Diffuse (3x3 toroidal mean) and evaporate into the ping-pong buffer, then swap by
 	// rebinding — the diffuse+decay pass is what turns raw agent tracks into smooth,
 	// self-reinforcing filament networks.
@@ -509,12 +569,38 @@ function renderPhysarumFrame(
 		store.set(stateKey, state)
 	}
 
+	// Sample the pointer channel ONCE per generate call (never per substep): the host only
+	// replaces `pointer.state` between frames, and one sample per call keeps the output a
+	// pure function of the frame sequence plus the pointer-state sequence. With no pointer,
+	// or an inactive one, pointerDeposit stays 0 and stepPhysarum skips the deposit block —
+	// byte-identical to the pointer-less path at near-zero cost.
+	const pointerState = options.pointer !== undefined ? options.pointer.state : null
+	let pointerCol = 0
+	let pointerRow = 0
+	let pointerDeposit = 0
+	if (
+		pointerState !== null &&
+		pointerState.active &&
+		opts.pointerAttractStrength > 0 &&
+		Number.isFinite(pointerState.x) &&
+		Number.isFinite(pointerState.y)
+	) {
+		// Fractional-cell coords may lie outside the grid (drags past an edge): floor to a
+		// cell index and clamp to the arena, matching the sampleTrail edge convention,
+		// before anything indexes the trail field.
+		pointerCol = Math.min(columns - 1, Math.max(0, Math.floor(pointerState.x)))
+		pointerRow = Math.min(rows - 1, Math.max(0, Math.floor(pointerState.y)))
+		// A press doubles the attractant — a held pointer out-competes nearby filaments.
+		pointerDeposit = pointerState.pressed ? opts.pointerAttractStrength * 2 : opts.pointerAttractStrength
+	}
+
 	// Simulate forward, capped so a large jump (backgrounded tab, seek) cannot block the
 	// main thread proportionally to the gap. Discontinuous jumps just skip simulation
-	// time; the network keeps evolving from wherever it is.
+	// time; the network keeps evolving from wherever it is. All catch-up substeps share
+	// the single pointer-state sample taken above.
 	const cappedSteps = catchupSteps(frame, state.lastFrame) * opts.stepsPerFrame
 	for (let step = 0; step < cappedSteps; step++) {
-		stepPhysarum(state, columns, rows, opts)
+		stepPhysarum(state, columns, rows, opts, pointerCol, pointerRow, pointerDeposit)
 	}
 	state.lastFrame = frame
 

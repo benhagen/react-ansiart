@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { createAsciiBoidsGenerator, generateAsciiBoidsFrame } from './asciiBoidsGenerator'
+import { createAnsiPointerInput, type AnsiPointerInput } from './pointerInput'
 import { charToCp437Byte } from '../utils/cp437'
 
 const COLUMNS = 60
@@ -146,6 +147,137 @@ describe('generateAsciiBoidsFrame', () => {
 			`expected zero-weight flock to end measurably looser than default-weight flock: ` +
 				`default=${withWeightsFrame120Dist.toFixed(2)} zero=${zeroWeightsFrame120Dist.toFixed(2)}`,
 		)
+	})
+
+	describe('pointer interactivity', () => {
+		// Quantitative-test geometry: 80x25 grid, pointer parked at the exact center.
+		// Distances are measured in the simulation's own world units (columns are the unit;
+		// rows count double via CELL_ASPECT = 2), matching how the generator measures the
+		// pointer radius.
+		const PCOLS = 80
+		const PROWS = 25
+		const CENTER_X = PCOLS / 2
+		const CENTER_Y = PROWS / 2
+		const POINTER_RADIUS = 14
+
+		function headsWithinRadius(screen: ReturnType<typeof generateAsciiBoidsFrame>): number {
+			let n = 0
+			for (const [c, r] of headPositions(screen)) {
+				const dx = c + 0.5 - CENTER_X
+				const dy = (r + 0.5 - CENTER_Y) * 2
+				if (dx * dx + dy * dy < POINTER_RADIUS * POINTER_RADIUS) n++
+			}
+			return n
+		}
+
+		it('inactive invariance: no pointer, a never-activated pointer, and a left pointer all render identically', () => {
+			const noPointer = createAsciiBoidsGenerator({ seed: 11 })
+			const neverActive = createAsciiBoidsGenerator({ seed: 11, pointer: createAnsiPointerInput() })
+			const leftPointer = createAnsiPointerInput()
+			leftPointer.move(30, 12)
+			leftPointer.leave() // position retained, active: false
+			const left = createAsciiBoidsGenerator({ seed: 11, pointer: leftPointer })
+
+			for (let frame = 0; frame < 12; frame++) {
+				const base = noPointer(frame, COLUMNS, ROWS)
+				assert.deepEqual(neverActive(frame, COLUMNS, ROWS), base, `never-activated pointer diverged at frame ${frame}`)
+				assert.deepEqual(left(frame, COLUMNS, ROWS), base, `inactive (left) pointer diverged at frame ${frame}`)
+			}
+		})
+
+		it("pointerMode 'none' is exactly the inactive output even while the pointer is active", () => {
+			const inactive = createAsciiBoidsGenerator({ seed: 13 })
+			const pointer = createAnsiPointerInput()
+			pointer.down(CENTER_X, CENTER_Y)
+			const none = createAsciiBoidsGenerator({ seed: 13, pointer, pointerMode: 'none' })
+			for (let frame = 0; frame < 12; frame++) {
+				assert.deepEqual(none(frame, COLUMNS, ROWS), inactive(frame, COLUMNS, ROWS), `mode 'none' diverged at frame ${frame}`)
+			}
+		})
+
+		it('replaying the same scripted pointer sequence on two fresh instances agrees exactly', () => {
+			function scriptedRun() {
+				const pointer = createAnsiPointerInput()
+				const gen = createAsciiBoidsGenerator({ seed: 21, pointer, pointerMode: 'flee' })
+				const screens: ReturnType<typeof generateAsciiBoidsFrame>[] = []
+				for (let frame = 0; frame < 40; frame++) {
+					// Deterministic script: enter, drag, press, drag off-grid, release, leave.
+					if (frame === 5) pointer.move(10, 5)
+					if (frame === 12) pointer.move(30.7, 14.2)
+					if (frame === 18) pointer.down()
+					if (frame === 24) pointer.move(-8, 45) // dragged past two edges mid-press
+					if (frame === 30) pointer.up(50, 10)
+					if (frame === 35) pointer.leave()
+					screens.push(gen(frame, COLUMNS, ROWS))
+				}
+				return screens
+			}
+			assert.deepEqual(scriptedRun(), scriptedRun())
+		})
+
+		it('far-out-of-grid and non-finite pointer positions never throw', () => {
+			const farPointer = createAnsiPointerInput()
+			farPointer.move(1e9, -1e9)
+			const far = createAsciiBoidsGenerator({ seed: 3, pointer: farPointer })
+			for (let frame = 0; frame < 5; frame++) {
+				const screen = far(frame, COLUMNS, ROWS)
+				assert.equal(screen.lines.length, ROWS)
+			}
+
+			// A hand-rolled channel can hold non-finite coordinates (createAnsiPointerInput
+			// filters them, but the option accepts any AnsiPointerInput implementation).
+			const hostile: AnsiPointerInput = {
+				state: { x: Number.NaN, y: Number.POSITIVE_INFINITY, active: true, pressed: true },
+				move() {},
+				down() {},
+				up() {},
+				leave() {},
+				reset() {},
+			}
+			const gen = createAsciiBoidsGenerator({ seed: 3, pointer: hostile })
+			for (let frame = 0; frame < 5; frame++) {
+				const screen = gen(frame, COLUMNS, ROWS)
+				assert.equal(screen.lines.length, ROWS)
+			}
+		})
+
+		it('an active pointer clears a flee bubble and gathers an attract crowd (quantitative)', () => {
+			// Measured with this exact deterministic setup (seed 123, 80x25, radius 14,
+			// weight 4, heads counted within the radius over frames 60-79):
+			//   inactive = 259, flee = 51, attract = 520.
+			// The assertions leave generous room on both sides of those values while still
+			// failing if the pointer force is disconnected or its sign flips.
+			function run(mode: 'flee' | 'attract' | 'inactive'): number {
+				const pointer = createAnsiPointerInput()
+				const gen = createAsciiBoidsGenerator({
+					seed: 123,
+					pointer,
+					pointerMode: mode === 'inactive' ? 'flee' : mode,
+					pointerRadius: POINTER_RADIUS,
+					pointerWeight: 4,
+				})
+				if (mode !== 'inactive') pointer.move(CENTER_X, CENTER_Y)
+				let count = 0
+				for (let frame = 0; frame < 80; frame++) {
+					const screen = gen(frame, PCOLS, PROWS)
+					if (frame >= 60) count += headsWithinRadius(screen)
+				}
+				return count
+			}
+
+			const inactive = run('inactive')
+			const flee = run('flee')
+			const attract = run('attract')
+
+			assert.ok(
+				flee < inactive * 0.5,
+				`expected fleeing boids to vacate the pointer radius: flee=${flee} inactive=${inactive}`,
+			)
+			assert.ok(
+				attract > inactive * 1.4,
+				`expected attracted boids to crowd the pointer radius: attract=${attract} inactive=${inactive}`,
+			)
+		})
 	})
 
 	it('respects the documented count clamp of [40, 120]', () => {

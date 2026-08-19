@@ -1,5 +1,6 @@
 import type { AnsiScreen } from '../ansi/types'
 import type { CharacterFrameGenerator } from '../types/types'
+import type { AnsiPointerInput } from './pointerInput'
 import { createGeneratorStateStore, type GeneratorStateStore } from './generatorState'
 import { catchupSteps } from './simulationCatchup'
 
@@ -22,6 +23,9 @@ const DEFAULT_TRAIL_PALETTE: [string, string] = ['#00e5ff', '#02040f']
 const DEFAULT_CHARS = ' .:■' // ' ', '.', ':', '■' — dim trail ramp
 const DEFAULT_SEED = 9001
 const DEFAULT_BG_COLOR = '#000006'
+const DEFAULT_POINTER_MODE = 'flee'
+const DEFAULT_POINTER_RADIUS = 14
+const DEFAULT_POINTER_WEIGHT = 2.5
 
 /**
  * Row-height / column-width ratio for a typical 8x16 VGA bitmap font: a cell is twice as
@@ -68,7 +72,24 @@ export interface AsciiBoidsOptions {
 	seed?: number
 	/** Background color (CSS). Default: '#000006' */
 	bgColor?: string
+	/** Pointer input channel from the host display; sampled via `pointer.state`. Default: none */
+	pointer?: AnsiPointerInput
+	/**
+	 * How an active pointer steers the flock: 'flee' makes it a predator boids scatter
+	 * from, 'attract' makes it a lure, 'none' ignores the pointer entirely. Default: 'flee'
+	 */
+	pointerMode?: 'flee' | 'attract' | 'none'
+	/** Pointer influence radius in cells (column-width world units), clamped to [2, 100]. Default: 14 */
+	pointerRadius?: number
+	/** Pointer steering weight (same scale as sep/align/coh weights), clamped to [0, 10]. Default: 2.5 */
+	pointerWeight?: number
 }
+
+/**
+ * Resolved scalar options. The `pointer` channel is intentionally excluded: it is a live
+ * input object sampled once per generate call, not a value with a default to clamp.
+ */
+type ResolvedAsciiBoidsOptions = Required<Omit<AsciiBoidsOptions, 'pointer'>>
 
 function clampInt(v: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, Math.round(v)))
@@ -274,7 +295,21 @@ function initState(columns: number, rows: number, count: number, seed: number, m
  * every pairwise comparison in the O(n^2) neighbor scan; sqrt is only taken once per boid,
  * after the scan, to normalize the accumulated steering vector and to clamp final speed.
  */
-function stepBoids(state: BoidsState, columns: number, rows: number, opts: Required<AsciiBoidsOptions>, simFrame: number): void {
+function stepBoids(
+	state: BoidsState,
+	columns: number,
+	rows: number,
+	opts: ResolvedAsciiBoidsOptions,
+	simFrame: number,
+	// Pointer force, already resolved by the caller from the ONE pointer-state sample taken
+	// per generate call: when catch-up runs several substeps for a single call, every substep
+	// applies the same sampled pointer position — the host only updates the channel between
+	// frames, so a fresher sample cannot exist mid-call and replays stay a pure function of
+	// the (frame, pointer-state) sequence. pointerAway is +1 to flee, -1 to attract, 0 = off.
+	pointerX: number,
+	pointerY: number,
+	pointerAway: number,
+): void {
 	const { px, py, vx, vy, wanderAngle } = state
 	const count = px.length
 	const worldW = columns
@@ -297,6 +332,11 @@ function stepBoids(state: BoidsState, columns: number, rows: number, opts: Requi
 		scattering = true
 	}
 	const scatterR2 = (Math.max(worldW, worldH) * 0.35) ** 2
+
+	// Hoisted pointer-force invariants (rule 6): radius² for the cheap in-range test, and
+	// the weight both boids-loop iterations share. All zero-cost when pointerAway === 0.
+	const pointerR2 = opts.pointerRadius * opts.pointerRadius
+	const pointerForce = opts.pointerWeight * pointerAway
 
 	const wanderRng = createRandom(opts.seed + simFrame * 7919 + 17)
 
@@ -383,6 +423,24 @@ function stepBoids(state: BoidsState, columns: number, rows: number, opts: Requi
 			}
 		}
 
+		// Pointer predator/lure: a steering force away from (flee) or toward (attract) the
+		// pointer, linear falloff to 0 at pointerRadius. It joins the same steering
+		// accumulator as every flocking rule, so the existing steer * 0.15 integration and
+		// the max/min speed clamp below bound it — fleeing boids cannot exceed maxSpeed.
+		// Distances use the identical toroidal wrapDelta/world-unit convention the neighbor
+		// scan uses (dy is in CELL_ASPECT-corrected world units).
+		if (pointerAway !== 0) {
+			const dx = wrapDelta(px[i] - pointerX, worldW)
+			const dy = wrapDelta(py[i] - pointerY, worldH)
+			const distSq = dx * dx + dy * dy
+			if (distSq < pointerR2 && distSq > 0.0001) {
+				const dist = Math.sqrt(distSq)
+				const falloff = 1 - dist / opts.pointerRadius
+				steerX += (dx / dist) * pointerForce * falloff
+				steerY += (dy / dist) * pointerForce * falloff
+			}
+		}
+
 		let nvx = vx[i] + steerX * 0.15
 		let nvy = vy[i] + steerY * 0.15
 
@@ -424,7 +482,7 @@ function stepBoids(state: BoidsState, columns: number, rows: number, opts: Requi
 	}
 }
 
-function resolveOptions(options: AsciiBoidsOptions): Required<AsciiBoidsOptions> {
+function resolveOptions(options: AsciiBoidsOptions): ResolvedAsciiBoidsOptions {
 	// minSpeed must be clamped against the RESOLVED maxSpeed (post clamp-to-[0.05,20]), not
 	// the raw input — otherwise a pathological maxSpeed:5000 lets minSpeed clamp up to 20
 	// (resolved maxSpeed) as its ceiling would be fine, but the reverse — maxSpeed:5000,
@@ -450,6 +508,12 @@ function resolveOptions(options: AsciiBoidsOptions): Required<AsciiBoidsOptions>
 		chars: options.chars ?? DEFAULT_CHARS,
 		seed: options.seed ?? DEFAULT_SEED,
 		bgColor: options.bgColor ?? DEFAULT_BG_COLOR,
+		pointerMode: options.pointerMode ?? DEFAULT_POINTER_MODE,
+		// NaN pointerRadius/pointerWeight degrade safely: every use is gated by a comparison
+		// (distSq < radius², weight > 0) that is false for NaN, so the force just stays off —
+		// nothing non-finite can reach a position or velocity.
+		pointerRadius: clampNum(options.pointerRadius ?? DEFAULT_POINTER_RADIUS, 2, 100),
+		pointerWeight: clampNum(options.pointerWeight ?? DEFAULT_POINTER_WEIGHT, 0, 10),
 	}
 }
 
@@ -469,13 +533,39 @@ function renderBoidsFrame(
 		store.set(stateKey, state)
 	}
 
+	// Sample the pointer channel ONCE per generate call (never per substep): the host only
+	// replaces `pointer.state` between frames, and one sample per call keeps the output a
+	// pure function of the frame sequence plus the pointer-state sequence. With no pointer,
+	// or an inactive one, this resolves to pointerAway === 0 and stepBoids is byte-identical
+	// to the pointer-less code path at near-zero cost (three untaken branches).
+	const pointerState = options.pointer !== undefined ? options.pointer.state : null
+	let pointerX = 0
+	let pointerY = 0
+	let pointerAway = 0
+	if (
+		pointerState !== null &&
+		pointerState.active &&
+		opts.pointerMode !== 'none' &&
+		opts.pointerWeight > 0 &&
+		Number.isFinite(pointerState.x) &&
+		Number.isFinite(pointerState.y)
+	) {
+		// Fractional-cell pointer coords can lie outside the grid (drags past an edge); the
+		// world is toroidal, so wrap them onto it — matching how boid positions themselves
+		// wrap — before any distance math. y additionally converts rows -> world units.
+		pointerX = wrap(pointerState.x, columns)
+		pointerY = wrap(pointerState.y * CELL_ASPECT, rows * CELL_ASPECT)
+		pointerAway = opts.pointerMode === 'attract' ? -1 : 1
+	}
+
 	// Simulate forward, capped so a large jump (backgrounded tab, seek) cannot block the
 	// main thread proportionally to the gap. The most recent steps run first when capped, so
-	// scatter timing stays in phase with the true frame number.
+	// scatter timing stays in phase with the true frame number. All catch-up substeps share
+	// the single pointer-state sample taken above.
 	const stepsToRun = catchupSteps(frame, state.lastFrame)
 	const firstSimFrame = frame - stepsToRun + 1
 	for (let s = 0; s < stepsToRun; s++) {
-		stepBoids(state, columns, rows, opts, firstSimFrame + s)
+		stepBoids(state, columns, rows, opts, firstSimFrame + s, pointerX, pointerY, pointerAway)
 	}
 	state.lastFrame = frame
 
