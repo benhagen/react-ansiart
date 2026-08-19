@@ -1,5 +1,6 @@
 import type { AnsiCell, AnsiScreen } from '../ansi/types'
 import type { CharacterFrameGenerator, CharacterFrameGeneratorWithMetadata } from '../types/types'
+import { ANSI_COLORS_RGB } from '../utils/rgbToAnsi'
 
 /**
  * Post-effect composition layer.
@@ -149,6 +150,19 @@ function parsePackedColorUncached(color: string): number {
 		toChannel(parseInt(match[2], 10)),
 		toChannel(parseInt(match[3], 10))
 	)
+}
+
+/**
+ * Packed 0xRRGGBB for a cell color of either kind: ANSI palette indices (0-15) go through
+ * the EGA table, strings go through {@link parsePackedColor}. `-1` when unresolvable.
+ */
+function packedCellColor(color: number | string): number {
+	if (typeof color === 'number') {
+		if (!Number.isInteger(color) || color < 0 || color >= ANSI_COLORS_RGB.length) return -1
+		const [r, g, b] = ANSI_COLORS_RGB[color]
+		return packRgb(r, g, b)
+	}
+	return parsePackedColor(color)
 }
 
 /**
@@ -755,6 +769,364 @@ export function createVhsTrackingEffect(options: VhsTrackingEffectOptions = {}):
 				}
 
 				outRow[x] = cell
+			}
+		}
+
+		return finishScreen(buffer, screen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phosphor persistence effect
+// ---------------------------------------------------------------------------
+
+export interface PhosphorPersistenceEffectOptions {
+	/** Frames a trail takes to fade from full strength to nothing. Default: 14 */
+	decayFrames?: number
+	/** Trail brightness the frame after its source cell goes dark, 0..1. Default: 0.65 */
+	strength?: number
+}
+
+/** Trail brightness is quantized to this many levels so the dim-color cache stays tiny. */
+const PHOSPHOR_LEVELS = 12
+
+/**
+ * CRT phosphor afterglow: when a lit cell goes dark, its glyph lingers and fades out over
+ * `decayFrames` frames instead of vanishing, leaving motion trails behind anything that
+ * moves. A cell is "lit" when its character is not a space; trails inherit the departed
+ * cell's glyph and foreground color, progressively dimmed toward black.
+ *
+ * ## Statefulness (deviation from the pure-`(screen, frame)` contract)
+ *
+ * Afterglow is inherently a function of what was on screen before, so each instance keeps
+ * a per-cell memory of the last lit glyph/color — the same "deterministic for a given
+ * frame sequence" contract the stateful generators use. Memory resets whenever the frame
+ * number does not advance (a seek/rewind) or the screen dimensions change, so any forward
+ * replay from a reset produces identical output. Numeric ANSI palette colors dim through
+ * the EGA table; colors this module cannot parse produce no trail.
+ */
+export function createPhosphorPersistenceEffect(
+	options: PhosphorPersistenceEffectOptions = {}
+): AnsiPostEffect {
+	const decayFrames = clampNumber(options.decayFrames ?? 14, 1, 100000)
+	const strength = clamp01(options.strength ?? 0.65)
+
+	const buffer = createEffectBuffer()
+
+	// Per-cell memory, flat-indexed y * width + x. `memColor` is packed RGB (-1 = no trail
+	// possible), `level` is the remaining trail brightness (0 = no active trail), `wasLit`
+	// marks cells that were lit on the previous frame so a lit->dark edge starts a trail.
+	let memChars: string[] = []
+	let memColor = new Int32Array(0)
+	let level = new Float64Array(0)
+	let wasLit = new Uint8Array(0)
+	let memWidth = -1
+	let memHeight = -1
+	let lastFrame = Number.NEGATIVE_INFINITY
+
+	// Dimmed trail colors, cached by packed RGB + quantized brightness level.
+	const dimmedCache = new Map<number, string>()
+
+	function resetMemory(width: number, height: number): void {
+		const total = width * height
+		memChars = new Array<string>(total).fill(' ')
+		memColor = new Int32Array(total).fill(-1)
+		level = new Float64Array(total)
+		wasLit = new Uint8Array(total)
+		memWidth = width
+		memHeight = height
+	}
+
+	function trailColor(packed: number, quantized: number): string {
+		const key = packed * (PHOSPHOR_LEVELS + 1) + quantized
+		const hit = dimmedCache.get(key)
+		if (hit !== undefined) return hit
+		const k = quantized / PHOSPHOR_LEVELS
+		const str = `rgb(${toChannel(((packed >>> 16) & 0xff) * k)},${toChannel(
+			((packed >>> 8) & 0xff) * k
+		)},${toChannel((packed & 0xff) * k)})`
+		if (dimmedCache.size < MAX_TRANSFORMED_COLORS) dimmedCache.set(key, str)
+		return str
+	}
+
+	return (screen, frame) => {
+		const lines = screen.lines
+		const rowCount = lines.length
+		if (rowCount === 0) return screen
+
+		const width = Math.max(1, screen.columns)
+		if (width !== memWidth || rowCount !== memHeight || frame <= lastFrame) {
+			resetMemory(width, rowCount)
+		}
+		// Trails fade by elapsed frames, so a frame jump skips ahead instead of slowing down.
+		const decay = Math.max(0, frame - lastFrame) / decayFrames
+		lastFrame = frame
+
+		prepareLines(buffer, rowCount)
+
+		for (let y = 0; y < rowCount; y++) {
+			const srcRow = lines[y]
+			const rowLength = srcRow.length
+			const outRow = prepareRow(buffer, y, rowLength)
+			const rowBase = y * width
+
+			for (let x = 0; x < rowLength; x++) {
+				const src = srcRow[x]
+				const idx = rowBase + Math.min(x, width - 1)
+
+				if (src.ch !== ' ') {
+					// Lit: pass through and remember the glyph for a future trail.
+					memChars[idx] = src.ch
+					memColor[idx] = packedCellColor(src.fg)
+					wasLit[idx] = 1
+					level[idx] = 0
+					outRow[x] = src
+					continue
+				}
+
+				if (wasLit[idx] === 1) {
+					// Lit -> dark edge: start the trail at full strength.
+					wasLit[idx] = 0
+					level[idx] = strength
+				} else if (level[idx] > 0) {
+					level[idx] -= decay
+				}
+
+				const packed = memColor[idx]
+				if (level[idx] > 0 && packed >= 0) {
+					const quantized = clampInt(Math.round(level[idx] * PHOSPHOR_LEVELS), 1, PHOSPHOR_LEVELS)
+					const cell = ownedCell(buffer, y, x, src)
+					cell.ch = memChars[idx]
+					cell.fg = trailColor(packed, quantized)
+					cell.bold = false
+					outRow[x] = cell
+				} else {
+					level[idx] = 0
+					outRow[x] = src
+				}
+			}
+		}
+
+		return finishScreen(buffer, screen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Chromatic aberration effect
+// ---------------------------------------------------------------------------
+
+export interface ChromaticAberrationEffectOptions {
+	/**
+	 * Maximum horizontal channel displacement in cells — reached at the screen edges with
+	 * `falloff: 'edge'`, applied everywhere with `falloff: 'uniform'`. Default: 2
+	 */
+	maxShift?: number
+	/** Blend between the original color and the fully fringed color, 0..1. Default: 1 */
+	strength?: number
+	/** 'edge': displacement grows quadratically away from the screen center. Default: 'edge' */
+	falloff?: 'edge' | 'uniform'
+	/** Also fringe background colors (doubles the color work). Default: false */
+	affectBackground?: boolean
+}
+
+/**
+ * Lens color fringing: each cell's red channel is sampled `shift` cells to the left and
+ * its blue channel `shift` cells to the right, so hard color edges split into red/blue
+ * fringes. With the default `'edge'` falloff the displacement grows quadratically from
+ * the screen center outward, like a cheap CRT/camera lens; the center stays clean.
+ *
+ * Glyphs are untouched — only colors fringe. Cells whose neighborhood is a flat color
+ * pass through by reference, so the effect costs nothing on solid areas. Colors that
+ * cannot be resolved to RGB (unparseable strings) pass through unchanged.
+ */
+export function createChromaticAberrationEffect(
+	options: ChromaticAberrationEffectOptions = {}
+): AnsiPostEffect {
+	const maxShift = clampInt(options.maxShift ?? 2, 0, 64)
+	const strength = clamp01(options.strength ?? 1)
+	const falloff = options.falloff === 'uniform' ? 'uniform' : 'edge'
+	const affectBackground = options.affectBackground ?? false
+
+	const buffer = createEffectBuffer()
+
+	// Per-column shift magnitudes, rebuilt only when the width changes.
+	let shiftTable = new Int16Array(0)
+	let shiftWidth = -1
+
+	// Final fringed color strings, cached by packed RGB.
+	const fringedCache = new Map<number, string>()
+
+	function getShiftTable(width: number): Int16Array {
+		if (width === shiftWidth) return shiftTable
+		shiftTable = new Int16Array(width)
+		const cx = (width - 1) / 2
+		for (let x = 0; x < width; x++) {
+			if (falloff === 'uniform') {
+				shiftTable[x] = maxShift
+			} else {
+				const t = cx > 0 ? Math.abs(x - cx) / cx : 0
+				shiftTable[x] = Math.round(maxShift * t * t)
+			}
+		}
+		shiftWidth = width
+		return shiftTable
+	}
+
+	function packedToString(packed: number): string {
+		const hit = fringedCache.get(packed)
+		if (hit !== undefined) return hit
+		const str = `rgb(${(packed >>> 16) & 0xff},${(packed >>> 8) & 0xff},${packed & 0xff})`
+		if (fringedCache.size < MAX_TRANSFORMED_COLORS) fringedCache.set(packed, str)
+		return str
+	}
+
+	/** Fringed color for one channel plane, or null when it resolves to no change. */
+	function fringe(
+		center: number | string,
+		left: number | string,
+		right: number | string
+	): string | null {
+		if (left === center && right === center) return null
+		const packedC = packedCellColor(center)
+		if (packedC < 0) return null
+		let packedL = packedCellColor(left)
+		let packedR = packedCellColor(right)
+		if (packedL < 0) packedL = packedC
+		if (packedR < 0) packedR = packedC
+		if (packedL === packedC && packedR === packedC) return null
+
+		const cr = (packedC >>> 16) & 0xff
+		const cg = (packedC >>> 8) & 0xff
+		const cb = packedC & 0xff
+		const r = toChannel(cr + (((packedL >>> 16) & 0xff) - cr) * strength)
+		const b = toChannel(cb + ((packedR & 0xff) - cb) * strength)
+		const packed = packRgb(r, cg, b)
+		if (packed === packedC) return null
+		return packedToString(packed)
+	}
+
+	return (screen) => {
+		const lines = screen.lines
+		const rowCount = lines.length
+		if (rowCount === 0 || maxShift === 0 || strength === 0) return screen
+
+		const width = Math.max(1, screen.columns)
+		const shifts = getShiftTable(width)
+
+		prepareLines(buffer, rowCount)
+
+		for (let y = 0; y < rowCount; y++) {
+			const srcRow = lines[y]
+			const rowLength = srcRow.length
+			const outRow = prepareRow(buffer, y, rowLength)
+
+			for (let x = 0; x < rowLength; x++) {
+				const src = srcRow[x]
+				const shift = shifts[Math.min(x, width - 1)]
+				if (shift === 0) {
+					outRow[x] = src
+					continue
+				}
+
+				const left = srcRow[Math.max(0, x - shift)]
+				const right = srcRow[Math.min(rowLength - 1, x + shift)]
+				const fg = fringe(src.fg, left.fg, right.fg)
+				const bg = affectBackground ? fringe(src.bg, left.bg, right.bg) : null
+
+				if (fg === null && bg === null) {
+					outRow[x] = src
+					continue
+				}
+				const cell = ownedCell(buffer, y, x, src)
+				if (fg !== null) cell.fg = fg
+				if (bg !== null) cell.bg = bg
+				outRow[x] = cell
+			}
+		}
+
+		return finishScreen(buffer, screen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Kaleidoscope effect
+// ---------------------------------------------------------------------------
+
+export interface KaleidoscopeEffectOptions {
+	/** Number of mirror segments around the center (2-32). Default: 6 */
+	segments?: number
+	/** Rotation of the rendered pattern, radians per frame. Default: 0.004 */
+	rotateSpeed?: number
+	/** Drift of which wedge of the source is sampled, radians per frame. Default: 0.0017 */
+	sourceRotateSpeed?: number
+	/** Cell height / cell width, to keep the fold circular on screen. Default: 2 */
+	cellAspect?: number
+	/** Fold center as a fraction of the width. Default: 0.5 */
+	centerX?: number
+	/** Fold center as a fraction of the height. Default: 0.5 */
+	centerY?: number
+}
+
+/**
+ * Classic kaleidoscope fold: the screen is divided into `segments` wedges around a center
+ * point, and every wedge shows a mirrored copy of one source wedge, producing N-fold
+ * mirror symmetry out of whatever the wrapped generator draws. The whole pattern slowly
+ * rotates (`rotateSpeed`) while the sampled source wedge drifts independently
+ * (`sourceRotateSpeed`), so even a static source keeps moving.
+ *
+ * Output cells are references to sampled input cells (never modified), so the effect does
+ * no color work at all — it is pure coordinate remapping, aspect-corrected so the fold
+ * reads as circular on 2:1 character cells.
+ */
+export function createKaleidoscopeEffect(options: KaleidoscopeEffectOptions = {}): AnsiPostEffect {
+	const segments = clampInt(options.segments ?? 6, 2, 32)
+	const rotateSpeed = clampNumber(options.rotateSpeed ?? 0.004, -1, 1)
+	const sourceRotateSpeed = clampNumber(options.sourceRotateSpeed ?? 0.0017, -1, 1)
+	const cellAspect = clampNumber(options.cellAspect ?? 2, 0.25, 8)
+	const centerXFraction = clamp01(options.centerX ?? 0.5)
+	const centerYFraction = clamp01(options.centerY ?? 0.5)
+
+	const buffer = createEffectBuffer()
+	const wedge = (Math.PI * 2) / segments
+	const halfWedge = wedge / 2
+
+	return (screen, frame) => {
+		const lines = screen.lines
+		const rowCount = lines.length
+		if (rowCount === 0) return screen
+
+		const width = Math.max(1, screen.columns)
+		const cx = (width - 1) * centerXFraction
+		const cy = (rowCount - 1) * centerYFraction
+		const rotation = frame * rotateSpeed
+		const sourceRotation = frame * sourceRotateSpeed
+		const invAspect = 1 / cellAspect
+
+		prepareLines(buffer, rowCount)
+
+		for (let y = 0; y < rowCount; y++) {
+			const srcRow = lines[y]
+			const rowLength = srcRow.length
+			const outRow = prepareRow(buffer, y, rowLength)
+			const dy = (y - cy) * cellAspect
+
+			for (let x = 0; x < rowLength; x++) {
+				const dx = x - cx
+				const radius = Math.sqrt(dx * dx + dy * dy)
+				if (radius < 0.5) {
+					outRow[x] = srcRow[x]
+					continue
+				}
+
+				// Fold the angle into [0, wedge), mirrored about the wedge midline.
+				let angle = (Math.atan2(dy, dx) + rotation) % wedge
+				if (angle < 0) angle += wedge
+				if (angle > halfWedge) angle = wedge - angle
+				const sampleAngle = angle + sourceRotation
+
+				const sx = Math.round(cx + Math.cos(sampleAngle) * radius)
+				const sy = Math.round(cy + Math.sin(sampleAngle) * radius * invAspect)
+				outRow[x] = sampleCell(lines, sx, sy, srcRow[x])
 			}
 		}
 

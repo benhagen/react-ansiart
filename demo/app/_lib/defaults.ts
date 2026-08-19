@@ -304,3 +304,90 @@ export const BOIDS_DEFAULTS = {
 	headColor: '#eafcff',
 	bgColor: '#000006',
 }
+
+export const DONUT_DEFAULTS = {
+	speedA: 0.07,
+	speedB: 0.03,
+	size: 0.9,
+	tubeRatio: 0.5,
+	baseColor: '#ffaa33',
+	bgColor: '#000000',
+}
+
+export const WIREFRAME_DEFAULTS = {
+	shape: 'cube' as const,
+	size: 0.8,
+	speedX: 0.019,
+	speedY: 0.023,
+	speedZ: 0.011,
+	edgeColor: '#44ff88',
+	vertexColor: '#ffffff',
+	depthShading: true,
+	bgColor: '#000000',
+}
+
+export const SHADEBOBS_DEFAULTS = {
+	bobCount: 5,
+	bobSize: 5,
+	trailDecay: 0.92,
+	speed: 1,
+	seed: 2001,
+	bgColor: '#000000',
+}
+
+export const MUNCHING_SQUARES_DEFAULTS = {
+	speed: 1,
+	size: 32,
+	invert: false,
+	bgColor: '#000000',
+}
+
+export const FIREWORKS_DEFAULTS = {
+	launchInterval: 45,
+	riseFrames: 35,
+	burstDuration: 60,
+	particleCount: 60,
+	gravity: 0.006,
+	nightSky: true,
+	seed: 1337,
+	bgColor: '#000008',
+}
+
+export const AQUARIUM_DEFAULTS = {
+	fishCount: 7,
+	bubbleDensity: 0.12,
+	seaweedDensity: 0.16,
+	swaySpeed: 0.07,
+	speed: 1,
+	seed: 24601,
+	bgColor: '#0d3a66',
+}
+
+export const PHYSARUM_DEFAULTS = {
+	agentDensity: 0.6,
+	sensorAngle: 0.45,
+	sensorDistance: 4,
+	turnSpeed: 0.75,
+	evaporation: 0.85,
+	stepsPerFrame: 1,
+	seed: 1337,
+	bgColor: '#000000',
+}
+
+export const SANDPILE_DEFAULTS = {
+	grainsPerStep: 8,
+	stepsPerFrame: 1,
+	maxToppleSweeps: 24,
+	dropX: 0.5,
+	dropY: 0.5,
+	bgColor: '#000000',
+}
+
+// Demo-chosen screensaver settings (the library's createAnsiGeneratorCycle defaults to
+// holdFrames 360; 240 keeps the playground rotation snappy). kind 'auto' means "omit the
+// option" so the library cycles through every transition style.
+export const SCREENSAVER_DEFAULTS = {
+	holdFrames: 240,
+	transitionFrames: 48,
+	kind: 'auto' as const,
+}

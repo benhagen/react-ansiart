@@ -3,7 +3,7 @@
 `react-ansiart` is a zero-dependency React library that renders ANSI art (`.ANS`, `.ASC`)
 and procedural demoscene effects as CP437 character grids drawn on a `<canvas>` with an
 embedded IBM VGA 8x16 bitmap font. Two things live here: a **component layer** (React,
-canvas, browser-only) and a **headless layer** (ANSI parser, 27 procedural frame
+canvas, browser-only) and a **headless layer** (ANSI parser, 35 procedural frame
 generators, post effects, CP437/color utilities) that is pure TypeScript and runs
 anywhere Node runs. Anything that produces pixels is in the first layer; anything that
 produces an `AnsiScreen` is in the second, and the second is where nearly all the code is.
@@ -14,7 +14,7 @@ Run from the repo root:
 
 ```bash
 npm run typecheck      # tsc --noEmit && tsc --noEmit -p tsconfig.test.json
-npm test               # node --import tsx --test 'src/**/*.test.ts'  (171 tests, 31 suites)
+npm test               # node --import tsx --test 'src/**/*.test.ts'  (314 tests, 58 suites)
 npm run lint           # eslint src/
 npm run build          # tsup -> dist/ (ESM only, per-module entry points)
 npm run dev            # tsup --watch
@@ -55,7 +55,7 @@ src/components/   React layer. AnsiArt (fetch + SAUCE + animation detect),
                   AnsiPlayerOverlay, PlasmaBackgroundLayout, FontCharacterChart.
 src/engines/      AnsiVirtualDisplayEngine — canvas renderer, double buffering,
                   glyph cache, rAF loop, IntersectionObserver pause.
-src/generators/   27 procedural frame generators + ansiPostEffects (screen-space
+src/generators/   35 procedural frame generators + ansiPostEffects (screen-space
                   transforms) + generatorState/simulationCatchup (stateful sim support).
 src/ansi/         parser.ts (resumable ANSI/CP437 parse session), frameToAnsi,
                   shapeAsciiConverter.
