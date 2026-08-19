@@ -686,6 +686,14 @@ function GeneratorsPlayground() {
 		generatorType === 'metaballs' ||
 		generatorType === 'boids' ||
 		generatorType === 'physarum'
+	const [pointerEnabled, setPointerEnabled] = useState(true)
+	// The channel the generators actually see: undefined while the toggle is off, so the
+	// generator runs its (byte-identical) non-interactive path.
+	const activePointer = pointerEnabled ? pointerInput : undefined
+	useEffect(() => {
+		// Toggling off mid-hover must not leave a stale "active" state behind.
+		if (!pointerEnabled) pointerInput.reset()
+	}, [pointerEnabled, pointerInput])
 
 	// Post FX state
 	const [fxLens, setFxLens] = useState(false)
@@ -775,7 +783,7 @@ function GeneratorsPlayground() {
 					fgColor: metaballsFgColor,
 					bgColor: metaballsBgColor,
 					chars: metaballsChars.trim() ? Array.from(metaballsChars) : undefined,
-					pointer: pointerInput,
+					pointer: activePointer,
 				})
 		}
 		if (generatorType === 'matrix') {
@@ -836,7 +844,7 @@ function GeneratorsPlayground() {
 					bgColor: rippleBgColor,
 					chars: rippleChars.trim() || undefined,
 					seed: rippleSeed,
-					pointer: pointerInput,
+					pointer: activePointer,
 				})
 		}
 		if (generatorType === 'mandelbrot') {
@@ -1008,7 +1016,7 @@ function GeneratorsPlayground() {
 					wallColor: sandWallColor,
 					bgColor: sandBgColor,
 					seed: sandSeed,
-					pointer: pointerInput,
+					pointer: activePointer,
 				})
 		}
 		if (generatorType === 'bumpMapping') {
@@ -1042,7 +1050,7 @@ function GeneratorsPlayground() {
 					cohWeight: boidsCohWeight,
 					headColor: boidsHeadColor,
 					bgColor: boidsBgColor,
-					pointer: pointerInput,
+					pointer: activePointer,
 					pointerMode: boidsPointerMode as 'flee' | 'attract' | 'none',
 				})
 		}
@@ -1127,7 +1135,7 @@ function GeneratorsPlayground() {
 					stepsPerFrame: physarumStepsPerFrame,
 					seed: physarumSeed,
 					bgColor: physarumBgColor,
-					pointer: pointerInput,
+					pointer: activePointer,
 				})
 		}
 		if (generatorType === 'sandpile') {
@@ -1204,7 +1212,7 @@ function GeneratorsPlayground() {
 		bumpNoiseScale, bumpOrbitSpeed, bumpLightHeight, bumpBumpStrength, bumpSpecularPower, bumpBgColor,
 		juliaMaxIter, juliaMorphSpeed, juliaRadius, juliaColorMode, juliaFgColor, juliaBgColor,
 		boidsCount, boidsSepWeight, boidsAlignWeight, boidsCohWeight, boidsHeadColor, boidsBgColor,
-		boidsPointerMode, pointerInput,
+		boidsPointerMode, activePointer,
 		donutSpeedA, donutSpeedB, donutSize, donutTubeRatio, donutBaseColor, donutBgColor,
 		wireframeShape, wireframeSize, wireframeSpeedX, wireframeSpeedY, wireframeSpeedZ,
 		wireframeEdgeColor, wireframeVertexColor, wireframeDepthShading, wireframeBgColor,
@@ -1723,6 +1731,7 @@ function GeneratorsPlayground() {
 			if (f !== null) setFps(f)
 		}
 		if (initialParams.get('perf') !== null) setShowPerformanceOverlay(initialParams.get('perf') === '1')
+		if (initialParams.get('ptr') !== null) setPointerEnabled(initialParams.get('ptr') === '1')
 		const fx = initialParams.get('fx')
 		if (fx !== null) {
 			const active = fx.split(',')
@@ -1746,6 +1755,7 @@ function GeneratorsPlayground() {
 		if (rows !== VIRTUAL_DISPLAY_DEFAULTS.rows) params.set('rows', String(rows))
 		if (fps !== VIRTUAL_DISPLAY_DEFAULTS.fps) params.set('fps', String(fps))
 		if (showPerformanceOverlay) params.set('perf', '1')
+		if (!pointerEnabled) params.set('ptr', '0')
 		const fx = [
 			fxLens ? 'lens' : '',
 			fxScanline ? 'scanline' : '',
@@ -1872,10 +1882,10 @@ function GeneratorsPlayground() {
 							fps={fps}
 							frameGenerator={composedGenerator}
 							showPerformanceOverlay={showPerformanceOverlay}
-							pointerInput={isPointerInteractive ? pointerInput : undefined}
+							pointerInput={isPointerInteractive ? activePointer : undefined}
 						/>
 					</Stage>
-					{isPointerInteractive && (
+					{isPointerInteractive && pointerEnabled && (
 						<div style={{ fontSize: 12, color: 'var(--text-dim, #888)' }}>
 							🖱 This generator is interactive — move, press, and drag on the canvas.
 						</div>
@@ -1896,6 +1906,9 @@ function GeneratorsPlayground() {
 						<NumberInput label="Rows" value={rows} onChange={setRows} min={10} step={1} />
 						<NumberInput label="FPS" value={fps} onChange={setFps} min={1} step={1} />
 						<ToggleInput label="Performance Overlay" value={showPerformanceOverlay} onChange={setShowPerformanceOverlay} />
+						{isPointerInteractive && (
+							<ToggleInput label="Mouse Interactivity" value={pointerEnabled} onChange={setPointerEnabled} />
+						)}
 					</ControlGroup>
 
 					<ControlGroup label="Post FX">
