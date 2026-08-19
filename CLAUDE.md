@@ -13,7 +13,7 @@ byte-rate animation, SAUCE metadata.
 - **Language**: TypeScript 5 (strict mode)
 - **Framework**: React 18/19 (peer dependency)
 - **Bundler**: tsup (ESM only, per-module entry points in `tsup.config.ts`)
-- **Tests**: `node --test` via `tsx` — 171 tests / 31 suites, colocated `*.test.ts` in `src/`
+- **Tests**: `node --test` via `tsx` — 314 tests / 58 suites, colocated `*.test.ts` in `src/`
 - **Demo**: Next.js 16 (app router) in `demo/`
 - **Runtime dependencies**: None
 

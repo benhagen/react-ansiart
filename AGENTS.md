@@ -14,7 +14,7 @@ Run from the repo root:
 
 ```bash
 npm run typecheck      # tsc --noEmit && tsc --noEmit -p tsconfig.test.json
-npm test               # node --import tsx --test 'src/**/*.test.ts'  (171 tests, 31 suites)
+npm test               # node --import tsx --test 'src/**/*.test.ts'  (314 tests, 58 suites)
 npm run lint           # eslint src/
 npm run build          # tsup -> dist/ (ESM only, per-module entry points)
 npm run dev            # tsup --watch
