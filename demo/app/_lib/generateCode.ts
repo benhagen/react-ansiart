@@ -65,8 +65,12 @@ export function generateGeneratorCode(
 	displayDefaults: Record<string, unknown>,
 	generatorOptions: Record<string, unknown>,
 	generatorDefaults: Record<string, unknown>,
-	effects?: { lens: boolean; scanline: boolean; vhs: boolean }
+	effects?: { lens: boolean; scanline: boolean; vhs: boolean; phosphor: boolean; chromatic: boolean; kaleidoscope: boolean }
 ): string {
+	if (generatorType === 'screensaver') {
+		return generateScreensaverCode(displayProps, displayDefaults, generatorOptions, generatorDefaults, effects)
+	}
+
 	const generatorMap: Record<string, { fn: string; type: string }> = {
 		perlinPlasma: { fn: 'generateAsciiPerlinPlasmaFrame', type: 'AsciiPerlinPlasmaOptions' },
 		fire: { fn: 'generateAsciiFireFrame', type: 'AsciiFireOptions' },
@@ -95,6 +99,14 @@ export function generateGeneratorCode(
 		bumpMapping: { fn: 'generateAsciiBumpMappingFrame', type: 'AsciiBumpMappingOptions' },
 		julia: { fn: 'generateAsciiJuliaFrame', type: 'AsciiJuliaOptions' },
 		boids: { fn: 'generateAsciiBoidsFrame', type: 'AsciiBoidsOptions' },
+		donut: { fn: 'generateAsciiDonutFrame', type: 'AsciiDonutOptions' },
+		wireframe: { fn: 'generateAsciiWireframeFrame', type: 'AsciiWireframeOptions' },
+		shadebobs: { fn: 'generateAsciiShadebobsFrame', type: 'AsciiShadebobsOptions' },
+		munchingSquares: { fn: 'generateAsciiMunchingSquaresFrame', type: 'AsciiMunchingSquaresOptions' },
+		fireworks: { fn: 'generateAsciiFireworksFrame', type: 'AsciiFireworksOptions' },
+		aquarium: { fn: 'generateAsciiAquariumFrame', type: 'AsciiAquariumOptions' },
+		physarum: { fn: 'generateAsciiPhysarumFrame', type: 'AsciiPhysarumOptions' },
+		sandpile: { fn: 'generateAsciiSandpileFrame', type: 'AsciiSandpileOptions' },
 	}
 
 	const gen = generatorMap[generatorType]
@@ -117,10 +129,7 @@ export function generateGeneratorCode(
 	const displayAttrs = propsToAttributes(displayProps, displayDefaults)
 	const displayAttrStr = displayAttrs.length > 0 ? `\n    ${displayAttrs.join('\n    ')}\n    ` : ' '
 
-	const effectFactories: string[] = []
-	if (effects?.lens) effectFactories.push('createLensEffect()')
-	if (effects?.scanline) effectFactories.push('createScanlineEffect()')
-	if (effects?.vhs) effectFactories.push('createVhsTrackingEffect()')
+	const effectFactories = collectEffectFactories(effects)
 	const hasEffects = effectFactories.length > 0
 
 	const imports = [gen.fn, 'AnsiVirtualDisplay']
@@ -138,6 +147,81 @@ import { ${imports.join(', ')} } from 'react-ansiart'
 function MyComponent() {
   ${optionsBlock}const frameGenerator = useMemo(() => {
     return ${generatorExpr}
+  }, [])
+
+  return (
+    <AnsiVirtualDisplay${displayAttrStr}frameGenerator={frameGenerator}
+    />
+  )
+}`
+}
+
+function collectEffectFactories(
+	effects?: { lens: boolean; scanline: boolean; vhs: boolean; phosphor: boolean; chromatic: boolean; kaleidoscope: boolean }
+): string[] {
+	const effectFactories: string[] = []
+	if (effects?.lens) effectFactories.push('createLensEffect()')
+	if (effects?.scanline) effectFactories.push('createScanlineEffect()')
+	if (effects?.vhs) effectFactories.push('createVhsTrackingEffect()')
+	if (effects?.phosphor) effectFactories.push('createPhosphorPersistenceEffect()')
+	if (effects?.chromatic) effectFactories.push('createChromaticAberrationEffect()')
+	if (effects?.kaleidoscope) effectFactories.push('createKaleidoscopeEffect()')
+	return effectFactories
+}
+
+// Hand-written snippet: the screensaver is a cycle over other generators rather than a
+// single generateAscii*Frame call, so the generatorMap template doesn't fit.
+function generateScreensaverCode(
+	displayProps: Record<string, unknown>,
+	displayDefaults: Record<string, unknown>,
+	generatorOptions: Record<string, unknown>,
+	generatorDefaults: Record<string, unknown>,
+	effects?: { lens: boolean; scanline: boolean; vhs: boolean; phosphor: boolean; chromatic: boolean; kaleidoscope: boolean }
+): string {
+	const cycleAttrs = [
+		`      holdFrames: ${serializeValue(generatorOptions.holdFrames)},`,
+		`      transitionFrames: ${serializeValue(generatorOptions.transitionFrames)},`,
+	]
+	if (generatorOptions.kind !== undefined && generatorOptions.kind !== generatorDefaults.kind) {
+		cycleAttrs.push(`      kind: ${serializeValue(generatorOptions.kind)},`)
+	}
+
+	const displayAttrs = propsToAttributes(displayProps, displayDefaults)
+	const displayAttrStr = displayAttrs.length > 0 ? `\n    ${displayAttrs.join('\n    ')}\n    ` : ' '
+
+	const effectFactories = collectEffectFactories(effects)
+	const hasEffects = effectFactories.length > 0
+
+	const imports = [
+		'createAnsiGeneratorCycle',
+		'createAsciiFireGenerator',
+		'createAsciiMatrixRainGenerator',
+		'generateAsciiDonutFrame',
+		'generateAsciiPerlinPlasmaFrame',
+		'generateAsciiTunnelFrame',
+		'AnsiVirtualDisplay',
+	]
+	if (hasEffects) imports.push('composeAnsiEffects', ...effectFactories.map((f) => f.slice(0, -2)))
+
+	const returnExpr = hasEffects
+		? `composeAnsiEffects(\n      screensaver,\n      ${effectFactories.join(', ')}\n    )`
+		: 'screensaver'
+
+	return `import { useMemo } from 'react'
+import { ${imports.join(', ')} } from 'react-ansiart'
+
+function MyComponent() {
+  const frameGenerator = useMemo(() => {
+    const screensaver = createAnsiGeneratorCycle([
+      (frame: number, cols: number, rows: number) => generateAsciiDonutFrame(frame, cols, rows),
+      (frame: number, cols: number, rows: number) => generateAsciiPerlinPlasmaFrame(frame, cols, rows),
+      (frame: number, cols: number, rows: number) => generateAsciiTunnelFrame(frame, cols, rows),
+      createAsciiFireGenerator(),
+      createAsciiMatrixRainGenerator(),
+    ], {
+${cycleAttrs.join('\n')}
+    })
+    return ${returnExpr}
   }, [])
 
   return (

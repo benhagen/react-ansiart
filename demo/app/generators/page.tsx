@@ -14,6 +14,9 @@ import {
 	clearCyclicAutomatonState,
 	clearFallingSandState,
 	clearBoidsState,
+	clearShadebobsState,
+	clearPhysarumState,
+	clearSandpileState,
 	generateAsciiDatamoshFrame,
 	generateAsciiFireFrame,
 	generateAsciiGameOfLifeFrame,
@@ -41,6 +44,14 @@ import {
 	generateAsciiBumpMappingFrame,
 	generateAsciiJuliaFrame,
 	generateAsciiBoidsFrame,
+	generateAsciiDonutFrame,
+	generateAsciiWireframeFrame,
+	generateAsciiShadebobsFrame,
+	generateAsciiMunchingSquaresFrame,
+	generateAsciiFireworksFrame,
+	generateAsciiAquariumFrame,
+	generateAsciiPhysarumFrame,
+	generateAsciiSandpileFrame,
 	generateMandelbrotPixels,
 	createAsciiBoidsGenerator,
 	createAsciiCyclicAutomatonGenerator,
@@ -52,12 +63,20 @@ import {
 	createAsciiReactionDiffusionGenerator,
 	createAsciiStarfieldGenerator,
 	createAsciiWaterRippleGenerator,
+	createAsciiShadebobsGenerator,
+	createAsciiPhysarumGenerator,
+	createAsciiSandpileGenerator,
+	createAnsiGeneratorCycle,
 	createShapeConverter,
 	getEmbeddedVgaFont,
 	composeAnsiEffects,
 	createLensEffect,
 	createScanlineEffect,
 	createVhsTrackingEffect,
+	createPhosphorPersistenceEffect,
+	createChromaticAberrationEffect,
+	createKaleidoscopeEffect,
+	type TransitionKind,
 	type FrameData,
 	type DisplayFrameGenerator,
 	type CharacterFrameGenerator,
@@ -98,6 +117,15 @@ import {
 	BUMP_MAPPING_DEFAULTS,
 	JULIA_DEFAULTS,
 	BOIDS_DEFAULTS,
+	DONUT_DEFAULTS,
+	WIREFRAME_DEFAULTS,
+	SHADEBOBS_DEFAULTS,
+	MUNCHING_SQUARES_DEFAULTS,
+	FIREWORKS_DEFAULTS,
+	AQUARIUM_DEFAULTS,
+	PHYSARUM_DEFAULTS,
+	SANDPILE_DEFAULTS,
+	SCREENSAVER_DEFAULTS,
 } from '../_lib/defaults'
 import { PlasmaPanel } from './_panels/PlasmaPanel'
 import { FirePanel } from './_panels/FirePanel'
@@ -126,8 +154,17 @@ import { FallingSandPanel } from './_panels/FallingSandPanel'
 import { BumpMappingPanel } from './_panels/BumpMappingPanel'
 import { JuliaPanel } from './_panels/JuliaPanel'
 import { BoidsPanel } from './_panels/BoidsPanel'
+import { DonutPanel } from './_panels/DonutPanel'
+import { WireframePanel } from './_panels/WireframePanel'
+import { ShadebobsPanel } from './_panels/ShadebobsPanel'
+import { MunchingSquaresPanel } from './_panels/MunchingSquaresPanel'
+import { FireworksPanel } from './_panels/FireworksPanel'
+import { AquariumPanel } from './_panels/AquariumPanel'
+import { PhysarumPanel } from './_panels/PhysarumPanel'
+import { SandpilePanel } from './_panels/SandpilePanel'
+import { ScreensaverPanel } from './_panels/ScreensaverPanel'
 
-type GeneratorType = 'perlinPlasma' | 'fire' | 'sonar' | 'datamosh' | 'metaballs' | 'matrix' | 'starfield' | 'tunnel' | 'gameOfLife' | 'waterRipple' | 'mandelbrot' | 'copperBars' | 'crtStatic' | 'auroraBorealis' | 'reactionDiffusion' | 'terrainFlyover' | 'rotozoomer' | 'moire' | 'kefrensBars' | 'twister' | 'sineScroller' | 'boingBall' | 'cyclicAutomaton' | 'fallingSand' | 'bumpMapping' | 'julia' | 'boids'
+type GeneratorType = 'perlinPlasma' | 'fire' | 'sonar' | 'datamosh' | 'metaballs' | 'matrix' | 'starfield' | 'tunnel' | 'gameOfLife' | 'waterRipple' | 'mandelbrot' | 'copperBars' | 'crtStatic' | 'auroraBorealis' | 'reactionDiffusion' | 'terrainFlyover' | 'rotozoomer' | 'moire' | 'kefrensBars' | 'twister' | 'sineScroller' | 'boingBall' | 'cyclicAutomaton' | 'fallingSand' | 'bumpMapping' | 'julia' | 'boids' | 'donut' | 'wireframe' | 'shadebobs' | 'munchingSquares' | 'fireworks' | 'aquarium' | 'physarum' | 'sandpile' | 'screensaver'
 
 const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'perlinPlasma', label: 'Plasma' },
@@ -157,6 +194,15 @@ const TABS: { key: GeneratorType; label: string }[] = [
 	{ key: 'bumpMapping', label: 'Bump Mapping' },
 	{ key: 'julia', label: 'Julia' },
 	{ key: 'boids', label: 'Boids' },
+	{ key: 'donut', label: 'Donut' },
+	{ key: 'wireframe', label: 'Wireframe' },
+	{ key: 'shadebobs', label: 'Shadebobs' },
+	{ key: 'munchingSquares', label: 'Munching Squares' },
+	{ key: 'fireworks', label: 'Fireworks' },
+	{ key: 'aquarium', label: 'Aquarium' },
+	{ key: 'physarum', label: 'Physarum' },
+	{ key: 'sandpile', label: 'Sandpile' },
+	{ key: 'screensaver', label: 'Screensaver' },
 ]
 
 /** Sine Scroller leads: its editable text field is the most inviting first control. */
@@ -207,6 +253,11 @@ const STATELESS_THUMB_GENERATORS: Partial<Record<GeneratorType, CharacterFrameGe
 	boingBall: (f, c, r) => generateAsciiBoingBallFrame(f, c, r),
 	bumpMapping: (f, c, r) => generateAsciiBumpMappingFrame(f, c, r),
 	julia: (f, c, r) => generateAsciiJuliaFrame(f, c, r),
+	donut: (f, c, r) => generateAsciiDonutFrame(f, c, r),
+	wireframe: (f, c, r) => generateAsciiWireframeFrame(f, c, r),
+	munchingSquares: (f, c, r) => generateAsciiMunchingSquaresFrame(f, c, r),
+	fireworks: (f, c, r) => generateAsciiFireworksFrame(f, c, r),
+	aquarium: (f, c, r) => generateAsciiAquariumFrame(f, c, r),
 }
 
 function createThumbGenerator(type: GeneratorType, index: number): CharacterFrameGenerator {
@@ -221,6 +272,17 @@ function createThumbGenerator(type: GeneratorType, index: number): CharacterFram
 		case 'cyclicAutomaton': return createAsciiCyclicAutomatonGenerator()
 		case 'fallingSand': return createAsciiFallingSandGenerator()
 		case 'boids': return createAsciiBoidsGenerator()
+		case 'shadebobs': return createAsciiShadebobsGenerator()
+		case 'physarum': return createAsciiPhysarumGenerator()
+		case 'sandpile': return createAsciiSandpileGenerator()
+		// Short hold/transition so the tile visibly cycles; cheap stateless members only,
+		// since this instance lives for the lifetime of the page alongside 35 other tiles.
+		case 'screensaver': return createAnsiGeneratorCycle([
+			(f, c, r) => generateAsciiDonutFrame(f, c, r),
+			(f, c, r) => generateAsciiTunnelFrame(f, c, r),
+			(f, c, r) => generateAsciiMoireFrame(f, c, r),
+			(f, c, r) => generateAsciiMunchingSquaresFrame(f, c, r),
+		], { holdFrames: 90, transitionFrames: 24 })
 		default: break
 	}
 	const base = STATELESS_THUMB_GENERATORS[type] ?? ((f, c, r) => generateAsciiPerlinPlasmaFrame(f, c, r))
@@ -538,10 +600,88 @@ function GeneratorsPlayground() {
 	const [boidsHeadColor, setBoidsHeadColor] = useState(BOIDS_DEFAULTS.headColor)
 	const [boidsBgColor, setBoidsBgColor] = useState(BOIDS_DEFAULTS.bgColor)
 
+	// Donut state
+	const [donutSpeedA, setDonutSpeedA] = useState(DONUT_DEFAULTS.speedA)
+	const [donutSpeedB, setDonutSpeedB] = useState(DONUT_DEFAULTS.speedB)
+	const [donutSize, setDonutSize] = useState(DONUT_DEFAULTS.size)
+	const [donutTubeRatio, setDonutTubeRatio] = useState(DONUT_DEFAULTS.tubeRatio)
+	const [donutBaseColor, setDonutBaseColor] = useState(DONUT_DEFAULTS.baseColor)
+	const [donutBgColor, setDonutBgColor] = useState(DONUT_DEFAULTS.bgColor)
+
+	// Wireframe state
+	const [wireframeShape, setWireframeShape] = useState<string>(WIREFRAME_DEFAULTS.shape)
+	const [wireframeSize, setWireframeSize] = useState(WIREFRAME_DEFAULTS.size)
+	const [wireframeSpeedX, setWireframeSpeedX] = useState(WIREFRAME_DEFAULTS.speedX)
+	const [wireframeSpeedY, setWireframeSpeedY] = useState(WIREFRAME_DEFAULTS.speedY)
+	const [wireframeSpeedZ, setWireframeSpeedZ] = useState(WIREFRAME_DEFAULTS.speedZ)
+	const [wireframeEdgeColor, setWireframeEdgeColor] = useState(WIREFRAME_DEFAULTS.edgeColor)
+	const [wireframeVertexColor, setWireframeVertexColor] = useState(WIREFRAME_DEFAULTS.vertexColor)
+	const [wireframeDepthShading, setWireframeDepthShading] = useState(WIREFRAME_DEFAULTS.depthShading)
+	const [wireframeBgColor, setWireframeBgColor] = useState(WIREFRAME_DEFAULTS.bgColor)
+
+	// Shadebobs state
+	const [shadebobsBobCount, setShadebobsBobCount] = useState(SHADEBOBS_DEFAULTS.bobCount)
+	const [shadebobsBobSize, setShadebobsBobSize] = useState(SHADEBOBS_DEFAULTS.bobSize)
+	const [shadebobsTrailDecay, setShadebobsTrailDecay] = useState(SHADEBOBS_DEFAULTS.trailDecay)
+	const [shadebobsSpeed, setShadebobsSpeed] = useState(SHADEBOBS_DEFAULTS.speed)
+	const [shadebobsSeed, setShadebobsSeed] = useState(SHADEBOBS_DEFAULTS.seed)
+	const [shadebobsBgColor, setShadebobsBgColor] = useState(SHADEBOBS_DEFAULTS.bgColor)
+
+	// Munching Squares state
+	const [munchSpeed, setMunchSpeed] = useState(MUNCHING_SQUARES_DEFAULTS.speed)
+	const [munchSize, setMunchSize] = useState(MUNCHING_SQUARES_DEFAULTS.size)
+	const [munchInvert, setMunchInvert] = useState(MUNCHING_SQUARES_DEFAULTS.invert)
+	const [munchBgColor, setMunchBgColor] = useState(MUNCHING_SQUARES_DEFAULTS.bgColor)
+
+	// Fireworks state
+	const [fireworksLaunchInterval, setFireworksLaunchInterval] = useState(FIREWORKS_DEFAULTS.launchInterval)
+	const [fireworksRiseFrames, setFireworksRiseFrames] = useState(FIREWORKS_DEFAULTS.riseFrames)
+	const [fireworksBurstDuration, setFireworksBurstDuration] = useState(FIREWORKS_DEFAULTS.burstDuration)
+	const [fireworksParticleCount, setFireworksParticleCount] = useState(FIREWORKS_DEFAULTS.particleCount)
+	const [fireworksGravity, setFireworksGravity] = useState(FIREWORKS_DEFAULTS.gravity)
+	const [fireworksNightSky, setFireworksNightSky] = useState(FIREWORKS_DEFAULTS.nightSky)
+	const [fireworksSeed, setFireworksSeed] = useState(FIREWORKS_DEFAULTS.seed)
+	const [fireworksBgColor, setFireworksBgColor] = useState(FIREWORKS_DEFAULTS.bgColor)
+
+	// Aquarium state
+	const [aquariumFishCount, setAquariumFishCount] = useState(AQUARIUM_DEFAULTS.fishCount)
+	const [aquariumBubbleDensity, setAquariumBubbleDensity] = useState(AQUARIUM_DEFAULTS.bubbleDensity)
+	const [aquariumSeaweedDensity, setAquariumSeaweedDensity] = useState(AQUARIUM_DEFAULTS.seaweedDensity)
+	const [aquariumSwaySpeed, setAquariumSwaySpeed] = useState(AQUARIUM_DEFAULTS.swaySpeed)
+	const [aquariumSpeed, setAquariumSpeed] = useState(AQUARIUM_DEFAULTS.speed)
+	const [aquariumSeed, setAquariumSeed] = useState(AQUARIUM_DEFAULTS.seed)
+	const [aquariumBgColor, setAquariumBgColor] = useState(AQUARIUM_DEFAULTS.bgColor)
+
+	// Physarum state
+	const [physarumAgentDensity, setPhysarumAgentDensity] = useState(PHYSARUM_DEFAULTS.agentDensity)
+	const [physarumSensorAngle, setPhysarumSensorAngle] = useState(PHYSARUM_DEFAULTS.sensorAngle)
+	const [physarumSensorDistance, setPhysarumSensorDistance] = useState(PHYSARUM_DEFAULTS.sensorDistance)
+	const [physarumTurnSpeed, setPhysarumTurnSpeed] = useState(PHYSARUM_DEFAULTS.turnSpeed)
+	const [physarumEvaporation, setPhysarumEvaporation] = useState(PHYSARUM_DEFAULTS.evaporation)
+	const [physarumStepsPerFrame, setPhysarumStepsPerFrame] = useState(PHYSARUM_DEFAULTS.stepsPerFrame)
+	const [physarumSeed, setPhysarumSeed] = useState(PHYSARUM_DEFAULTS.seed)
+	const [physarumBgColor, setPhysarumBgColor] = useState(PHYSARUM_DEFAULTS.bgColor)
+
+	// Sandpile state
+	const [sandpileGrainsPerStep, setSandpileGrainsPerStep] = useState(SANDPILE_DEFAULTS.grainsPerStep)
+	const [sandpileStepsPerFrame, setSandpileStepsPerFrame] = useState(SANDPILE_DEFAULTS.stepsPerFrame)
+	const [sandpileMaxToppleSweeps, setSandpileMaxToppleSweeps] = useState(SANDPILE_DEFAULTS.maxToppleSweeps)
+	const [sandpileDropX, setSandpileDropX] = useState(SANDPILE_DEFAULTS.dropX)
+	const [sandpileDropY, setSandpileDropY] = useState(SANDPILE_DEFAULTS.dropY)
+	const [sandpileBgColor, setSandpileBgColor] = useState(SANDPILE_DEFAULTS.bgColor)
+
+	// Screensaver state
+	const [saverHoldFrames, setSaverHoldFrames] = useState(SCREENSAVER_DEFAULTS.holdFrames)
+	const [saverTransitionFrames, setSaverTransitionFrames] = useState(SCREENSAVER_DEFAULTS.transitionFrames)
+	const [saverKind, setSaverKind] = useState<string>(SCREENSAVER_DEFAULTS.kind)
+
 	// Post FX state
 	const [fxLens, setFxLens] = useState(false)
 	const [fxScanline, setFxScanline] = useState(false)
 	const [fxVhs, setFxVhs] = useState(false)
+	const [fxPhosphor, setFxPhosphor] = useState(false)
+	const [fxChromatic, setFxChromatic] = useState(false)
+	const [fxKaleido, setFxKaleido] = useState(false)
 
 	useEffect(() => {
 		clearFireState()
@@ -554,6 +694,9 @@ function GeneratorsPlayground() {
 		clearCyclicAutomatonState()
 		clearFallingSandState()
 		clearBoidsState()
+		clearShadebobsState()
+		clearPhysarumState()
+		clearSandpileState()
 	}, [generatorType])
 
 	const parseOptionalNumber = (value: string): number | undefined => {
@@ -885,6 +1028,119 @@ function GeneratorsPlayground() {
 					bgColor: boidsBgColor,
 				})
 		}
+		if (generatorType === 'donut') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiDonutFrame(frame, cols, r, {
+					speedA: donutSpeedA,
+					speedB: donutSpeedB,
+					size: donutSize,
+					tubeRatio: donutTubeRatio,
+					baseColor: donutBaseColor,
+					bgColor: donutBgColor,
+				})
+		}
+		if (generatorType === 'wireframe') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiWireframeFrame(frame, cols, r, {
+					shape: wireframeShape as 'cube' | 'tetrahedron' | 'octahedron' | 'icosahedron',
+					size: wireframeSize,
+					speedX: wireframeSpeedX,
+					speedY: wireframeSpeedY,
+					speedZ: wireframeSpeedZ,
+					edgeColor: wireframeEdgeColor,
+					vertexColor: wireframeVertexColor,
+					depthShading: wireframeDepthShading,
+					bgColor: wireframeBgColor,
+				})
+		}
+		if (generatorType === 'shadebobs') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiShadebobsFrame(frame, cols, r, {
+					bobCount: shadebobsBobCount,
+					bobSize: shadebobsBobSize,
+					trailDecay: shadebobsTrailDecay,
+					speed: shadebobsSpeed,
+					seed: shadebobsSeed,
+					bgColor: shadebobsBgColor,
+				})
+		}
+		if (generatorType === 'munchingSquares') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiMunchingSquaresFrame(frame, cols, r, {
+					speed: munchSpeed,
+					size: munchSize,
+					invert: munchInvert,
+					bgColor: munchBgColor,
+				})
+		}
+		if (generatorType === 'fireworks') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiFireworksFrame(frame, cols, r, {
+					launchInterval: fireworksLaunchInterval,
+					riseFrames: fireworksRiseFrames,
+					burstDuration: fireworksBurstDuration,
+					particleCount: fireworksParticleCount,
+					gravity: fireworksGravity,
+					nightSky: fireworksNightSky,
+					seed: fireworksSeed,
+					bgColor: fireworksBgColor,
+				})
+		}
+		if (generatorType === 'aquarium') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiAquariumFrame(frame, cols, r, {
+					fishCount: aquariumFishCount,
+					bubbleDensity: aquariumBubbleDensity,
+					seaweedDensity: aquariumSeaweedDensity,
+					swaySpeed: aquariumSwaySpeed,
+					speed: aquariumSpeed,
+					seed: aquariumSeed,
+					bgColor: aquariumBgColor,
+				})
+		}
+		if (generatorType === 'physarum') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiPhysarumFrame(frame, cols, r, {
+					agentDensity: physarumAgentDensity,
+					sensorAngle: physarumSensorAngle,
+					sensorDistance: physarumSensorDistance,
+					turnSpeed: physarumTurnSpeed,
+					evaporation: physarumEvaporation,
+					stepsPerFrame: physarumStepsPerFrame,
+					seed: physarumSeed,
+					bgColor: physarumBgColor,
+				})
+		}
+		if (generatorType === 'sandpile') {
+			return (frame: number, cols: number, r: number) =>
+				generateAsciiSandpileFrame(frame, cols, r, {
+					grainsPerStep: sandpileGrainsPerStep,
+					stepsPerFrame: sandpileStepsPerFrame,
+					maxToppleSweeps: sandpileMaxToppleSweeps,
+					dropX: sandpileDropX,
+					dropY: sandpileDropY,
+					bgColor: sandpileBgColor,
+				})
+		}
+		if (generatorType === 'screensaver') {
+			// The cycle is created inside this memo on purpose: changing any screensaver
+			// option rebuilds it, which also gives the stateful members (fire, matrix,
+			// shadebobs, physarum) fresh private simulations.
+			return createAnsiGeneratorCycle([
+				(frame: number, cols: number, r: number) => generateAsciiDonutFrame(frame, cols, r),
+				(frame: number, cols: number, r: number) => generateAsciiPerlinPlasmaFrame(frame, cols, r),
+				(frame: number, cols: number, r: number) => generateAsciiFireworksFrame(frame, cols, r),
+				(frame: number, cols: number, r: number) => generateAsciiTunnelFrame(frame, cols, r),
+				createAsciiFireGenerator(),
+				createAsciiMatrixRainGenerator(),
+				createAsciiShadebobsGenerator(),
+				createAsciiPhysarumGenerator(),
+			], {
+				holdFrames: saverHoldFrames,
+				transitionFrames: saverTransitionFrames,
+				...(saverKind !== 'auto' ? { kind: saverKind as TransitionKind } : {}),
+			})
+		}
 		return (frame: number, cols: number, r: number) =>
 			generateAsciiPerlinPlasmaFrame(frame, cols, r, {
 				chars: plasmaChars.trim() ? Array.from(plasmaChars) : undefined,
@@ -929,6 +1185,18 @@ function GeneratorsPlayground() {
 		bumpNoiseScale, bumpOrbitSpeed, bumpLightHeight, bumpBumpStrength, bumpSpecularPower, bumpBgColor,
 		juliaMaxIter, juliaMorphSpeed, juliaRadius, juliaColorMode, juliaFgColor, juliaBgColor,
 		boidsCount, boidsSepWeight, boidsAlignWeight, boidsCohWeight, boidsHeadColor, boidsBgColor,
+		donutSpeedA, donutSpeedB, donutSize, donutTubeRatio, donutBaseColor, donutBgColor,
+		wireframeShape, wireframeSize, wireframeSpeedX, wireframeSpeedY, wireframeSpeedZ,
+		wireframeEdgeColor, wireframeVertexColor, wireframeDepthShading, wireframeBgColor,
+		shadebobsBobCount, shadebobsBobSize, shadebobsTrailDecay, shadebobsSpeed, shadebobsSeed, shadebobsBgColor,
+		munchSpeed, munchSize, munchInvert, munchBgColor,
+		fireworksLaunchInterval, fireworksRiseFrames, fireworksBurstDuration, fireworksParticleCount,
+		fireworksGravity, fireworksNightSky, fireworksSeed, fireworksBgColor,
+		aquariumFishCount, aquariumBubbleDensity, aquariumSeaweedDensity, aquariumSwaySpeed, aquariumSpeed, aquariumSeed, aquariumBgColor,
+		physarumAgentDensity, physarumSensorAngle, physarumSensorDistance, physarumTurnSpeed,
+		physarumEvaporation, physarumStepsPerFrame, physarumSeed, physarumBgColor,
+		sandpileGrainsPerStep, sandpileStepsPerFrame, sandpileMaxToppleSweeps, sandpileDropX, sandpileDropY, sandpileBgColor,
+		saverHoldFrames, saverTransitionFrames, saverKind,
 	])
 
 	const generatorOptionsMap: Record<GeneratorType, { options: Record<string, unknown>; defaults: Record<string, unknown> }> = {
@@ -1039,6 +1307,42 @@ function GeneratorsPlayground() {
 		boids: {
 			options: { count: boidsCount, sepWeight: boidsSepWeight, alignWeight: boidsAlignWeight, cohWeight: boidsCohWeight, headColor: boidsHeadColor, bgColor: boidsBgColor },
 			defaults: BOIDS_DEFAULTS,
+		},
+		donut: {
+			options: { speedA: donutSpeedA, speedB: donutSpeedB, size: donutSize, tubeRatio: donutTubeRatio, baseColor: donutBaseColor, bgColor: donutBgColor },
+			defaults: DONUT_DEFAULTS,
+		},
+		wireframe: {
+			options: { shape: wireframeShape, size: wireframeSize, speedX: wireframeSpeedX, speedY: wireframeSpeedY, speedZ: wireframeSpeedZ, edgeColor: wireframeEdgeColor, vertexColor: wireframeVertexColor, depthShading: wireframeDepthShading, bgColor: wireframeBgColor },
+			defaults: WIREFRAME_DEFAULTS,
+		},
+		shadebobs: {
+			options: { bobCount: shadebobsBobCount, bobSize: shadebobsBobSize, trailDecay: shadebobsTrailDecay, speed: shadebobsSpeed, seed: shadebobsSeed, bgColor: shadebobsBgColor },
+			defaults: SHADEBOBS_DEFAULTS,
+		},
+		munchingSquares: {
+			options: { speed: munchSpeed, size: munchSize, invert: munchInvert, bgColor: munchBgColor },
+			defaults: MUNCHING_SQUARES_DEFAULTS,
+		},
+		fireworks: {
+			options: { launchInterval: fireworksLaunchInterval, riseFrames: fireworksRiseFrames, burstDuration: fireworksBurstDuration, particleCount: fireworksParticleCount, gravity: fireworksGravity, nightSky: fireworksNightSky, seed: fireworksSeed, bgColor: fireworksBgColor },
+			defaults: FIREWORKS_DEFAULTS,
+		},
+		aquarium: {
+			options: { fishCount: aquariumFishCount, bubbleDensity: aquariumBubbleDensity, seaweedDensity: aquariumSeaweedDensity, swaySpeed: aquariumSwaySpeed, speed: aquariumSpeed, seed: aquariumSeed, bgColor: aquariumBgColor },
+			defaults: AQUARIUM_DEFAULTS,
+		},
+		physarum: {
+			options: { agentDensity: physarumAgentDensity, sensorAngle: physarumSensorAngle, sensorDistance: physarumSensorDistance, turnSpeed: physarumTurnSpeed, evaporation: physarumEvaporation, stepsPerFrame: physarumStepsPerFrame, seed: physarumSeed, bgColor: physarumBgColor },
+			defaults: PHYSARUM_DEFAULTS,
+		},
+		sandpile: {
+			options: { grainsPerStep: sandpileGrainsPerStep, stepsPerFrame: sandpileStepsPerFrame, maxToppleSweeps: sandpileMaxToppleSweeps, dropX: sandpileDropX, dropY: sandpileDropY, bgColor: sandpileBgColor },
+			defaults: SANDPILE_DEFAULTS,
+		},
+		screensaver: {
+			options: { holdFrames: saverHoldFrames, transitionFrames: saverTransitionFrames, kind: saverKind },
+			defaults: SCREENSAVER_DEFAULTS,
 		},
 	}
 
@@ -1292,6 +1596,81 @@ function GeneratorsPlayground() {
 			strParam('headColor', boidsHeadColor, BOIDS_DEFAULTS.headColor, setBoidsHeadColor),
 			strParam('bgColor', boidsBgColor, BOIDS_DEFAULTS.bgColor, setBoidsBgColor),
 		],
+		donut: [
+			numParam('speedA', donutSpeedA, DONUT_DEFAULTS.speedA, setDonutSpeedA),
+			numParam('speedB', donutSpeedB, DONUT_DEFAULTS.speedB, setDonutSpeedB),
+			numParam('size', donutSize, DONUT_DEFAULTS.size, setDonutSize),
+			numParam('tubeRatio', donutTubeRatio, DONUT_DEFAULTS.tubeRatio, setDonutTubeRatio),
+			strParam('baseColor', donutBaseColor, DONUT_DEFAULTS.baseColor, setDonutBaseColor),
+			strParam('bgColor', donutBgColor, DONUT_DEFAULTS.bgColor, setDonutBgColor),
+		],
+		wireframe: [
+			strParam('shape', wireframeShape, WIREFRAME_DEFAULTS.shape, setWireframeShape),
+			numParam('size', wireframeSize, WIREFRAME_DEFAULTS.size, setWireframeSize),
+			numParam('speedX', wireframeSpeedX, WIREFRAME_DEFAULTS.speedX, setWireframeSpeedX),
+			numParam('speedY', wireframeSpeedY, WIREFRAME_DEFAULTS.speedY, setWireframeSpeedY),
+			numParam('speedZ', wireframeSpeedZ, WIREFRAME_DEFAULTS.speedZ, setWireframeSpeedZ),
+			strParam('edgeColor', wireframeEdgeColor, WIREFRAME_DEFAULTS.edgeColor, setWireframeEdgeColor),
+			strParam('vertexColor', wireframeVertexColor, WIREFRAME_DEFAULTS.vertexColor, setWireframeVertexColor),
+			boolParam('depthShading', wireframeDepthShading, WIREFRAME_DEFAULTS.depthShading, setWireframeDepthShading),
+			strParam('bgColor', wireframeBgColor, WIREFRAME_DEFAULTS.bgColor, setWireframeBgColor),
+		],
+		shadebobs: [
+			numParam('bobCount', shadebobsBobCount, SHADEBOBS_DEFAULTS.bobCount, setShadebobsBobCount),
+			numParam('bobSize', shadebobsBobSize, SHADEBOBS_DEFAULTS.bobSize, setShadebobsBobSize),
+			numParam('trailDecay', shadebobsTrailDecay, SHADEBOBS_DEFAULTS.trailDecay, setShadebobsTrailDecay),
+			numParam('speed', shadebobsSpeed, SHADEBOBS_DEFAULTS.speed, setShadebobsSpeed),
+			numParam('seed', shadebobsSeed, SHADEBOBS_DEFAULTS.seed, setShadebobsSeed),
+			strParam('bgColor', shadebobsBgColor, SHADEBOBS_DEFAULTS.bgColor, setShadebobsBgColor),
+		],
+		munchingSquares: [
+			numParam('speed', munchSpeed, MUNCHING_SQUARES_DEFAULTS.speed, setMunchSpeed),
+			numParam('size', munchSize, MUNCHING_SQUARES_DEFAULTS.size, setMunchSize),
+			boolParam('invert', munchInvert, MUNCHING_SQUARES_DEFAULTS.invert, setMunchInvert),
+			strParam('bgColor', munchBgColor, MUNCHING_SQUARES_DEFAULTS.bgColor, setMunchBgColor),
+		],
+		fireworks: [
+			numParam('launchInterval', fireworksLaunchInterval, FIREWORKS_DEFAULTS.launchInterval, setFireworksLaunchInterval),
+			numParam('riseFrames', fireworksRiseFrames, FIREWORKS_DEFAULTS.riseFrames, setFireworksRiseFrames),
+			numParam('burstDuration', fireworksBurstDuration, FIREWORKS_DEFAULTS.burstDuration, setFireworksBurstDuration),
+			numParam('particleCount', fireworksParticleCount, FIREWORKS_DEFAULTS.particleCount, setFireworksParticleCount),
+			numParam('gravity', fireworksGravity, FIREWORKS_DEFAULTS.gravity, setFireworksGravity),
+			boolParam('nightSky', fireworksNightSky, FIREWORKS_DEFAULTS.nightSky, setFireworksNightSky),
+			numParam('seed', fireworksSeed, FIREWORKS_DEFAULTS.seed, setFireworksSeed),
+			strParam('bgColor', fireworksBgColor, FIREWORKS_DEFAULTS.bgColor, setFireworksBgColor),
+		],
+		aquarium: [
+			numParam('fishCount', aquariumFishCount, AQUARIUM_DEFAULTS.fishCount, setAquariumFishCount),
+			numParam('bubbleDensity', aquariumBubbleDensity, AQUARIUM_DEFAULTS.bubbleDensity, setAquariumBubbleDensity),
+			numParam('seaweedDensity', aquariumSeaweedDensity, AQUARIUM_DEFAULTS.seaweedDensity, setAquariumSeaweedDensity),
+			numParam('swaySpeed', aquariumSwaySpeed, AQUARIUM_DEFAULTS.swaySpeed, setAquariumSwaySpeed),
+			numParam('speed', aquariumSpeed, AQUARIUM_DEFAULTS.speed, setAquariumSpeed),
+			numParam('seed', aquariumSeed, AQUARIUM_DEFAULTS.seed, setAquariumSeed),
+			strParam('bgColor', aquariumBgColor, AQUARIUM_DEFAULTS.bgColor, setAquariumBgColor),
+		],
+		physarum: [
+			numParam('agentDensity', physarumAgentDensity, PHYSARUM_DEFAULTS.agentDensity, setPhysarumAgentDensity),
+			numParam('sensorAngle', physarumSensorAngle, PHYSARUM_DEFAULTS.sensorAngle, setPhysarumSensorAngle),
+			numParam('sensorDistance', physarumSensorDistance, PHYSARUM_DEFAULTS.sensorDistance, setPhysarumSensorDistance),
+			numParam('turnSpeed', physarumTurnSpeed, PHYSARUM_DEFAULTS.turnSpeed, setPhysarumTurnSpeed),
+			numParam('evaporation', physarumEvaporation, PHYSARUM_DEFAULTS.evaporation, setPhysarumEvaporation),
+			numParam('stepsPerFrame', physarumStepsPerFrame, PHYSARUM_DEFAULTS.stepsPerFrame, setPhysarumStepsPerFrame),
+			numParam('seed', physarumSeed, PHYSARUM_DEFAULTS.seed, setPhysarumSeed),
+			strParam('bgColor', physarumBgColor, PHYSARUM_DEFAULTS.bgColor, setPhysarumBgColor),
+		],
+		sandpile: [
+			numParam('grainsPerStep', sandpileGrainsPerStep, SANDPILE_DEFAULTS.grainsPerStep, setSandpileGrainsPerStep),
+			numParam('stepsPerFrame', sandpileStepsPerFrame, SANDPILE_DEFAULTS.stepsPerFrame, setSandpileStepsPerFrame),
+			numParam('maxToppleSweeps', sandpileMaxToppleSweeps, SANDPILE_DEFAULTS.maxToppleSweeps, setSandpileMaxToppleSweeps),
+			numParam('dropX', sandpileDropX, SANDPILE_DEFAULTS.dropX, setSandpileDropX),
+			numParam('dropY', sandpileDropY, SANDPILE_DEFAULTS.dropY, setSandpileDropY),
+			strParam('bgColor', sandpileBgColor, SANDPILE_DEFAULTS.bgColor, setSandpileBgColor),
+		],
+		screensaver: [
+			numParam('holdFrames', saverHoldFrames, SCREENSAVER_DEFAULTS.holdFrames, setSaverHoldFrames),
+			numParam('transitionFrames', saverTransitionFrames, SCREENSAVER_DEFAULTS.transitionFrames, setSaverTransitionFrames),
+			strParam('kind', saverKind, SCREENSAVER_DEFAULTS.kind, setSaverKind),
+		],
 	}
 
 	// Setters are stable, so a ref keeps the mount/shuffle handlers off the render-scoped
@@ -1329,6 +1708,9 @@ function GeneratorsPlayground() {
 			setFxLens(active.includes('lens'))
 			setFxScanline(active.includes('scanline'))
 			setFxVhs(active.includes('vhs'))
+			setFxPhosphor(active.includes('phosphor'))
+			setFxChromatic(active.includes('chromatic'))
+			setFxKaleido(active.includes('kaleido'))
 		}
 		setUrlReady(true)
 	}, [initialParams])
@@ -1343,7 +1725,14 @@ function GeneratorsPlayground() {
 		if (rows !== VIRTUAL_DISPLAY_DEFAULTS.rows) params.set('rows', String(rows))
 		if (fps !== VIRTUAL_DISPLAY_DEFAULTS.fps) params.set('fps', String(fps))
 		if (showPerformanceOverlay) params.set('perf', '1')
-		const fx = [fxLens ? 'lens' : '', fxScanline ? 'scanline' : '', fxVhs ? 'vhs' : ''].filter(Boolean)
+		const fx = [
+			fxLens ? 'lens' : '',
+			fxScanline ? 'scanline' : '',
+			fxVhs ? 'vhs' : '',
+			fxPhosphor ? 'phosphor' : '',
+			fxChromatic ? 'chromatic' : '',
+			fxKaleido ? 'kaleido' : '',
+		].filter(Boolean)
 		if (fx.length) params.set('fx', fx.join(','))
 		return params.toString()
 	})()
@@ -1374,16 +1763,20 @@ function GeneratorsPlayground() {
 		setGeneratorType(next)
 	}, [generatorType])
 
-	// Post FX: composed left-to-right (lens -> scanline -> vhs) onto whichever generator is
-	// currently active. Memoized separately from `frameGenerator` so toggling an effect alone
-	// doesn't rebuild the underlying generator, and vice versa.
+	// Post FX: composed left-to-right (lens -> scanline -> vhs -> phosphor -> chromatic ->
+	// kaleidoscope) onto whichever generator is currently active. Memoized separately from
+	// `frameGenerator` so toggling an effect alone doesn't rebuild the underlying generator,
+	// and vice versa.
 	const postEffects = useMemo<AnsiPostEffect[]>(() => {
 		const list: AnsiPostEffect[] = []
 		if (fxLens) list.push(createLensEffect())
 		if (fxScanline) list.push(createScanlineEffect())
 		if (fxVhs) list.push(createVhsTrackingEffect())
+		if (fxPhosphor) list.push(createPhosphorPersistenceEffect())
+		if (fxChromatic) list.push(createChromaticAberrationEffect())
+		if (fxKaleido) list.push(createKaleidoscopeEffect())
 		return list
-	}, [fxLens, fxScanline, fxVhs])
+	}, [fxLens, fxScanline, fxVhs, fxPhosphor, fxChromatic, fxKaleido])
 
 	const composedGenerator = useMemo(() => {
 		if (postEffects.length === 0 || typeof frameGenerator !== 'function') return frameGenerator
@@ -1397,9 +1790,9 @@ function GeneratorsPlayground() {
 			VIRTUAL_DISPLAY_DEFAULTS,
 			activeGen.options,
 			activeGen.defaults,
-			{ lens: fxLens, scanline: fxScanline, vhs: fxVhs }
+			{ lens: fxLens, scanline: fxScanline, vhs: fxVhs, phosphor: fxPhosphor, chromatic: fxChromatic, kaleidoscope: fxKaleido }
 		)
-	}, [generatorType, columns, rows, fps, showPerformanceOverlay, activeGen.options, activeGen.defaults, fxLens, fxScanline, fxVhs])
+	}, [generatorType, columns, rows, fps, showPerformanceOverlay, activeGen.options, activeGen.defaults, fxLens, fxScanline, fxVhs, fxPhosphor, fxChromatic, fxKaleido])
 
 	return (
 		<>
@@ -1482,6 +1875,9 @@ function GeneratorsPlayground() {
 						<ToggleInput label="Lens" value={fxLens} onChange={setFxLens} />
 						<ToggleInput label="Scanline" value={fxScanline} onChange={setFxScanline} />
 						<ToggleInput label="VHS Tracking" value={fxVhs} onChange={setFxVhs} />
+						<ToggleInput label="Phosphor Trails" value={fxPhosphor} onChange={setFxPhosphor} />
+						<ToggleInput label="Chromatic Aberration" value={fxChromatic} onChange={setFxChromatic} />
+						<ToggleInput label="Kaleidoscope" value={fxKaleido} onChange={setFxKaleido} />
 					</ControlGroup>
 
 					{generatorType === 'perlinPlasma' && (
@@ -1806,6 +2202,108 @@ function GeneratorsPlayground() {
 							cohWeight={boidsCohWeight} setCohWeight={setBoidsCohWeight}
 							headColor={boidsHeadColor} setHeadColor={setBoidsHeadColor}
 							bgColor={boidsBgColor} setBgColor={setBoidsBgColor}
+						/>
+					)}
+
+					{generatorType === 'donut' && (
+						<DonutPanel
+							speedA={donutSpeedA} setSpeedA={setDonutSpeedA}
+							speedB={donutSpeedB} setSpeedB={setDonutSpeedB}
+							size={donutSize} setSize={setDonutSize}
+							tubeRatio={donutTubeRatio} setTubeRatio={setDonutTubeRatio}
+							baseColor={donutBaseColor} setBaseColor={setDonutBaseColor}
+							bgColor={donutBgColor} setBgColor={setDonutBgColor}
+						/>
+					)}
+
+					{generatorType === 'wireframe' && (
+						<WireframePanel
+							shape={wireframeShape} setShape={setWireframeShape}
+							size={wireframeSize} setSize={setWireframeSize}
+							speedX={wireframeSpeedX} setSpeedX={setWireframeSpeedX}
+							speedY={wireframeSpeedY} setSpeedY={setWireframeSpeedY}
+							speedZ={wireframeSpeedZ} setSpeedZ={setWireframeSpeedZ}
+							edgeColor={wireframeEdgeColor} setEdgeColor={setWireframeEdgeColor}
+							vertexColor={wireframeVertexColor} setVertexColor={setWireframeVertexColor}
+							depthShading={wireframeDepthShading} setDepthShading={setWireframeDepthShading}
+							bgColor={wireframeBgColor} setBgColor={setWireframeBgColor}
+						/>
+					)}
+
+					{generatorType === 'shadebobs' && (
+						<ShadebobsPanel
+							bobCount={shadebobsBobCount} setBobCount={setShadebobsBobCount}
+							bobSize={shadebobsBobSize} setBobSize={setShadebobsBobSize}
+							trailDecay={shadebobsTrailDecay} setTrailDecay={setShadebobsTrailDecay}
+							speed={shadebobsSpeed} setSpeed={setShadebobsSpeed}
+							seed={shadebobsSeed} setSeed={setShadebobsSeed}
+							bgColor={shadebobsBgColor} setBgColor={setShadebobsBgColor}
+						/>
+					)}
+
+					{generatorType === 'munchingSquares' && (
+						<MunchingSquaresPanel
+							speed={munchSpeed} setSpeed={setMunchSpeed}
+							size={munchSize} setSize={setMunchSize}
+							invert={munchInvert} setInvert={setMunchInvert}
+							bgColor={munchBgColor} setBgColor={setMunchBgColor}
+						/>
+					)}
+
+					{generatorType === 'fireworks' && (
+						<FireworksPanel
+							launchInterval={fireworksLaunchInterval} setLaunchInterval={setFireworksLaunchInterval}
+							riseFrames={fireworksRiseFrames} setRiseFrames={setFireworksRiseFrames}
+							burstDuration={fireworksBurstDuration} setBurstDuration={setFireworksBurstDuration}
+							particleCount={fireworksParticleCount} setParticleCount={setFireworksParticleCount}
+							gravity={fireworksGravity} setGravity={setFireworksGravity}
+							nightSky={fireworksNightSky} setNightSky={setFireworksNightSky}
+							seed={fireworksSeed} setSeed={setFireworksSeed}
+							bgColor={fireworksBgColor} setBgColor={setFireworksBgColor}
+						/>
+					)}
+
+					{generatorType === 'aquarium' && (
+						<AquariumPanel
+							fishCount={aquariumFishCount} setFishCount={setAquariumFishCount}
+							bubbleDensity={aquariumBubbleDensity} setBubbleDensity={setAquariumBubbleDensity}
+							seaweedDensity={aquariumSeaweedDensity} setSeaweedDensity={setAquariumSeaweedDensity}
+							swaySpeed={aquariumSwaySpeed} setSwaySpeed={setAquariumSwaySpeed}
+							speed={aquariumSpeed} setSpeed={setAquariumSpeed}
+							seed={aquariumSeed} setSeed={setAquariumSeed}
+							bgColor={aquariumBgColor} setBgColor={setAquariumBgColor}
+						/>
+					)}
+
+					{generatorType === 'physarum' && (
+						<PhysarumPanel
+							agentDensity={physarumAgentDensity} setAgentDensity={setPhysarumAgentDensity}
+							sensorAngle={physarumSensorAngle} setSensorAngle={setPhysarumSensorAngle}
+							sensorDistance={physarumSensorDistance} setSensorDistance={setPhysarumSensorDistance}
+							turnSpeed={physarumTurnSpeed} setTurnSpeed={setPhysarumTurnSpeed}
+							evaporation={physarumEvaporation} setEvaporation={setPhysarumEvaporation}
+							stepsPerFrame={physarumStepsPerFrame} setStepsPerFrame={setPhysarumStepsPerFrame}
+							seed={physarumSeed} setSeed={setPhysarumSeed}
+							bgColor={physarumBgColor} setBgColor={setPhysarumBgColor}
+						/>
+					)}
+
+					{generatorType === 'sandpile' && (
+						<SandpilePanel
+							grainsPerStep={sandpileGrainsPerStep} setGrainsPerStep={setSandpileGrainsPerStep}
+							stepsPerFrame={sandpileStepsPerFrame} setStepsPerFrame={setSandpileStepsPerFrame}
+							maxToppleSweeps={sandpileMaxToppleSweeps} setMaxToppleSweeps={setSandpileMaxToppleSweeps}
+							dropX={sandpileDropX} setDropX={setSandpileDropX}
+							dropY={sandpileDropY} setDropY={setSandpileDropY}
+							bgColor={sandpileBgColor} setBgColor={setSandpileBgColor}
+						/>
+					)}
+
+					{generatorType === 'screensaver' && (
+						<ScreensaverPanel
+							holdFrames={saverHoldFrames} setHoldFrames={setSaverHoldFrames}
+							transitionFrames={saverTransitionFrames} setTransitionFrames={setSaverTransitionFrames}
+							kind={saverKind} setKind={setSaverKind}
 						/>
 					)}
 
