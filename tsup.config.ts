@@ -38,6 +38,8 @@ export default defineConfig({
 		'generators/bumpMapping': 'src/generators/asciiBumpMappingGenerator.ts',
 		'generators/julia': 'src/generators/asciiJuliaGenerator.ts',
 		'generators/boids': 'src/generators/asciiBoidsGenerator.ts',
+		'generators/physarum': 'src/generators/asciiPhysarumGenerator.ts',
+		'generators/sandpile': 'src/generators/asciiSandpileGenerator.ts',
 		'generators/fireworks': 'src/generators/asciiFireworksGenerator.ts',
 		'generators/aquarium': 'src/generators/asciiAquariumGenerator.ts',
 		'generators/donut': 'src/generators/asciiDonutGenerator.ts',

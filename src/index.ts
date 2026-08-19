@@ -237,6 +237,22 @@ export {
 export type { AsciiBoidsOptions } from './generators/asciiBoidsGenerator'
 
 export {
+	clearPhysarumState,
+	createAsciiPhysarumGenerator,
+	createAsciiPhysarumSampler,
+	generateAsciiPhysarumFrame,
+} from './generators/asciiPhysarumGenerator'
+export type { AsciiPhysarumOptions } from './generators/asciiPhysarumGenerator'
+
+export {
+	clearSandpileState,
+	createAsciiSandpileGenerator,
+	createAsciiSandpileSampler,
+	generateAsciiSandpileFrame,
+} from './generators/asciiSandpileGenerator'
+export type { AsciiSandpileOptions } from './generators/asciiSandpileGenerator'
+
+export {
 	createAsciiFireworksSampler,
 	generateAsciiFireworksFrame,
 } from './generators/asciiFireworksGenerator'
