@@ -1456,6 +1456,203 @@ function App() {
 
 Use `clearBoidsState()` to reset the shared flock state, or `createAsciiBoidsGenerator()` for an isolated instance.
 
+#### Donut
+
+The classic donut.c spinning torus — rotated about two axes, z-buffered, and shaded by surface luminance through a character ramp:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiDonutFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiDonutFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiDonutOptions`):
+
+| Option      | Type       | Default          | Description                                                    |
+| ----------- | ---------- | ---------------- | -------------------------------------------------------------- |
+| `speedA`    | `number`   | `0.07`           | Rotation speed about the X axis, radians per frame             |
+| `speedB`    | `number`   | `0.03`           | Rotation speed about the Z axis, radians per frame             |
+| `phaseA`    | `number`   | `1.0`            | Initial X-axis rotation (radians)                              |
+| `phaseB`    | `number`   | `0.4`            | Initial Z-axis rotation (radians)                              |
+| `size`      | `number`   | `0.9`            | Donut diameter as a fraction of the smaller screen dimension (0.1-1.5) |
+| `tubeRatio` | `number`   | `0.5`            | Tube radius as a fraction of the ring radius (0.15-0.9)        |
+| `chars`     | `string[]` | `'.,-~:;=!*#$@'` | Luminance ramp characters, dim to bright                       |
+| `baseColor` | `string`   | `'#ffaa33'`      | Base color, shaded dark to bright by luminance                 |
+| `bgColor`   | `string`   | `'#000000'`      | Background color                                               |
+
+#### Wireframe
+
+A spinning wireframe polyhedron (cube, tetrahedron, octahedron, or icosahedron) drawn with depth-buffered, depth-shaded edges and marked vertices:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiWireframeFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiWireframeFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiWireframeOptions`):
+
+| Option         | Type                                                     | Default                  | Description                                          |
+| -------------- | -------------------------------------------------------- | ------------------------- | ----------------------------------------------------- |
+| `shape`        | `'cube' \| 'tetrahedron' \| 'octahedron' \| 'icosahedron'` | `'cube'`                | Which polyhedron to spin                              |
+| `size`         | `number`                                                  | `0.8`                    | Object diameter as a fraction of screen height (0.1-2) |
+| `speedX`       | `number`                                                  | `0.019`                  | Rotation speed about the X axis, radians per frame    |
+| `speedY`       | `number`                                                  | `0.023`                  | Rotation speed about the Y axis, radians per frame    |
+| `speedZ`       | `number`                                                  | `0.011`                  | Rotation speed about the Z axis, radians per frame    |
+| `edgeColor`    | `string`                                                  | `'#44ff88'`              | Edge color, shaded darker with depth                  |
+| `vertexColor`  | `string`                                                  | `'#ffffff'`              | Vertex marker color                                   |
+| `depthShading` | `boolean`                                                 | `true`                   | Shade nearer edges brighter via a 16-level table      |
+| `bgColor`      | `string`                                                  | `'#000000'`              | Background color                                      |
+| `edgeChars`    | `string[]`                                                | `['·', ':', '+', '#']`   | Edge characters from far to near                      |
+| `vertexChar`   | `string`                                                  | `'■'`                    | Vertex marker character                               |
+
+#### Shadebobs
+
+The classic Amiga shadebobs effect — soft additive gaussian blobs sweep the screen on Lissajous paths, leaving decaying trails that glow brighter where paths cross:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiShadebobsFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiShadebobsFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiShadebobsOptions`):
+
+| Option       | Type       | Default        | Description                                                        |
+| ------------ | ---------- | -------------- | ------------------------------------------------------------------- |
+| `bobCount`   | `number`   | `5`            | Number of bobs sweeping the screen (1-16)                           |
+| `bobSize`    | `number`   | `5`            | Bob radius in cell widths (gaussian sigma, aspect-corrected)        |
+| `trailDecay` | `number`   | `0.92`         | Per-step energy decay factor (0.5-0.995); lower fades trails faster |
+| `speed`      | `number`   | `1`            | Path speed multiplier for the Lissajous orbits                      |
+| `seed`       | `number`   | `2001`         | Seed for the per-bob orbit frequencies and phases                   |
+| `chars`      | `string[]` | `' ·:;+=xX#█'` | Brightness ramp characters, dark to bright                          |
+| `palette`    | `string[]` | black→purple→magenta→orange→white ramp | Gradient stops interpolated into a 256-entry energy→color table |
+| `bgColor`    | `string`   | `'#000000'`    | Background color                                                    |
+
+Use `clearShadebobsState()` to reset the shared simulation state, or `createAsciiShadebobsGenerator()` for an isolated instance.
+
+#### Munching Squares
+
+The PDP-1 / HAKMEM XOR display hack — nested expanding squares carved by `((x ^ y) + t) mod size`, with the thresholds sweeping across the pattern so the squares "munch":
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiMunchingSquaresFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiMunchingSquaresFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiMunchingSquaresOptions`):
+
+| Option    | Type       | Default              | Description                                                     |
+| --------- | ---------- | -------------------- | ---------------------------------------------------------------- |
+| `speed`   | `number`   | `1`                  | Value-ring steps advanced per frame (may be fractional)          |
+| `size`    | `number`   | `32`                 | Domain size of the XOR pattern, rounded to a power of two in [8, 128] |
+| `chars`   | `string[]` | `' ░▒▓█'`            | Characters mapped over the value ring, low to high               |
+| `palette` | `string[]` | 16-color EGA palette | Colors cycled over the value ring                                |
+| `invert`  | `boolean`  | `false`              | Reverse the value ring (bright squares munch dark)               |
+| `bgColor` | `string`   | `'#000000'`          | Background color                                                 |
+
+#### Fireworks
+
+A stateless fireworks display — rockets rise on a staggered deterministic schedule, burst into ring or chrysanthemum particle shells pulled down by gravity, and fade as embers, over an optional starfield sky:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiFireworksFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiFireworksFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiFireworksOptions`):
+
+| Option           | Type       | Default                     | Description                                              |
+| ---------------- | ---------- | ---------------------------- | ---------------------------------------------------------- |
+| `seed`           | `number`   | `1337`                      | Seed for deterministic launch schedule and particle hashes  |
+| `launchInterval` | `number`   | `45`                        | Frames between rocket launches (before per-rocket jitter)   |
+| `riseFrames`     | `number`   | `35`                        | Base frames a rocket spends ascending                       |
+| `burstDuration`  | `number`   | `60`                        | Frames a burst takes to expand and fade out                 |
+| `particleCount`  | `number`   | `60`                        | Base particles per burst (each rocket varies it ±30%)       |
+| `gravity`        | `number`   | `0.006`                     | Downward acceleration on burst particles, world units/frame² |
+| `hues`           | `string[]` | 8-color pyrotechnic palette | Hues rockets pick from                                      |
+| `bgColor`        | `string`   | `'#000008'`                 | Background color                                            |
+| `nightSky`       | `boolean`  | `true`                      | Sprinkle dim static stars into the sky                      |
+
+#### Aquarium
+
+An asciiquarium homage — fish swim across a depth-shaded water gradient with rising bubbles, swaying seaweed, a sandy floor, and surface shimmer:
+
+```tsx
+import { AnsiVirtualDisplay, generateAsciiAquariumFrame } from 'react-ansiart'
+
+function App() {
+	return (
+		<AnsiVirtualDisplay
+			columns={80}
+			rows={25}
+			frameGenerator={generateAsciiAquariumFrame}
+			fps={30}
+		/>
+	)
+}
+```
+
+**Options** (`AsciiAquariumOptions`):
+
+| Option           | Type       | Default                      | Description                                                |
+| ---------------- | ---------- | ----------------------------- | ------------------------------------------------------------ |
+| `seed`           | `number`   | `24601`                      | Seed for deterministic fish, seaweed, rock, and bubble placement |
+| `fishCount`      | `number`   | `7`                          | Number of fish                                               |
+| `bubbleDensity`  | `number`   | `0.12`                       | Fraction of columns that emit bubbles (0-1)                  |
+| `seaweedDensity` | `number`   | `0.16`                       | Fraction of columns growing seaweed (0-1)                    |
+| `palette`        | `string[]` | 8-color tropical fish palette | Fish body colors                                             |
+| `bgColor`        | `string`   | `'#0d3a66'`                  | Base water color at the surface; darkens toward the floor    |
+| `swaySpeed`      | `number`   | `0.07`                       | Seaweed sway rate (radians/frame)                            |
+| `speed`          | `number`   | `1`                          | Global animation speed multiplier                            |
+
 ### Post Effects
 
 `composeAnsiEffects` wraps any `CharacterFrameGenerator` with one or more post-processing passes (CRT lens distortion, scanlines, VHS tracking glitches) that run over the generated `AnsiScreen` each frame:
@@ -1489,6 +1686,78 @@ function App() {
 | `createLensEffect`          | `LensEffectOptions`         | Drifting magnifying-lens / CRT bulge distortion  |
 | `createScanlineEffect`      | `ScanlineEffectOptions`      | Sweeping CRT scanline beam                       |
 | `createVhsTrackingEffect`   | `VhsTrackingEffectOptions`   | Periodic VHS tracking glitch bands and noise     |
+| `createPhosphorPersistenceEffect` | `PhosphorPersistenceEffectOptions` | CRT afterglow: departed glyphs linger and fade, leaving motion trails |
+| `createChromaticAberrationEffect` | `ChromaticAberrationEffectOptions` | Red/blue channel fringing that grows toward the screen edges |
+| `createKaleidoscopeEffect`  | `KaleidoscopeEffectOptions` | N-fold mirror fold around the screen center      |
+
+`createPhosphorPersistenceEffect` is the one effect that keeps per-instance history between
+frames (afterglow needs to know what was lit before): it is deterministic for a given
+forward frame sequence and resets itself whenever the frame number rewinds or the screen
+resizes. Like every effect instance, don't share one across two live composed generators.
+
+### Transitions and Generator Cycling
+
+`createAnsiTransition` hands the screen from one generator to another through an animated
+per-cell transition, and `createAnsiGeneratorCycle` chains a whole list of generators into
+an endless screensaver rotation. Both return an ordinary `CharacterFrameGenerator`, so the
+result drops straight into `AnsiVirtualDisplay` and can itself be wrapped in
+`composeAnsiEffects`:
+
+```tsx
+import {
+	AnsiVirtualDisplay,
+	createAnsiGeneratorCycle,
+	createAnsiTransition,
+	generateAsciiDonutFrame,
+	generateAsciiFireFrame,
+	generateAsciiMatrixRainFrame,
+	generateAsciiPerlinPlasmaFrame,
+} from 'react-ansiart'
+
+// One-shot handoff: plasma for 300 frames, then dissolve into fire over 60 frames.
+const intro = createAnsiTransition(
+	generateAsciiPerlinPlasmaFrame,
+	generateAsciiFireFrame,
+	{ startFrame: 300, durationFrames: 60, kind: 'dissolve' },
+)
+
+// Endless screensaver: each generator holds for 360 frames, transitions run 48 frames,
+// and the transition kinds rotate automatically (dissolve, wipes, block glitch).
+const screensaver = createAnsiGeneratorCycle([
+	generateAsciiDonutFrame,
+	generateAsciiMatrixRainFrame,
+	generateAsciiFireFrame,
+	generateAsciiPerlinPlasmaFrame,
+])
+
+function App() {
+	return <AnsiVirtualDisplay columns={80} rows={25} frameGenerator={screensaver} fps={30} />
+}
+```
+
+**`AnsiTransitionOptions`**:
+
+| Option           | Type             | Default      | Description                                        |
+| ---------------- | ---------------- | ------------ | -------------------------------------------------- |
+| `startFrame`     | `number`         | `0`          | Frame at which the transition begins               |
+| `durationFrames` | `number`         | `60`         | Length of the transition window                    |
+| `kind`           | `TransitionKind` | `'dissolve'` | `'dissolve'`, `'wipeRight'`, `'wipeLeft'`, `'wipeDown'`, `'wipeUp'`, or `'blocks'` |
+| `seed`           | `number`         | `96337`      | Deterministic dissolve/dither/block ordering       |
+| `softness`       | `number`         | `0.15`       | Dithered edge width on wipes (fraction of the wipe axis) |
+
+**`AnsiGeneratorCycleOptions`**:
+
+| Option             | Type                                 | Default   | Description                                  |
+| ------------------ | ------------------------------------ | --------- | -------------------------------------------- |
+| `holdFrames`       | `number`                             | `360`     | Frames each generator is shown               |
+| `transitionFrames` | `number`                             | `48`      | Frames each handoff lasts                    |
+| `kind`             | `TransitionKind \| TransitionKind[]` | all kinds | One kind for every handoff, or a list cycled per handoff |
+| `seed`             | `number`                             | `96337`   | Base seed; each handoff derives its own      |
+| `softness`         | `number`                             | `0.15`    | Dithered edge width on wipes                 |
+
+During a hold only the visible generator runs; the incoming one is first invoked when its
+handoff starts, seeing a normal frame jump that stateful simulations already absorb via
+their capped catch-up.
 
 ### Custom Frame Generators
 
